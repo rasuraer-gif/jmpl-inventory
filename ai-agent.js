@@ -638,8 +638,16 @@ ${JSON.stringify(context, null, 2)}
       removeTypingIndicator(typingId);
 
       if (!response.ok) {
-        const errJson = await response.json();
-        throw new Error(errJson.error?.message || "Error communication with Gemini API.");
+        let errMsg = "Error communication with Gemini API.";
+        try {
+          const errJson = await response.json();
+          errMsg = errJson.error?.message || errMsg;
+        } catch (e) {}
+        
+        if (response.status === 401 || errMsg.toLowerCase().includes("invalid authentication credentials") || errMsg.toLowerCase().includes("api key")) {
+          errMsg = "Authentication Error: The pre-configured Gemini API Key is invalid, expired, or restricted. Please enter a valid Gemini API Key in the 'AI Settings' panel on the right.";
+        }
+        throw new Error(errMsg);
       }
 
       const resJson = await response.json();
