@@ -6,6 +6,9 @@ const DeflashingModule = (() => {
     const recs = DB.StageRecords.all().filter(r => r.batchId === batchId && r.movedTo === 'deflashing');
     return recs.length ? recs[recs.length-1].outputQty : (DB.Batches.find(batchId)||{}).initialQty||0;
   }
+
+  let historySearch = '';
+
   function render() {
     const el = document.getElementById('content');
     const batches = DB.Batches.byStage('deflashing');
@@ -14,8 +17,8 @@ const DeflashingModule = (() => {
     const monthLoss = DB.LossTracker.byStage('deflashing').filter(l=>(l.date||'').startsWith(thisMonth)).reduce((s,l)=>s+(l.lossQty||0),0);
     el.innerHTML = `
       <div class="animate-in">
-        <div class="mb-6"><h2 class="font-bold" style="font-size:20px;">Manual DE Flashing</h2><p class="text-sm text-muted mt-1">Process batches through DE Flashing with vendor assignment</p></div>
-        <div class="stats-grid" style="grid-template-columns:repeat(3,1fr);max-width:520px;margin-bottom:24px;">
+        <div class="mb-6"><h2 class="font-bold" style="font-size:20px;">Flash Removal</h2><p class="text-sm text-muted mt-1">Process batches through Flash Removal with vendor assignment</p></div>
+        <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));max-width:520px;margin-bottom:24px;">
           <div class="stat-card amber"><div class="stat-label">Pending Batches</div><div class="stat-value amber">${batches.length}</div></div>
           <div class="stat-card red"><div class="stat-label">Loss This Month</div><div class="stat-value red">${formatNum(monthLoss)}</div></div>
           <div class="stat-card teal"><div class="stat-label">Total Processed</div><div class="stat-value teal">${history.length}</div></div>
@@ -35,8 +38,9 @@ const DeflashingModule = (() => {
       });
     });
   }
+
   function pendingTab(batches) {
-    if (!batches.length) return `<div class="card card-body"><div class="empty-state"><div class="empty-icon">&#128295;</div><p>No batches in DE Flashing stage</p></div></div>`;
+    if (!batches.length) return `<div class="card card-body"><div class="empty-state"><div class="empty-icon">&#128295;</div><p>No batches in Flash Removal stage</p></div></div>`;
     const rows = batches.map(b => {
       const inputQty = getInputQty(b.id);
       return `<tr>
@@ -55,17 +59,77 @@ const DeflashingModule = (() => {
     }).join('');
     return `<div class="card"><div class="card-header"><h3>Pending Batches</h3></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Input Qty</th><th>Received</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
   }
+
   function historyTab() {
-    const recs = DB.StageRecords.byStage('deflashing');
+    let recs = DB.StageRecords.byStage('deflashing');
     const vendors = DB.Vendors.all();
-    if (!recs.length) return `<div class="card card-body"><div class="empty-state"><div class="empty-icon">&#128202;</div><p>No processing history yet</p></div></div>`;
+    
+    if (historySearch) {
+      const q = historySearch.toLowerCase();
+      recs = recs.filter(r => {
+        const b = DB.Batches.find(r.batchId) || {};
+        return (b.batchNo || '').toLowerCase().includes(q);
+      });
+    }
+
+    if (!recs.length) return `
+      <div class="card card-body">
+        <div style="margin-bottom: 12px; max-width: 280px;">
+          <input type="text" id="de-history-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${historySearch}" oninput="DeflashingModule.filterHistory(this.value)">
+        </div>
+        <div class="empty-state"><div class="empty-icon">&#128202;</div><p>No processing history found</p></div>
+      </div>`;
+
     const rows = recs.map(r => {
       const b = DB.Batches.find(r.batchId)||{};
       const v = vendors.find(vv=>vv.id===r.vendorId)||{};
-      return `<tr><td class="font-semibold">${b.batchNo||'—'}</td><td>${b.jmrefNo||'—'}</td><td>${v.name||'—'}</td><td>${formatNum(r.inputQty)}</td><td>${formatNum(r.outputQty)}</td><td class="text-danger font-semibold">${formatNum(r.lossQty)}</td><td class="badge badge-gray">${r.movedTo||'—'}</td><td class="text-muted text-sm">${(r.date||'').slice(0,10)}</td></tr>`;
+      const pct = r.inputQty ? ((r.lossQty / r.inputQty) * 100).toFixed(1) + '%' : '0.0%';
+      return `<tr>
+        <td class="font-semibold">${b.batchNo||'—'}</td>
+        <td>${b.jmrefNo||'—'}</td>
+        <td>${v.name||'—'}</td>
+        <td>${formatNum(r.inputQty)}</td>
+        <td>${formatNum(r.outputQty)}</td>
+        <td class="text-danger font-semibold">${formatNum(r.lossQty)}</td>
+        <td><span class="badge badge-red">${pct}</span></td>
+        <td><span class="badge badge-gray">${r.movedTo||'—'}</span></td>
+        <td class="text-muted text-sm">${(r.date||'').slice(0,10)}</td>
+      </tr>`;
     }).join('');
-    return `<div class="card"><div class="card-header"><h3>Processing History</h3></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Batch</th><th>JMREF</th><th>Vendor</th><th>Input</th><th>Output</th><th>Loss</th><th>Moved To</th><th>Date</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+
+    return `
+      <div class="card animate-in">
+        <div class="card-header" style="flex-direction:row; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+          <h3>Processing History</h3>
+          <div class="search-input" style="max-width: 250px; margin: 0;">
+            <span class="search-icon">&#128269;</span>
+            <input type="text" id="de-history-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${historySearch}" oninput="DeflashingModule.filterHistory(this.value)">
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr><th>Batch</th><th>JMREF</th><th>Vendor</th><th>Input</th><th>Output</th><th>Loss</th><th>% Loss</th><th>Moved To</th><th>Date</th></tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>`;
   }
+
+  function filterHistory(val) {
+    historySearch = val;
+    const content = document.getElementById('de-content');
+    if (content) {
+      content.innerHTML = historyTab();
+      const inp = document.getElementById('de-history-search');
+      if (inp) {
+        inp.focus();
+        inp.setSelectionRange(inp.value.length, inp.value.length);
+      }
+    }
+  }
+
   function processModal() {
     const vendors = DB.Vendors.byDept('deflashing');
     const vendorOpts = vendors.map(v=>`<option value="${v.id}">${v.name}</option>`).join('');
@@ -165,5 +229,5 @@ const DeflashingModule = (() => {
     showToast('Batch rejected', 'success');
     render();
   }
-  return { render, openProcess, calcLoss, process, openReject, rejectBatch };
+  return { render, openProcess, calcLoss, process, openReject, rejectBatch, filterHistory };
 })();

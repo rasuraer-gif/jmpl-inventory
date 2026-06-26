@@ -2,7 +2,10 @@
 // quality.js — Quality Final Module
 // ============================================================
 const QualityModule = (() => {
-  const STAGE_LABELS = { production:'Production', cryogenic:'Cryogenic', deflashing:'Manual DE Flashing', trimming:'Trimming', visual:'Visual', gauge:'Gauge' };
+  const STAGE_LABELS = { production:'Production', cryogenic:'Cryogenic', deflashing:'Flash Removal', trimming:'Trimming', visual:'Visual', gauge:'Gauge' };
+
+  let recheckSearch = '';
+  let rejectSearch = '';
 
   function getInputQty(batchId) {
     const recs = DB.StageRecords.all().filter(r => r.batchId === batchId && r.movedTo === 'quality');
@@ -19,7 +22,7 @@ const QualityModule = (() => {
     el.innerHTML = `
       <div class="animate-in">
         <div class="mb-6"><h2 class="font-bold" style="font-size:20px;">Quality Final</h2><p class="text-sm text-muted mt-1">Final quality check — Pass to Store, Reject, or Send for Recheck</p></div>
-        <div class="stats-grid" style="grid-template-columns:repeat(4,1fr);max-width:720px;margin-bottom:24px;">
+        <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));max-width:720px;margin-bottom:24px;">
           <div class="stat-card red"><div class="stat-label">Pending</div><div class="stat-value red">${batches.length}</div></div>
           <div class="stat-card green"><div class="stat-label">Passed This Month</div><div class="stat-value green">${passedThisMonth}</div></div>
           <div class="stat-card amber"><div class="stat-label">Total Rejected</div><div class="stat-value amber">${allRejected.length}</div></div>
@@ -28,7 +31,7 @@ const QualityModule = (() => {
         <div class="tabs" id="qf-tabs">
           <button class="tab-btn active" data-tab="pending">Pending</button>
           <button class="tab-btn" data-tab="recheck">Recheck History</button>
-          <button class="tab-btn" data-tab="rejected">Rejected</button>
+          <button class="tab-btn" data-tab="rejected">Rejected Batches</button>
         </div>
         <div id="qf-content">${pendingTab(batches)}</div>
       </div>
@@ -37,11 +40,7 @@ const QualityModule = (() => {
       btn.addEventListener('click', () => {
         document.querySelectorAll('#qf-tabs .tab-btn').forEach(b=>b.classList.remove('active'));
         btn.classList.add('active');
-        const tab = btn.dataset.tab;
-        const cont = document.getElementById('qf-content');
-        if (tab === 'pending')  cont.innerHTML = pendingTab(batches);
-        if (tab === 'recheck')  cont.innerHTML = recheckHistoryTab();
-        if (tab === 'rejected') cont.innerHTML = rejectedTab();
+        document.getElementById('qf-content').innerHTML = btn.dataset.tab==='pending' ? pendingTab(batches) : btn.dataset.tab==='recheck' ? recheckHistoryTab() : rejectedTab();
       });
     });
   }
@@ -68,26 +67,119 @@ const QualityModule = (() => {
   }
 
   function recheckHistoryTab() {
-    const recs = DB.RecheckTracker.all();
-    if (!recs.length) return '<div class="card card-body"><div class="empty-state"><div class="empty-icon">&#x1F504;</div><p>No recheck records yet</p></div></div>';
+    let recs = DB.RecheckTracker.all();
+    if (recheckSearch) {
+      const q = recheckSearch.toLowerCase();
+      recs = recs.filter(r => {
+        const batch = DB.Batches.find(r.batchId)||{};
+        return (batch.batchNo||'').toLowerCase().includes(q);
+      });
+    }
+
+    if (!recs.length) return `
+      <div class="card card-body">
+        <div style="margin-bottom: 12px; max-width: 280px;">
+          <input type="text" id="qf-recheck-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${recheckSearch}" oninput="QualityModule.filterRechecks(this.value)">
+        </div>
+        <div class="empty-state"><div class="empty-icon">&#x1F504;</div><p>No recheck records found</p></div>
+      </div>`;
+
     const rows = recs.sort((a,b)=>b.date.localeCompare(a.date)).map(r => {
       const batch = DB.Batches.find(r.batchId)||{};
       const user = DB.Users.find(r.recordedBy)||{};
-      return '<tr><td class="font-semibold">' + (batch.batchNo||'&#x2014;') + '</td><td>' + (batch.jmrefNo||'&#x2014;') + '</td><td><span class="badge badge-blue">' + (STAGE_LABELS[r.toStage]||r.toStage) + '</span></td><td class="font-semibold">' + formatNum(r.qty) + '</td><td class="text-danger font-semibold">' + formatNum(r.lossQty) + '</td><td><span class="badge badge-amber">Recheck #' + r.recheckNo + '</span></td><td class="text-muted text-sm">' + (user.name||'&#x2014;') + '</td><td class="text-muted text-sm">' + (r.date||'').slice(0,10) + '</td></tr>';
+      const totalBefore = r.qty + r.lossQty;
+      const pct = totalBefore ? ((r.lossQty / totalBefore) * 100).toFixed(1) + '%' : '0.0%';
+      return '<tr><td class="font-semibold">' + (batch.batchNo||'&#x2014;') + '</td><td>' + (batch.jmrefNo||'&#x2014;') + '</td><td><span class="badge badge-blue">' + (STAGE_LABELS[r.toStage]||r.toStage) + '</span></td><td class="font-semibold">' + formatNum(r.qty) + '</td><td class="text-danger font-semibold">' + formatNum(r.lossQty) + '</td><td><span class="badge badge-red">' + pct + '</span></td><td><span class="badge badge-amber">Recheck #' + r.recheckNo + '</span></td><td class="text-muted text-sm">' + (user.name||'&#x2014;') + '</td><td class="text-muted text-sm">' + (r.date||'').slice(0,10) + '</td></tr>';
     }).join('');
-    return '<div class="card"><div class="card-header"><h3>Recheck History</h3></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Batch</th><th>JMREF</th><th>Sent To</th><th>Qty</th><th>Loss at QF</th><th>Iteration</th><th>By</th><th>Date</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+
+    return `
+      <div class="card animate-in">
+        <div class="card-header" style="flex-direction:row; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+          <h3>Recheck History</h3>
+          <div class="search-input" style="max-width: 250px; margin: 0;">
+            <span class="search-icon">&#128269;</span>
+            <input type="text" id="qf-recheck-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${recheckSearch}" oninput="QualityModule.filterRechecks(this.value)">
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr><th>Batch</th><th>JMREF</th><th>Sent To</th><th>Qty</th><th>Loss at QF</th><th>% Loss</th><th>Iteration</th><th>By</th><th>Date</th></tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>`;
   }
 
   function rejectedTab() {
-    const batches = DB.Batches.byStatus('rejected');
+    let batches = DB.Batches.byStatus('rejected');
     const recs = DB.RejectionTracker.all();
-    if (!batches.length) return '<div class="card card-body"><div class="empty-state"><div class="empty-icon">&#x1F6AB;</div><p>No rejected batches</p></div></div>';
+    if (rejectSearch) {
+      const q = rejectSearch.toLowerCase();
+      batches = batches.filter(b => b.batchNo.toLowerCase().includes(q));
+    }
+
+    if (!batches.length) return `
+      <div class="card card-body">
+        <div style="margin-bottom: 12px; max-width: 280px;">
+          <input type="text" id="qf-reject-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${rejectSearch}" oninput="QualityModule.filterRejects(this.value)">
+        </div>
+        <div class="empty-state"><div class="empty-icon">&#x1F6AB;</div><p>No rejected batches found</p></div>
+      </div>`;
+
     const rows = batches.map(b => {
       const rej = recs.filter(r=>r.batchId===b.id).pop()||{};
       return '<tr><td class="font-semibold">' + b.batchNo + '</td><td>' + (b.jmrefNo||'&#x2014;') + '</td><td>' + (b.partNo||'&#x2014;') + '</td><td><span class="badge badge-red">Rejected</span></td><td>' + (rej.reason||'&#x2014;') + '</td><td class="text-muted text-sm">' + (rej.date||'').slice(0,10) + '</td></tr>';
     }).join('');
-    return '<div class="card"><div class="card-header"><h3>Rejected Batches</h3></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Batch No</th><th>JMREF</th><th>Part</th><th>Status</th><th>Reason</th><th>Date</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+
+    return `
+      <div class="card animate-in">
+        <div class="card-header" style="flex-direction:row; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+          <h3>Rejected Batches</h3>
+          <div class="search-input" style="max-width: 250px; margin: 0;">
+            <span class="search-icon">&#128269;</span>
+            <input type="text" id="qf-reject-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${rejectSearch}" oninput="QualityModule.filterRejects(this.value)">
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr><th>Batch No</th><th>JMREF</th><th>Part</th><th>Status</th><th>Reason</th><th>Date</th></tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>`;
   }
+
+  function filterRechecks(val) {
+    recheckSearch = val;
+    const content = document.getElementById('qf-content');
+    if (content) {
+      content.innerHTML = recheckHistoryTab();
+      const inp = document.getElementById('qf-recheck-search');
+      if (inp) {
+        inp.focus();
+        inp.setSelectionRange(inp.value.length, inp.value.length);
+      }
+    }
+  }
+
+  function filterRejects(val) {
+    rejectSearch = val;
+    const content = document.getElementById('qf-content');
+    if (content) {
+      content.innerHTML = rejectedTab();
+      const inp = document.getElementById('qf-reject-search');
+      if (inp) {
+        inp.focus();
+        inp.setSelectionRange(inp.value.length, inp.value.length);
+      }
+    }
+  }
+
+
 
   function passModal() {
     return '<div class="modal-overlay hidden" id="qf-pass-modal"><div class="modal modal-sm"><div class="modal-header"><h3>Pass to Store</h3><button class="modal-close" onclick="document.getElementById(\'qf-pass-modal\').classList.add(\'hidden\')">&#x2715;</button></div><div class="modal-body"><input type="hidden" id="qf-pass-batch-id"><input type="hidden" id="qf-pass-input-qty"><div id="qf-pass-info" style="padding:12px;background:var(--bg-input);border-radius:8px;margin-bottom:16px;"></div><div class="form-group"><label class="form-label">Output Quantity (for Store) <span class="required">*</span></label><input type="number" id="qf-pass-output" class="form-control" min="0" oninput="QualityModule.calcPassLoss()"></div><div class="form-group"><label class="form-label">Loss at Quality Final (Auto)</label><input type="text" id="qf-pass-loss" class="form-control" readonly style="color:var(--accent-red);font-weight:700;"></div><div class="form-group"><label class="form-label">Notes</label><textarea id="qf-pass-notes" class="form-control" rows="2"></textarea></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="document.getElementById(\'qf-pass-modal\').classList.add(\'hidden\')">Cancel</button><button class="btn btn-teal" onclick="QualityModule.passBatch()">Pass to Store</button></div></div></div>';
@@ -200,5 +292,6 @@ const QualityModule = (() => {
     render();
   }
 
-  return { render, openPass, calcPassLoss, passBatch, openReject, rejectBatch, openRecheck, calcRecheckLoss, sendRecheck };
+  return { render, openPass, calcPassLoss, passBatch, openReject, rejectBatch, openRecheck, calcRecheckLoss, sendRecheck, filterRechecks, filterRejects };
 })();
+

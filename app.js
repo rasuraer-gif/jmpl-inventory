@@ -54,7 +54,7 @@ const NAV = [
   // Departments
   { id:'production', label:'Production',          icon:'🏭', module:'production',section:'dept', perm:'production' },
   { id:'cryogenic',  label:'Cryogenic',           icon:'❄️', module:'cryogenic', section:'dept', perm:'cryogenic' },
-  { id:'deflashing', label:'Manual DE Flashing',  icon:'🔧', module:'deflashing',section:'dept', perm:'deflashing' },
+  { id:'deflashing', label:'Flash Removal',       icon:'🔧', module:'deflashing',section:'dept', perm:'deflashing' },
   { id:'trimming',   label:'Trimming',            icon:'✂️', module:'trimming',  section:'dept', perm:'trimming' },
   { id:'visual',     label:'Visual Inspection',   icon:'👁️', module:'visual',    section:'dept', perm:'visual' },
   { id:'gauge',      label:'Gauge Inspection',    icon:'📏', module:'gauge',     section:'dept', perm:'gauge' },
@@ -62,7 +62,19 @@ const NAV = [
   { id:'store',      label:'Store & Sales',       icon:'🏪', module:'store',     section:'dept', perm:'store' },
   // Tools
   { id:'stock',      label:'Stock Upload',        icon:'📤', module:'stock',     section:'tools', perm:'stock' },
-  { id:'reports',    label:'Reports',             icon:'📊', module:'reports',   section:'tools', perm:'reports' },
+  { id:'reports',    label:'Reports',             icon:'📊', module:'reports',   section:'tools' },
+  // Sub-reports
+  { id:'rpt-inventory', label:'Inventory Report',  icon:'📦', module:'report_inventory', section:'tools', parent:'reports', perm:'report_inventory' },
+  { id:'rpt-sales',     label:'Sales Report',      icon:'💰', module:'report_sales',     section:'tools', parent:'reports', perm:'report_sales' },
+  { id:'rpt-production',label:'Production Report', icon:'🏭', module:'report_production',section:'tools', parent:'reports', perm:'report_production' },
+  { id:'rpt-cryogenic', label:'Cryogenic Loss',    icon:'❄️', module:'report_cryogenic', section:'tools', parent:'reports', perm:'report_cryogenic' },
+  { id:'rpt-deflashing',label:'Flash Removal Loss',icon:'🔧', module:'report_deflashing',section:'tools', parent:'reports', perm:'report_deflashing' },
+  { id:'rpt-trimming',  label:'Trimming Loss',     icon:'✂️', module:'report_trimming',  section:'tools', parent:'reports', perm:'report_trimming' },
+  { id:'rpt-visual',    label:'Visual Inspection', icon:'👁️', module:'report_visual',    section:'tools', parent:'reports', perm:'report_visual' },
+  { id:'rpt-gauge',     label:'Gauge Inspection',  icon:'📏', module:'report_gauge',     section:'tools', parent:'reports', perm:'report_gauge' },
+  { id:'rpt-rejected',  label:'Rejected Batches',  icon:'🚫', module:'report_rejected',  section:'tools', parent:'reports', perm:'report_rejected' },
+  { id:'rpt-recheck',   label:'QF Recheck Report', icon:'🔄', module:'report_recheck',   section:'tools', parent:'reports', perm:'report_recheck' },
+
   { id:'ai-agent',   label:'AI Assistant',        icon:'🤖', module:'ai-agent',  section:'tools' },
   // Admin
   { id:'admin',      label:'Admin Panel',         icon:'⚙️', module:'admin',     section:'admin', adminOnly:true },
@@ -73,6 +85,7 @@ const SECTION_LABELS = { main:'OVERVIEW', dept:'DEPARTMENTS', tools:'TOOLS', adm
 // ── App State ──────────────────────────────────────────────
 const App = (() => {
   let currentModule = null;
+  let reportsExpanded = localStorage.getItem('jmpl_reports_expanded') === 'true';
 
   const MODULE_MAP = {
     dashboard:  () => renderDashboard(),
@@ -86,17 +99,37 @@ const App = (() => {
     quality:    () => QualityModule?.render(),
     store:      () => StoreModule?.render(),
     stock:      () => StockModule?.render(),
-    reports:    () => ReportsModule?.render(),
+    reports:    () => ReportsModule?.render('inventory'),
     admin:      () => AdminModule?.render(),
     'ai-agent': () => AIAgentModule?.render(),
+    report_inventory:  () => ReportsModule?.render('inventory'),
+    report_sales:      () => ReportsModule?.render('sales'),
+    report_production: () => ReportsModule?.render('production'),
+    report_cryogenic:  () => ReportsModule?.render('cryogenic'),
+    report_deflashing: () => ReportsModule?.render('deflashing'),
+    report_trimming:   () => ReportsModule?.render('trimming'),
+    report_visual:     () => ReportsModule?.render('visual'),
+    report_gauge:      () => ReportsModule?.render('gauge'),
+    report_rejected:   () => ReportsModule?.render('rejected'),
+    report_recheck:    () => ReportsModule?.render('recheck'),
   };
 
   const PAGE_TITLES = {
     dashboard:'Dashboard', master:'Inventory Master', production:'Production',
-    cryogenic:'Cryogenic', deflashing:'Manual DE Flashing', trimming:'Trimming',
+    cryogenic:'Cryogenic', deflashing:'Flash Removal', trimming:'Trimming',
     visual:'Visual Inspection', gauge:'Gauge Inspection', quality:'Quality Final',
     store:'Store & Sales', stock:'Stock Upload', reports:'Reports', admin:'Admin Panel',
     'ai-agent':'AI Assistant',
+    report_inventory:'Inventory Report',
+    report_sales:'Sales Report',
+    report_production:'Production Report',
+    report_cryogenic:'Cryogenic Loss Report',
+    report_deflashing:'Flash Removal Loss Report',
+    report_trimming:'Trimming Loss Report',
+    report_visual:'Visual Inspection Report',
+    report_gauge:'Gauge Inspection Report',
+    report_rejected:'Rejected Batch Report',
+    report_recheck:'Quality Final Recheck',
   };
 
   function navigate(moduleId) {
@@ -119,6 +152,9 @@ const App = (() => {
     // Update top bar title
     const topTitle = document.getElementById('top-bar-title');
     if (topTitle) topTitle.textContent = PAGE_TITLES[moduleId] || moduleId;
+
+    // Close mobile sidebar if open
+    document.getElementById('sidebar')?.classList.remove('open');
 
     // Render module
     const fn = MODULE_MAP[moduleId];
@@ -168,7 +204,18 @@ const App = (() => {
     navigate(hash && MODULE_MAP[hash] ? hash : 'dashboard');
   }
 
-  return { navigate, init, get current() { return currentModule; } };
+  function toggleReportsMenu() {
+    const subItems = document.querySelectorAll('.sub-nav-item');
+    if (subItems.length === 0) return;
+    const isHidden = subItems[0].style.display === 'none';
+    subItems.forEach(el => {
+      el.style.display = isHidden ? 'flex' : 'none';
+    });
+    reportsExpanded = isHidden;
+    localStorage.setItem('jmpl_reports_expanded', reportsExpanded);
+  }
+
+  return { navigate, init, toggleReportsMenu, get current() { return currentModule; } };
 })();
 
 // ── Login Page ─────────────────────────────────────────────
@@ -177,7 +224,7 @@ function showLoginPage() {
     <div id="login-page">
       <div class="login-card">
         <div class="login-logo">
-          <div class="logo-badge">🔩</div>
+          <img src="./logo.png" alt="JMPL Logo" style="height: 80px; margin-bottom: 16px; object-fit: contain; background: white; padding: 6px; border-radius: 12px;">
           <h1><span>JMPL</span> Inventory</h1>
           <p>Rubber O-Ring Manufacturing — Tracking System</p>
         </div>
@@ -225,11 +272,20 @@ function showLoginPage() {
 
 // ── App Shell ──────────────────────────────────────────────
 function showAppShell(session) {
+  const reportsExpanded = localStorage.getItem('jmpl_reports_expanded') === 'true';
+  const displayStyle = reportsExpanded ? 'flex' : 'none';
+
   // Build sidebar nav
   let lastSection = '';
   const navHtml = NAV.filter(n => {
     if (n.adminOnly && !Auth.isAdmin()) return false;
     if (n.perm && !Auth.hasPermission(n.perm) && !Auth.isAdmin()) return false;
+    
+    // Parent 'reports' menu item: hide if user is not admin and has access to zero sub-reports
+    if (n.module === 'reports' && !Auth.isAdmin()) {
+      const hasAnyReportPerm = NAV.some(item => item.parent === 'reports' && item.perm && Auth.hasPermission(item.perm));
+      if (!hasAnyReportPerm) return false;
+    }
     return true;
   }).map(n => {
     let html = '';
@@ -237,9 +293,20 @@ function showAppShell(session) {
       html += `<div class="nav-section-label">${SECTION_LABELS[n.section]}</div>`;
       lastSection = n.section;
     }
-    html += `<button class="nav-item" data-module="${n.module}" id="nav-${n.id}" onclick="App.navigate('${n.module}')">
-      <span class="nav-icon">${n.icon}</span>${n.label}
-    </button>`;
+    
+    if (n.parent) {
+      html += `<button class="nav-item sub-nav-item" data-module="${n.module}" id="nav-${n.id}" onclick="App.navigate('${n.module}')" style="padding-left: 36px; font-size: 12.5px; display: ${displayStyle};">
+        <span class="nav-icon">${n.icon}</span>${n.label}
+      </button>`;
+    } else if (n.module === 'reports') {
+      html += `<button class="nav-item" data-module="${n.module}" id="nav-${n.id}" onclick="App.toggleReportsMenu()">
+        <span class="nav-icon">${n.icon}</span>${n.label} <span style="margin-left: auto; font-size: 10px; opacity: 0.7;">▼</span>
+      </button>`;
+    } else {
+      html += `<button class="nav-item" data-module="${n.module}" id="nav-${n.id}" onclick="App.navigate('${n.module}')">
+        <span class="nav-icon">${n.icon}</span>${n.label}
+      </button>`;
+    }
     return html;
   }).join('');
 
@@ -251,7 +318,7 @@ function showAppShell(session) {
       <nav id="sidebar">
         <div class="sidebar-header">
           <div class="sidebar-brand">
-            <div class="brand-icon">🔩</div>
+            <img src="./logo.png" alt="JMPL Logo" style="width: 40px; height: 40px; object-fit: contain; border-radius: 8px; background: white; padding: 4px; flex-shrink: 0;">
             <div class="brand-text">
               <h2>JMPL</h2>
               <p>Inventory System</p>
@@ -274,6 +341,7 @@ function showAppShell(session) {
       <!-- Main Content -->
       <main id="main">
         <header id="top-bar">
+          <button id="sidebar-toggle" class="btn btn-ghost btn-sm no-print" style="margin-right:12px; display:none; align-items:center; justify-content:center; width:36px; height:36px; font-size:18px;">☰</button>
           <h2 id="top-bar-title">Dashboard</h2>
           <span class="top-badge" id="top-badge-date">${new Date().toLocaleDateString('en-IN', {weekday:'short',day:'numeric',month:'short',year:'numeric'})}</span>
         </header>
@@ -281,6 +349,25 @@ function showAppShell(session) {
       </main>
     </div>
     <div id="toast-container"></div>`;
+
+  // Register mobile sidebar toggling
+  const sidebar = document.getElementById('sidebar');
+  const toggleBtn = document.getElementById('sidebar-toggle');
+  if (toggleBtn && sidebar) {
+    toggleBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      sidebar.classList.toggle('open');
+    });
+
+    // Close sidebar when clicking anywhere outside
+    document.addEventListener('click', (e) => {
+      if (sidebar.classList.contains('open')) {
+        if (!e.target.closest('#sidebar') && !e.target.closest('#sidebar-toggle')) {
+          sidebar.classList.remove('open');
+        }
+      }
+    });
+  }
 }
 
 // ── Dashboard ──────────────────────────────────────────────

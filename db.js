@@ -28,6 +28,7 @@ const DB = (() => {
     subcontractors: [],
     vendors: [],
     operators: [],
+    inspectors: [],
     batches: [],
     stageRecords: [],
     lossTracker: [],
@@ -300,7 +301,7 @@ const DB = (() => {
         username: 'admin',
         password: 'admin123',
         role: 'admin',
-        permissions: ['admin','master','production','cryogenic','deflashing','trimming','visual','gauge','quality','store','stock','reports'],
+        permissions: ['admin','master','production','cryogenic','deflashing','trimming','visual','gauge','quality','store','stock','report_inventory','report_sales','report_production','report_cryogenic','report_deflashing','report_trimming','report_visual','report_gauge','report_rejected','report_recheck'],
         active: true
       });
     }
@@ -353,6 +354,15 @@ const DB = (() => {
     update: (id, c) => update('operators', id, c),
   };
 
+  // ── INSPECTORS ────────────────────────────────────────────
+  const Inspectors = {
+    all: () => getAll('inspectors'),
+    active: () => getAll('inspectors').filter(r => r.active),
+    find: (id) => findById('inspectors', id),
+    insert: (r) => insert('inspectors', r),
+    update: (id, c) => update('inspectors', id, c),
+  };
+
   // ── BATCHES ───────────────────────────────────────────────
   const Batches = {
     all: () => getAll('batches'),
@@ -360,18 +370,21 @@ const DB = (() => {
     byStage: (stage) => getAll('batches').filter(r => r.currentStage === stage && r.status === 'active'),
     byStatus: (status) => getAll('batches').filter(r => r.status === status),
     insert: (r) => {
-      const batches = getAll('batches');
-      let maxNum = 0;
-      batches.forEach(b => {
-        if (b.batchNo && b.batchNo.startsWith('JMPL-')) {
-          const num = parseInt(b.batchNo.substring(5), 10);
-          if (!isNaN(num) && num > maxNum) {
-            maxNum = num;
+      let batchNo = r.batchNo;
+      if (!batchNo) {
+        const batches = getAll('batches');
+        let maxNum = 0;
+        batches.forEach(b => {
+          if (b.batchNo && b.batchNo.startsWith('JMPL-')) {
+            const num = parseInt(b.batchNo.substring(5), 10);
+            if (!isNaN(num) && num > maxNum) {
+              maxNum = num;
+            }
           }
-        }
-      });
-      const num = maxNum + 1;
-      const batchNo = 'JMPL-' + String(num).padStart(5, '0');
+        });
+        const num = maxNum + 1;
+        batchNo = 'JMPL-' + String(num).padStart(5, '0');
+      }
       return insert('batches', { ...r, batchNo });
     },
     update: (id, c) => update('batches', id, c),
@@ -488,7 +501,7 @@ const DB = (() => {
 
   return {
     init, genId, seedDefaults,
-    Users, Master, Subcontractors, Vendors, Operators,
+    Users, Master, Subcontractors, Vendors, Operators, Inspectors,
     Batches, StageRecords, LossTracker, RejectionTracker,
     RecheckTracker, StockUploads, Sales, StoreInventory,
     ProductionRecords,

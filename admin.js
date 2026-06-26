@@ -2,8 +2,29 @@
 // admin.js — Admin Panel Module
 // ============================================================
 const AdminModule = (() => {
-  const PERMS = ['master','production','cryogenic','deflashing','trimming','visual','gauge','quality','store','stock','reports'];
-  const PERM_LABELS = {master:'Inventory Master',production:'Production',cryogenic:'Cryogenic',deflashing:'DE Flashing',trimming:'Trimming',visual:'Visual',gauge:'Gauge',quality:'Quality Final',store:'Store',stock:'Stock Upload',reports:'Reports'};
+  const PERMS = ['master','production','cryogenic','deflashing','trimming','visual','gauge','quality','store','stock','report_inventory','report_sales','report_production','report_cryogenic','report_deflashing','report_trimming','report_visual','report_gauge','report_rejected','report_recheck'];
+  const PERM_LABELS = {
+    master: 'Inventory Master',
+    production: 'Production',
+    cryogenic: 'Cryogenic',
+    deflashing: 'DE Flashing',
+    trimming: 'Trimming',
+    visual: 'Visual',
+    gauge: 'Gauge',
+    quality: 'Quality Final',
+    store: 'Store',
+    stock: 'Stock Upload',
+    report_inventory: 'Report: Inventory',
+    report_sales: 'Report: Sales',
+    report_production: 'Report: Production',
+    report_cryogenic: 'Report: Cryo Loss',
+    report_deflashing: 'Report: DE Flash Loss',
+    report_trimming: 'Report: Trimming Loss',
+    report_visual: 'Report: Visual Insp',
+    report_gauge: 'Report: Gauge Insp',
+    report_rejected: 'Report: Rejected Batches',
+    report_recheck: 'Report: QF Recheck'
+  };
   let activeTab = 'users';
 
   function render() {
@@ -15,17 +36,18 @@ const AdminModule = (() => {
     el.innerHTML = `
       <div class="animate-in">
         <div class="flex items-center justify-between mb-6">
-          <div><h2 class="font-bold" style="font-size:20px;">Admin Panel</h2><p class="text-sm text-muted mt-1">Manage users, subcontractors, vendors and operators</p></div>
+          <div><h2 class="font-bold" style="font-size:20px;">Admin Panel</h2><p class="text-sm text-muted mt-1">Manage users, subcontractors, vendors, operators and inspectors</p></div>
         </div>
         <div class="tabs" id="admin-tabs">
           <button class="tab-btn ${activeTab==='users'?'active':''}" data-tab="users">👤 Users</button>
           <button class="tab-btn ${activeTab==='sub'?'active':''}" data-tab="sub">🏢 Subcontractors</button>
           <button class="tab-btn ${activeTab==='vendor'?'active':''}" data-tab="vendor">🤝 Vendors</button>
           <button class="tab-btn ${activeTab==='op'?'active':''}" data-tab="op">👷 Operators</button>
+          <button class="tab-btn ${activeTab==='insp'?'active':''}" data-tab="insp">🔍 Inspectors</button>
         </div>
         <div id="admin-tab-content"></div>
       </div>
-      ${userModal()}${subModal()}${vendorModal()}${opModal()}`;
+      ${userModal()}${subModal()}${vendorModal()}${opModal()}${inspectorModal()}`;
 
     document.querySelectorAll('#admin-tabs .tab-btn').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -45,6 +67,7 @@ const AdminModule = (() => {
     if (tab === 'sub')    el.innerHTML = subTab();
     if (tab === 'vendor') el.innerHTML = vendorTab();
     if (tab === 'op')     el.innerHTML = opTab();
+    if (tab === 'insp')   el.innerHTML = inspectorTab();
   }
 
   // ── USERS TAB ───────────────────────────────────────────
@@ -477,5 +500,96 @@ const AdminModule = (() => {
     renderTab('op');
   }
 
-  return { render, openAddUser, editUser, saveUser, toggleUser, onRoleChange, openAddSub, editSub, saveSub, toggleSub, openAddVendor, editVendor, saveVendor, toggleVendor, openAddOp, editOp, saveOp, toggleOp };
+  // ── INSPECTORS TAB ───────────────────────────────────────
+  function inspectorTab() {
+    const ins = DB.Inspectors.all();
+    const rows = ins.map(o => `
+      <tr>
+        <td class="font-semibold">${o.name}</td>
+        <td class="text-muted">${o.employeeId||'—'}</td>
+        <td><span class="badge ${o.active?'badge-green':'badge-red'}">${o.active?'Active':'Inactive'}</span></td>
+        <td>
+          <div class="flex gap-2">
+            <button class="btn btn-ghost btn-xs" onclick="AdminModule.editInspector('${o.id}')">Edit</button>
+            <button class="btn btn-xs ${o.active?'btn-danger':'btn-teal'}" onclick="AdminModule.toggleInspector('${o.id}')">${o.active?'Disable':'Enable'}</button>
+          </div>
+        </td>
+      </tr>`).join('');
+    return `
+      <div class="card animate-in">
+        <div class="card-header">
+          <h3>Inspectors</h3>
+          <button class="btn btn-primary btn-sm" onclick="AdminModule.openAddInspector()">+ Add Inspector</button>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead><tr><th>Name</th><th>Employee ID</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody>${rows||'<tr><td colspan="4" style="text-align:center;padding:32px;color:var(--text-muted);">No inspectors found</td></tr>'}</tbody>
+          </table>
+        </div>
+      </div>`;
+  }
+
+  function inspectorModal() {
+    return `
+      <div class="modal-overlay hidden" id="admin-inspector-modal">
+        <div class="modal modal-sm">
+          <div class="modal-header">
+            <h3 id="inspector-modal-title">Add Inspector</h3>
+            <button class="modal-close" onclick="document.getElementById('admin-inspector-modal').classList.add('hidden')">&#x2715;</button>
+          </div>
+          <div class="modal-body">
+            <input type="hidden" id="inspector-edit-id">
+            <div class="form-group"><label class="form-label">Inspector Name <span class="required">*</span></label><input type="text" id="inspector-name" class="form-control" placeholder="Full name"></div>
+            <div class="form-group"><label class="form-label">Employee ID</label><input type="text" id="inspector-empid" class="form-control" placeholder="Employee ID"></div>
+            <div class="form-group"><label class="form-label">Status</label><select id="inspector-active" class="form-control"><option value="true">Active</option><option value="false">Inactive</option></select></div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="document.getElementById('admin-inspector-modal').classList.add('hidden')">Cancel</button>
+            <button class="btn btn-primary" onclick="AdminModule.saveInspector()">Save</button>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function openAddInspector() {
+    document.getElementById('inspector-edit-id').value = '';
+    document.getElementById('inspector-modal-title').textContent = 'Add Inspector';
+    document.getElementById('inspector-name').value = '';
+    document.getElementById('inspector-empid').value = '';
+    document.getElementById('inspector-active').value = 'true';
+    document.getElementById('admin-inspector-modal').classList.remove('hidden');
+  }
+
+  function editInspector(id) {
+    const o = DB.Inspectors.find(id);
+    if (!o) return;
+    document.getElementById('inspector-edit-id').value = id;
+    document.getElementById('inspector-modal-title').textContent = 'Edit Inspector';
+    document.getElementById('inspector-name').value = o.name;
+    document.getElementById('inspector-empid').value = o.employeeId||'';
+    document.getElementById('inspector-active').value = String(o.active);
+    document.getElementById('admin-inspector-modal').classList.remove('hidden');
+  }
+
+  function saveInspector() {
+    const id = document.getElementById('inspector-edit-id').value;
+    const name = document.getElementById('inspector-name').value.trim();
+    if (!name) { showToast('Inspector name is required', 'error'); return; }
+    const data = { name, employeeId: document.getElementById('inspector-empid').value.trim(), active: document.getElementById('inspector-active').value === 'true' };
+    if (id) { DB.Inspectors.update(id, data); showToast('Inspector updated', 'success'); }
+    else { DB.Inspectors.insert(data); showToast('Inspector added', 'success'); }
+    document.getElementById('admin-inspector-modal').classList.add('hidden');
+    renderTab('insp');
+  }
+
+  function toggleInspector(id) {
+    const o = DB.Inspectors.find(id);
+    if (!o) return;
+    DB.Inspectors.update(id, { active: !o.active });
+    showToast('Inspector ' + (o.active ? 'disabled' : 'enabled'), 'success');
+    renderTab('insp');
+  }
+
+  return { render, openAddUser, editUser, saveUser, toggleUser, onRoleChange, openAddSub, editSub, saveSub, toggleSub, openAddVendor, editVendor, saveVendor, toggleVendor, openAddOp, editOp, saveOp, toggleOp, openAddInspector, editInspector, saveInspector, toggleInspector };
 })();

@@ -741,4 +741,58 @@ table.data-table tbody td.muted { color: var(--text-secondary); }
   #sidebar { transform: translateX(-100%); }
   #sidebar.open { transform: translateX(0); width: 260px; }
   #main { margin-left: 0; }
+  #sidebar-toggle { display: inline-flex !important; }
+  #content { padding: 16px !important; }
+  #top-bar { padding: 0 16px !important; }
+
+  /* Dashboard specific responsiveness adjustments */
+  .dashboard-grid {
+    grid-template-columns: 1fr !important;
+  }
 }
+
+@media (max-width: 600px) {
+  .form-row, .form-row-3 {
+    grid-template-columns: 1fr !important;
+    gap: 8px !important;
+  }
+  .stats-grid {
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)) !important;
+    gap: 12px !important;
+  }
+}
+
+.reports-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 24px;
+  align-items: start;
+}
+@media (max-width: 1024px) {
+  .reports-layout {
+    grid-template-columns: 1fr;
+  }
+  .reports-layout > div {
+    position: static !important;
+  }
+}
+
+/* Responsive table scroll wrappers */
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin-bottom: 8px;
+}
+table.data-table {
+  width: 100%;
+  min-width: 800px;
+}
+#report-output table.data-table {
+  min-width: 1100px;
+}
+.modal table.data-table {
+  min-width: 100%;
+}
+
+

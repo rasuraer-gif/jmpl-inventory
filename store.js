@@ -57,7 +57,7 @@ const StoreModule = (() => {
         </div>
 
         <!-- Stats -->
-        <div class="stats-grid" style="grid-template-columns:repeat(4,1fr);max-width:720px;margin-bottom:24px;">
+        <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));max-width:720px;margin-bottom:24px;">
           <div class="stat-card green"><div class="stat-label">Total SKUs</div><div class="stat-value green">${parts.length}</div></div>
           <div class="stat-card teal"><div class="stat-label">Total Stock</div><div class="stat-value teal">${formatNum(totalStock)}</div></div>
           <div class="stat-card blue"><div class="stat-label">Sales This Month</div><div class="stat-value blue">${formatNum(salesThisMonth)}</div></div>
@@ -384,11 +384,29 @@ const StoreModule = (() => {
   }
 
   // ── Completed Batches Tab ──────────────────────────────────
+  let completedBatchSearch = '';
+
   function batchesTab() {
-    const batches = DB.Batches.byStatus('completed');
-    if (!batches.length) {
-      return '<div class="card card-body"><div class="empty-state"><div class="empty-icon">&#9989;</div><p>No completed batches yet</p></div></div>';
+    let batches = DB.Batches.byStatus('completed');
+    if (completedBatchSearch) {
+      const q = completedBatchSearch.toLowerCase();
+      batches = batches.filter(b => 
+        (b.batchNo || '').toLowerCase().includes(q) || 
+        (b.jmrefNo || '').toLowerCase().includes(q) || 
+        (b.partNo || '').toLowerCase().includes(q)
+      );
     }
+
+    if (!batches.length) {
+      return `
+        <div class="card card-body">
+          <div style="margin-bottom: 12px; max-width: 280px;">
+            <input type="text" id="store-batch-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${completedBatchSearch}" oninput="StoreModule.filterCompletedBatches(this.value)">
+          </div>
+          <div class="empty-state"><div class="empty-icon">&#9989;</div><p>No completed batches found</p></div>
+        </div>`;
+    }
+
     const rows = batches
       .sort((a, b) => (b.completedAt || '').localeCompare(a.completedAt || ''))
       .map(b => {
@@ -402,9 +420,16 @@ const StoreModule = (() => {
           <td class="text-muted text-sm">${(b.completedAt || '').slice(0, 10)}</td>
         </tr>`;
       }).join('');
+
     return `
-      <div class="card">
-        <div class="card-header"><h3>Completed Batches in Store</h3></div>
+      <div class="card animate-in">
+        <div class="card-header" style="flex-direction:row; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+          <h3>Completed Batches in Store</h3>
+          <div class="search-input" style="max-width: 250px; margin: 0;">
+            <span class="search-icon">&#128269;</span>
+            <input type="text" id="store-batch-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${completedBatchSearch}" oninput="StoreModule.filterCompletedBatches(this.value)">
+          </div>
+        </div>
         <div class="table-wrap">
           <table class="data-table">
             <thead><tr><th>Batch No</th><th>JMREF</th><th>Part</th><th>Qty in Store</th><th>Completed</th></tr></thead>
@@ -414,23 +439,43 @@ const StoreModule = (() => {
       </div>`;
   }
 
+  function filterCompletedBatches(val) {
+    completedBatchSearch = val;
+    const content = document.getElementById('store-content');
+    if (content) {
+      content.innerHTML = batchesTab();
+      const inp = document.getElementById('store-batch-search');
+      if (inp) {
+        inp.focus();
+        inp.setSelectionRange(inp.value.length, inp.value.length);
+      }
+    }
+  }
+
   // ── Sales History Tab ──────────────────────────────────────
   function salesTab() {
     const sales = DB.Sales.all().sort((a, b) => b.saleDate.localeCompare(a.saleDate));
     const master = DB.Master.all();
 
-    let filterJmref = '';
-    let filterFrom  = '';
-    let filterTo    = '';
-
     function render() {
       let s = sales;
+      const sv = (document.getElementById('sales-filter-search') || {}).value || '';
       const jv = (document.getElementById('sales-filter-jmref') || {}).value || '';
       const fv = (document.getElementById('sales-filter-from')  || {}).value || '';
       const tv = (document.getElementById('sales-filter-to')    || {}).value || '';
+      
+      if (sv) {
+        const q = sv.toLowerCase();
+        s = s.filter(r => 
+          (r.jmrefNo || '').toLowerCase().includes(q) || 
+          (r.partNo || '').toLowerCase().includes(q) || 
+          (r.notes || '').toLowerCase().includes(q)
+        );
+      }
       if (jv) s = s.filter(r => (r.jmrefNo || '').toLowerCase().includes(jv.toLowerCase()));
       if (fv) s = s.filter(r => r.saleDate >= fv);
       if (tv) s = s.filter(r => r.saleDate <= tv);
+
       const total = s.reduce((sum, r) => sum + (r.qty || 0), 0);
       const tbody = document.getElementById('sales-tbody');
       const totalEl = document.getElementById('sales-total');
@@ -458,7 +503,11 @@ const StoreModule = (() => {
       <div class="card">
         <div class="card-header"><h3>Sales History</h3></div>
         <div class="card-body">
-          <div class="filter-bar">
+          <div class="filter-bar" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));">
+            <div class="form-group mb-0">
+              <label class="form-label">Search text</label>
+              <input type="text" class="form-control" id="sales-filter-search" placeholder="Search JMREF, Part, Notes..." oninput="StoreModule._salesFilter()">
+            </div>
             <div class="form-group mb-0">
               <label class="form-label">JMREF</label>
               <select class="form-control" id="sales-filter-jmref" onchange="StoreModule._salesFilter()">
@@ -495,16 +544,26 @@ const StoreModule = (() => {
 
   // Public filter trigger for sales tab
   function _salesFilter() {
-    // Re-run the inner render
     const sales = DB.Sales.all().sort((a, b) => b.saleDate.localeCompare(a.saleDate));
     const master = DB.Master.all();
     let s = sales;
+    const sv = (document.getElementById('sales-filter-search') || {}).value || '';
     const jv = (document.getElementById('sales-filter-jmref') || {}).value || '';
     const fv = (document.getElementById('sales-filter-from')  || {}).value || '';
     const tv = (document.getElementById('sales-filter-to')    || {}).value || '';
+    
+    if (sv) {
+      const q = sv.toLowerCase();
+      s = s.filter(r => 
+        (r.jmrefNo || '').toLowerCase().includes(q) || 
+        (r.partNo || '').toLowerCase().includes(q) || 
+        (r.notes || '').toLowerCase().includes(q)
+      );
+    }
     if (jv) s = s.filter(r => (r.jmrefNo || '').toLowerCase().includes(jv.toLowerCase()));
     if (fv) s = s.filter(r => r.saleDate >= fv);
     if (tv) s = s.filter(r => r.saleDate <= tv);
+
     const total = s.reduce((sum, r) => sum + (r.qty || 0), 0);
     const tbody = document.getElementById('sales-tbody');
     const totalEl = document.getElementById('sales-total');
@@ -530,6 +589,8 @@ const StoreModule = (() => {
     onDragOver, onDragLeave, onDrop,
     onFileSelected,
     confirmSales,
-    _salesFilter
+    _salesFilter,
+    filterCompletedBatches
   };
 })();
+

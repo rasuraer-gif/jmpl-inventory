@@ -6,17 +6,20 @@ const VisualModule = (() => {
     const recs = DB.StageRecords.all().filter(r => r.batchId === batchId && r.movedTo === 'visual');
     return recs.length ? recs[recs.length-1].outputQty : (DB.Batches.find(batchId)||{}).initialQty||0;
   }
+
+  let historySearch = '';
+
   function render() {
     const el = document.getElementById('content');
     const batches = DB.Batches.byStage('visual');
     const history = DB.StageRecords.byStage('visual');
     const thisMonth = new Date().toISOString().slice(0,7);
     const monthLoss = DB.LossTracker.byStage('visual').filter(l=>(l.date||'').startsWith(thisMonth)).reduce((s,l)=>s+(l.lossQty||0),0);
-    const inspectors = [...new Set(history.map(r=>r.inspectorName).filter(Boolean))];
+    const inspectors = DB.Inspectors.active();
     el.innerHTML = `
       <div class="animate-in">
         <div class="mb-6"><h2 class="font-bold" style="font-size:20px;">Visual Inspection</h2><p class="text-sm text-muted mt-1">Inspect batches and record visual defects</p></div>
-        <div class="stats-grid" style="grid-template-columns:repeat(4,1fr);max-width:700px;margin-bottom:24px;">
+        <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));max-width:700px;margin-bottom:24px;">
           <div class="stat-card green"><div class="stat-label">Pending Batches</div><div class="stat-value green">${batches.length}</div></div>
           <div class="stat-card red"><div class="stat-label">Loss This Month</div><div class="stat-value red">${formatNum(monthLoss)}</div></div>
           <div class="stat-card blue"><div class="stat-label">Total Inspected</div><div class="stat-value blue">${history.length}</div></div>
@@ -37,6 +40,7 @@ const VisualModule = (() => {
       });
     });
   }
+
   function pendingTab(batches) {
     if (!batches.length) return `<div class="card card-body"><div class="empty-state"><div class="empty-icon">&#128065;&#65039;</div><p>No batches pending visual inspection</p></div></div>`;
     const rows = batches.map(b => {
@@ -58,15 +62,114 @@ const VisualModule = (() => {
     }).join('');
     return `<div class="card"><div class="card-header"><h3>Pending Batches</h3></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Input Qty</th><th>Received</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
   }
+
   function historyTab() {
-    const recs = DB.StageRecords.byStage('visual');
-    if (!recs.length) return `<div class="card card-body"><div class="empty-state"><div class="empty-icon">&#128202;</div><p>No inspection history yet</p></div></div>`;
+    let recs = DB.StageRecords.byStage('visual');
+    if (historySearch) {
+      const q = historySearch.toLowerCase();
+      recs = recs.filter(r => {
+        const b = DB.Batches.find(r.batchId) || {};
+        return (b.batchNo || '').toLowerCase().includes(q);
+      });
+    }
+
+    if (!recs.length) return `
+      <div class="card card-body">
+        <div style="margin-bottom: 12px; max-width: 280px;">
+          <input type="text" id="vis-history-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${historySearch}" oninput="VisualModule.filterHistory(this.value)">
+        </div>
+        <div class="empty-state"><div class="empty-icon">&#128202;</div><p>No inspection history found</p></div>
+      </div>`;
+
     const rows = recs.map(r => {
       const b = DB.Batches.find(r.batchId)||{};
-      return `<tr><td class="font-semibold">${b.batchNo||'—'}</td><td>${b.jmrefNo||'—'}</td><td>${r.inspectorName||'—'}</td><td>${formatNum(r.inputQty)}</td><td>${formatNum(r.outputQty)}</td><td class="text-danger font-semibold">${formatNum(r.lossQty)}</td><td><span class="badge badge-gray">${r.movedTo||'—'}</span></td><td class="text-muted text-sm">${(r.date||'').slice(0,10)}</td></tr>`;
+      const pct = r.inputQty ? ((r.lossQty / r.inputQty) * 100).toFixed(1) + '%' : '0.0%';
+      return `<tr>
+        <td class="font-semibold">${b.batchNo||'—'}</td>
+        <td>${b.jmrefNo||'—'}</td>
+        <td>${r.inspectorName||'—'}</td>
+        <td>${formatNum(r.inputQty)}</td>
+        <td>${formatNum(r.outputQty)}</td>
+        <td class="text-danger font-semibold">${formatNum(r.lossQty)}</td>
+        <td><span class="badge badge-red">${pct}</span></td>
+        <td><span class="badge badge-gray">${r.movedTo||'—'}</span></td>
+        <td class="text-muted text-sm">${(r.date||'').slice(0,10)}</td>
+      </tr>`;
     }).join('');
-    return `<div class="card"><div class="card-header"><h3>Inspection History</h3></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Batch</th><th>JMREF</th><th>Inspector</th><th>Input</th><th>Output</th><th>Loss</th><th>Moved To</th><th>Date</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+
+    return `
+      <div class="card animate-in">
+        <div class="card-header" style="flex-direction:row; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+          <h3>Inspection History</h3>
+          <div class="search-input" style="max-width: 250px; margin: 0;">
+            <span class="search-icon">&#128269;</span>
+            <input type="text" id="vis-history-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${historySearch}" oninput="VisualModule.filterHistory(this.value)">
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr><th>Batch</th><th>JMREF</th><th>Inspector</th><th>Input</th><th>Output</th><th>Loss</th><th>% Loss</th><th>Moved To</th><th>Date</th></tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>`;
   }
+
+  function filterHistory(val) {
+    historySearch = val;
+    const content = document.getElementById('vis-content');
+    if (content) {
+      content.innerHTML = historyTab();
+      const inp = document.getElementById('vis-history-search');
+      if (inp) {
+        inp.focus();
+        inp.setSelectionRange(inp.value.length, inp.value.length);
+      }
+    }
+  }
+
+  function showInspectorDropdown() {
+    const list = document.getElementById('vis-inspector-dropdown');
+    if (!list) return;
+    list.classList.remove('hidden');
+    filterInspectors(document.getElementById('vis-inspector-search').value || '');
+  }
+
+  function filterInspectors(query) {
+    const list = document.getElementById('vis-inspector-dropdown');
+    if (!list) return;
+    const inspectors = DB.Inspectors.active();
+    const q = query.toLowerCase();
+    const filtered = inspectors.filter(i => i.name.toLowerCase().includes(q) || (i.employeeId || '').toLowerCase().includes(q));
+    
+    if (filtered.length === 0) {
+      list.innerHTML = `<div style="padding:10px; color:var(--text-muted); font-size:12.5px; text-align:center;">No active inspectors found.</div>`;
+      return;
+    }
+    
+    list.innerHTML = filtered.map(i => `
+      <div class="dropdown-item" 
+           style="padding:8px 12px; cursor:pointer; border-radius:4px; transition:background 0.2s; font-size:13px; color:var(--text-main); display:flex; justify-content:space-between; align-items:center;"
+           onclick="VisualModule.selectInspector('${i.id}', '${i.name.replace(/'/g, "\\'")}')"
+           onmouseover="this.style.background='rgba(99,102,241,0.15)'"
+           onmouseout="this.style.background='transparent'">
+        <div>
+          <span style="font-weight:600; color:var(--primary);">${i.name}</span>
+          ${i.employeeId ? `<span class="badge badge-gray" style="margin-left:8px; font-size:10px;">${i.employeeId}</span>` : ''}
+        </div>
+      </div>
+    `).join('');
+  }
+
+  function selectInspector(id, name) {
+    document.getElementById('vis-inspector').value = name;
+    document.getElementById('vis-inspector-search').value = name;
+    const list = document.getElementById('vis-inspector-dropdown');
+    if (list) list.classList.add('hidden');
+  }
+
   function processModal() {
     return `<div class="modal-overlay hidden" id="vis-process-modal">
       <div class="modal modal-sm">
@@ -75,7 +178,14 @@ const VisualModule = (() => {
           <input type="hidden" id="vis-batch-id">
           <input type="hidden" id="vis-input-qty">
           <div id="vis-batch-info" style="padding:12px;background:var(--bg-input);border-radius:8px;margin-bottom:16px;"></div>
-          <div class="form-group"><label class="form-label">Inspector Name <span class="required">*</span></label><input type="text" id="vis-inspector" class="form-control" placeholder="Enter inspector name"></div>
+          
+          <div class="form-group" style="position:relative;">
+            <label class="form-label">Inspector Name <span class="required">*</span></label>
+            <input type="text" id="vis-inspector-search" class="form-control" placeholder="Search inspector..." onfocus="VisualModule.showInspectorDropdown()" oninput="VisualModule.filterInspectors(this.value)" autocomplete="off">
+            <input type="hidden" id="vis-inspector">
+            <div id="vis-inspector-dropdown" class="hidden" style="position:absolute; top:100%; left:0; right:0; z-index:1000; max-height:180px; overflow-y:auto; background:var(--card-bg); border:1px solid var(--border); border-radius:8px; box-shadow:0 10px 15px -3px rgba(0,0,0,0.3); margin-top:4px; padding: 4px;"></div>
+          </div>
+
           <div class="form-group"><label class="form-label">Output Quantity <span class="required">*</span></label><input type="number" id="vis-output-qty" class="form-control" min="0" oninput="VisualModule.calcLoss()"></div>
           <div class="form-group"><label class="form-label">Loss Quantity (Auto)</label><input type="text" id="vis-loss-qty" class="form-control" readonly style="color:var(--accent-red);font-weight:700;"></div>
           <div class="form-group"><label class="form-label">Destination <span class="required">*</span></label>
@@ -117,6 +227,7 @@ const VisualModule = (() => {
     document.getElementById('vis-input-qty').value = inputQty;
     document.getElementById('vis-batch-info').innerHTML = `<strong>${b.batchNo}</strong> — ${b.jmrefNo}<br><span class="text-muted text-sm">Input Qty: <strong>${formatNum(inputQty)}</strong></span>${b.recheckCount?` <span class="badge badge-amber">Recheck #${b.recheckIteration}</span>`:''}`;
     document.getElementById('vis-inspector').value = '';
+    document.getElementById('vis-inspector-search').value = '';
     document.getElementById('vis-output-qty').value = '';
     document.getElementById('vis-loss-qty').value = '';
     document.getElementById('vis-notes').value = '';
@@ -162,5 +273,12 @@ const VisualModule = (() => {
     showToast('Batch rejected', 'success');
     render();
   }
-  return { render, openProcess, calcLoss, process, openReject, rejectBatch };
+  document.addEventListener('click', e => {
+    const list = document.getElementById('vis-inspector-dropdown');
+    if (list && !e.target.closest('#vis-inspector-search') && !e.target.closest('#vis-inspector-dropdown')) {
+      list.classList.add('hidden');
+    }
+  });
+
+  return { render, openProcess, calcLoss, process, openReject, rejectBatch, showInspectorDropdown, filterInspectors, selectInspector, filterHistory };
 })();

@@ -2,6 +2,8 @@
 // gauge.js — Gauge Inspection Department Module
 // ============================================================
 const GaugeModule = (() => {
+  let historySearch = '';
+
   function getInputQty(batchId) {
     const recs = DB.StageRecords.all().filter(r => r.batchId === batchId && r.movedTo === 'gauge');
     return recs.length ? recs[recs.length-1].outputQty : 0;
@@ -15,7 +17,7 @@ const GaugeModule = (() => {
     el.innerHTML = `
       <div class="animate-in">
         <div class="mb-6"><h2 class="font-bold" style="font-size:20px;">Gauge Inspection</h2><p class="text-sm text-muted mt-1">Gauge dimension inspection before Quality Final</p></div>
-        <div class="stats-grid" style="grid-template-columns:repeat(3,1fr);max-width:520px;margin-bottom:24px;">
+        <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));max-width:520px;margin-bottom:24px;">
           <div class="stat-card purple"><div class="stat-label">Pending Batches</div><div class="stat-value purple">${batches.length}</div></div>
           <div class="stat-card red"><div class="stat-label">Loss This Month</div><div class="stat-value red">${formatNum(monthLoss)}</div></div>
           <div class="stat-card blue"><div class="stat-label">Total Inspected</div><div class="stat-value blue">${history.length}</div></div>
@@ -44,13 +46,59 @@ const GaugeModule = (() => {
     return '<div class="card"><div class="card-header"><h3>Pending Batches</h3></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Input Qty</th><th>Received</th><th>Actions</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
   }
   function historyTab() {
-    const recs = DB.StageRecords.byStage('gauge');
-    if (!recs.length) return '<div class="card card-body"><div class="empty-state"><div class="empty-icon">&#128202;</div><p>No inspection history yet</p></div></div>';
+    let recs = DB.StageRecords.byStage('gauge');
+    if (historySearch) {
+      const q = historySearch.toLowerCase();
+      recs = recs.filter(r => {
+        const b = DB.Batches.find(r.batchId) || {};
+        return (b.batchNo || '').toLowerCase().includes(q);
+      });
+    }
+
+    if (!recs.length) return `
+      <div class="card card-body">
+        <div style="margin-bottom: 12px; max-width: 280px;">
+          <input type="text" id="gauge-history-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${historySearch}" oninput="GaugeModule.filterHistory(this.value)">
+        </div>
+        <div class="empty-state"><div class="empty-icon">&#128202;</div><p>No processing history found</p></div>
+      </div>`;
+
     const rows = recs.map(r => {
       const b = DB.Batches.find(r.batchId)||{};
-      return '<tr><td class="font-semibold">' + (b.batchNo||'&#x2014;') + '</td><td>' + (b.jmrefNo||'&#x2014;') + '</td><td>' + formatNum(r.inputQty) + '</td><td>' + formatNum(r.outputQty) + '</td><td class="text-danger font-semibold">' + formatNum(r.lossQty) + '</td><td class="text-muted text-sm">' + (r.date||'').slice(0,10) + '</td></tr>';
+      const pct = r.inputQty ? ((r.lossQty / r.inputQty) * 100).toFixed(1) + '%' : '0.0%';
+      return '<tr><td class="font-semibold">' + (b.batchNo||'&#x2014;') + '</td><td>' + (b.jmrefNo||'&#x2014;') + '</td><td>' + formatNum(r.inputQty) + '</td><td>' + formatNum(r.outputQty) + '</td><td class="text-danger font-semibold">' + formatNum(r.lossQty) + '</td><td><span class="badge badge-red">' + pct + '</span></td><td class="text-muted text-sm">' + (r.date||'').slice(0,10) + '</td></tr>';
     }).join('');
-    return '<div class="card"><div class="card-header"><h3>Gauge Inspection History</h3></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Batch</th><th>JMREF</th><th>Input</th><th>Output</th><th>Loss</th><th>Date</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+
+    return `
+      <div class="card animate-in">
+        <div class="card-header" style="flex-direction:row; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+          <h3>Gauge Inspection History</h3>
+          <div class="search-input" style="max-width: 250px; margin: 0;">
+            <span class="search-icon">&#128269;</span>
+            <input type="text" id="gauge-history-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${historySearch}" oninput="GaugeModule.filterHistory(this.value)">
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr><th>Batch</th><th>JMREF</th><th>Input</th><th>Output</th><th>Loss</th><th>% Loss</th><th>Date</th></tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>`;
+  }
+  function filterHistory(val) {
+    historySearch = val;
+    const content = document.getElementById('gauge-content');
+    if (content) {
+      content.innerHTML = historyTab();
+      const inp = document.getElementById('gauge-history-search');
+      if (inp) {
+        inp.focus();
+        inp.setSelectionRange(inp.value.length, inp.value.length);
+      }
+    }
   }
   function processModal() {
     return '<div class="modal-overlay hidden" id="gauge-process-modal"><div class="modal modal-sm"><div class="modal-header"><h3>Gauge Inspection</h3><button class="modal-close" onclick="document.getElementById(\'gauge-process-modal\').classList.add(\'hidden\')">&#x2715;</button></div><div class="modal-body"><input type="hidden" id="gauge-batch-id"><input type="hidden" id="gauge-input-qty"><div id="gauge-batch-info" style="padding:12px;background:var(--bg-input);border-radius:8px;margin-bottom:16px;"></div><div class="form-group"><label class="form-label">Output Quantity <span class="required">*</span></label><input type="number" id="gauge-output-qty" class="form-control" min="0" oninput="GaugeModule.calcLoss()"></div><div class="form-group"><label class="form-label">Loss Quantity (Auto)</label><input type="text" id="gauge-loss-qty" class="form-control" readonly style="color:var(--accent-red);font-weight:700;"></div><div class="form-group"><label class="form-label">Destination</label><input type="text" class="form-control" value="Quality Final" readonly style="opacity:0.6;"></div><div class="form-group"><label class="form-label">Notes</label><textarea id="gauge-notes" class="form-control" rows="2"></textarea></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="document.getElementById(\'gauge-process-modal\').classList.add(\'hidden\')">Cancel</button><button class="btn btn-primary" onclick="GaugeModule.process()">Move to Quality Final</button></div></div></div>';
@@ -106,5 +154,5 @@ const GaugeModule = (() => {
     showToast('Batch rejected', 'success');
     render();
   }
-  return { render, openProcess, calcLoss, process, openReject, rejectBatch };
+  return { render, openProcess, calcLoss, process, openReject, rejectBatch, filterHistory };
 })();

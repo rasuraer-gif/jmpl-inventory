@@ -3,14 +3,18 @@
 // ============================================================
 const MasterModule = (() => {
   let searchTerm = '';
+  let parsedRows = [];
 
   function render() {
     const el = document.getElementById('content');
     el.innerHTML = `
       <div class="animate-in">
         <div class="flex items-center justify-between mb-6">
-          <div><h2 class="font-bold" style="font-size:20px;">Inventory Master</h2><p class="text-sm text-muted mt-1">Manage Part Numbers, JMREF Numbers and Descriptions</p></div>
-          <button class="btn btn-primary" onclick="MasterModule.openAdd()">+ Add Part</button>
+          <div><h2 class="font-bold" style="font-size:20px;">Inventory Master</h2><p class="text-sm text-muted mt-1">Manage Part Numbers, Technical Specifications, and Pricing</p></div>
+          <div class="flex gap-2">
+            <button class="btn btn-secondary" onclick="MasterModule.openBulk()">📥 Bulk Upload</button>
+            <button class="btn btn-primary" onclick="MasterModule.openAdd()">+ Add Part</button>
+          </div>
         </div>
         <div id="master-stats" class="stats-grid" style="grid-template-columns:repeat(2,1fr);max-width:340px;margin-bottom:24px;"></div>
         <div class="card">
@@ -18,35 +22,112 @@ const MasterModule = (() => {
             <h3>Parts List</h3>
             <div class="search-input">
               <span class="search-icon">&#128269;</span>
-              <input type="text" class="form-control" id="master-search" placeholder="Search by Part No or JMREF..." oninput="MasterModule.search(this.value)">
+              <input type="text" class="form-control" id="master-search" placeholder="Search by Part No, JMREF, Compound..." oninput="MasterModule.search(this.value)">
             </div>
           </div>
           <div class="table-wrap">
-            <table class="data-table">
-              <thead><tr><th>#</th><th>Part No</th><th>JMREF No</th><th>Description</th><th>Created Date</th><th>Actions</th></tr></thead>
+            <table class="data-table" style="min-width: 950px;">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Part No</th>
+                  <th>JMREF No</th>
+                  <th>Sale Price</th>
+                  <th>Blank Wt (g)</th>
+                  <th>Description</th>
+                  <th>Created Date</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
               <tbody id="master-tbody"></tbody>
             </table>
           </div>
         </div>
       </div>
+      
       <div class="modal-overlay hidden" id="master-modal">
-        <div class="modal modal-sm">
+        <div class="modal modal-md">
           <div class="modal-header">
             <h3 id="master-modal-title">Add Part</h3>
             <button class="modal-close" onclick="document.getElementById('master-modal').classList.add('hidden')">&#x2715;</button>
           </div>
           <div class="modal-body">
             <input type="hidden" id="master-edit-id">
-            <div class="form-group"><label class="form-label">Part No <span class="required">*</span></label><input type="text" id="master-partno" class="form-control" placeholder="e.g. OR-001"></div>
-            <div class="form-group"><label class="form-label">JMREF No <span class="required">*</span></label><input type="text" id="master-jmref" class="form-control" placeholder="e.g. JMREF-2024-001"></div>
-            <div class="form-group"><label class="form-label">Description <span class="required">*</span></label><textarea id="master-desc" class="form-control" rows="3" placeholder="Product description"></textarea></div>
+            
+            <div class="form-row">
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Part No <span class="required">*</span></label>
+                <input type="text" id="master-partno" class="form-control" placeholder="e.g. OR-001">
+              </div>
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">JMREF No <span class="required">*</span></label>
+                <input type="text" id="master-jmref" class="form-control" placeholder="e.g. JMREF-2024-001">
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">10 Digit No</label>
+                <input type="text" id="master-tendigit" class="form-control" placeholder="e.g. 1234567890">
+              </div>
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Compound Code</label>
+                <input type="text" id="master-compound" class="form-control" placeholder="e.g. CC-90">
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Sale Price</label>
+                <input type="number" id="master-saleprice" class="form-control" placeholder="e.g. 15.50" step="0.01" min="0">
+              </div>
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Time (Minutes)</label>
+                <input type="number" id="master-time" class="form-control" placeholder="e.g. 10" min="0">
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Temperature (°C)</label>
+                <input type="number" id="master-temp" class="form-control" placeholder="e.g. 150">
+              </div>
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Pressure (Psi)</label>
+                <input type="number" id="master-pressure" class="form-control" placeholder="e.g. 120">
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Sheet Thickness (mm)</label>
+                <input type="number" id="master-thickness" class="form-control" placeholder="e.g. 2.5" step="0.1" min="0">
+              </div>
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Blank Length (mm)</label>
+                <input type="number" id="master-length" class="form-control" placeholder="e.g. 200" step="0.1" min="0">
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Blank Weight (Grams)</label>
+                <input type="number" id="master-weight" class="form-control" placeholder="e.g. 4.5" step="0.01" min="0">
+              </div>
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Description <span class="required">*</span></label>
+                <input type="text" id="master-desc" class="form-control" placeholder="Product description">
+              </div>
+            </div>
           </div>
           <div class="modal-footer">
             <button class="btn btn-secondary" onclick="document.getElementById('master-modal').classList.add('hidden')">Cancel</button>
             <button class="btn btn-primary" onclick="MasterModule.save()">Save Part</button>
           </div>
         </div>
-      </div>`;
+      </div>
+      
+      ${bulkModal()}`;
     renderStats();
     renderTable();
   }
@@ -66,10 +147,16 @@ const MasterModule = (() => {
     let parts = DB.Master.all();
     if (searchTerm) {
       const s = searchTerm.toLowerCase();
-      parts = parts.filter(p => p.partNo.toLowerCase().includes(s) || p.jmrefNo.toLowerCase().includes(s) || (p.description||'').toLowerCase().includes(s));
+      parts = parts.filter(p => 
+        p.partNo.toLowerCase().includes(s) || 
+        p.jmrefNo.toLowerCase().includes(s) || 
+        (p.description||'').toLowerCase().includes(s) ||
+        (p.tenDigitNo||'').toLowerCase().includes(s) ||
+        (p.compoundCode||'').toLowerCase().includes(s)
+      );
     }
     if (!parts.length) {
-      tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">&#128203;</div><p>No parts found. Add your first part.</p></div></td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8"><div class="empty-state"><div class="empty-icon">&#128203;</div><p>No parts found. Add your first part.</p></div></td></tr>';
       return;
     }
     tbody.innerHTML = parts.map((p, i) => `
@@ -77,6 +164,8 @@ const MasterModule = (() => {
         <td class="text-muted">${i+1}</td>
         <td class="font-semibold text-blue">${p.partNo}</td>
         <td><span class="badge badge-teal">${p.jmrefNo}</span></td>
+        <td class="font-semibold">${p.salePrice != null ? p.salePrice : '—'}</td>
+        <td>${p.blankWeight != null ? p.blankWeight : '—'}</td>
         <td>${p.description}</td>
         <td class="text-muted text-sm">${(p.createdAt||'').slice(0,10)}</td>
         <td>
@@ -96,6 +185,15 @@ const MasterModule = (() => {
     document.getElementById('master-partno').value = '';
     document.getElementById('master-jmref').value = '';
     document.getElementById('master-desc').value = '';
+    document.getElementById('master-tendigit').value = '';
+    document.getElementById('master-compound').value = '';
+    document.getElementById('master-saleprice').value = '';
+    document.getElementById('master-time').value = '';
+    document.getElementById('master-temp').value = '';
+    document.getElementById('master-pressure').value = '';
+    document.getElementById('master-thickness').value = '';
+    document.getElementById('master-length').value = '';
+    document.getElementById('master-weight').value = '';
     document.getElementById('master-modal').classList.remove('hidden');
   }
 
@@ -104,9 +202,18 @@ const MasterModule = (() => {
     if (!p) return;
     document.getElementById('master-edit-id').value = id;
     document.getElementById('master-modal-title').textContent = 'Edit Part';
-    document.getElementById('master-partno').value = p.partNo;
-    document.getElementById('master-jmref').value = p.jmrefNo;
-    document.getElementById('master-desc').value = p.description;
+    document.getElementById('master-partno').value = p.partNo || '';
+    document.getElementById('master-jmref').value = p.jmrefNo || '';
+    document.getElementById('master-desc').value = p.description || '';
+    document.getElementById('master-tendigit').value = p.tenDigitNo || '';
+    document.getElementById('master-compound').value = p.compoundCode || '';
+    document.getElementById('master-saleprice').value = p.salePrice != null ? p.salePrice : '';
+    document.getElementById('master-time').value = p.timeMinutes != null ? p.timeMinutes : '';
+    document.getElementById('master-temp').value = p.temperature != null ? p.temperature : '';
+    document.getElementById('master-pressure').value = p.pressure != null ? p.pressure : '';
+    document.getElementById('master-thickness').value = p.sheetThickness != null ? p.sheetThickness : '';
+    document.getElementById('master-length').value = p.blankLength != null ? p.blankLength : '';
+    document.getElementById('master-weight').value = p.blankWeight != null ? p.blankWeight : '';
     document.getElementById('master-modal').classList.remove('hidden');
   }
 
@@ -115,12 +222,44 @@ const MasterModule = (() => {
     const partNo = document.getElementById('master-partno').value.trim();
     const jmrefNo = document.getElementById('master-jmref').value.trim();
     const description = document.getElementById('master-desc').value.trim();
-    if (!partNo || !jmrefNo || !description) { showToast('All fields are required', 'error'); return; }
+    
+    const tenDigitNo = document.getElementById('master-tendigit').value.trim();
+    const compoundCode = document.getElementById('master-compound').value.trim();
+    const salePrice = document.getElementById('master-saleprice').value !== '' ? parseFloat(document.getElementById('master-saleprice').value) : null;
+    const timeMinutes = document.getElementById('master-time').value !== '' ? parseFloat(document.getElementById('master-time').value) : null;
+    const temperature = document.getElementById('master-temp').value !== '' ? parseFloat(document.getElementById('master-temp').value) : null;
+    const pressure = document.getElementById('master-pressure').value !== '' ? parseFloat(document.getElementById('master-pressure').value) : null;
+    const sheetThickness = document.getElementById('master-thickness').value !== '' ? parseFloat(document.getElementById('master-thickness').value) : null;
+    const blankLength = document.getElementById('master-length').value !== '' ? parseFloat(document.getElementById('master-length').value) : null;
+    const blankWeight = document.getElementById('master-weight').value !== '' ? parseFloat(document.getElementById('master-weight').value) : null;
+
+    if (!partNo || !jmrefNo || !description) { showToast('Part No, JMREF No, and Description are required', 'error'); return; }
     const all = DB.Master.all();
     if (all.find(p => p.partNo === partNo && p.id !== id)) { showToast('Part No already exists', 'error'); return; }
     if (all.find(p => p.jmrefNo === jmrefNo && p.id !== id)) { showToast('JMREF No already exists', 'error'); return; }
-    if (id) { DB.Master.update(id, { partNo, jmrefNo, description }); showToast('Part updated', 'success'); }
-    else { DB.Master.insert({ partNo, jmrefNo, description }); showToast('Part added', 'success'); }
+
+    const fields = { 
+      partNo, 
+      jmrefNo, 
+      description,
+      tenDigitNo,
+      compoundCode,
+      salePrice,
+      timeMinutes,
+      temperature,
+      pressure,
+      sheetThickness,
+      blankLength,
+      blankWeight
+    };
+
+    if (id) { 
+      DB.Master.update(id, fields); 
+      showToast('Part updated', 'success'); 
+    } else { 
+      DB.Master.insert(fields); 
+      showToast('Part added', 'success'); 
+    }
     document.getElementById('master-modal').classList.add('hidden');
     renderStats(); renderTable();
   }
@@ -134,5 +273,224 @@ const MasterModule = (() => {
     renderStats(); renderTable();
   }
 
-  return { render, search, openAdd, openEdit, save, remove };
+  // ── Excel Bulk Upload Implementation ───────────────────────
+  function bulkModal() {
+    return `
+      <div class="modal-overlay hidden" id="master-bulk-modal">
+        <div class="modal modal-md">
+          <div class="modal-header">
+            <h3>📥 Bulk Upload Parts via Excel</h3>
+            <button class="modal-close" onclick="document.getElementById('master-bulk-modal').classList.add('hidden')">&#x2715;</button>
+          </div>
+          <div class="modal-body">
+            <div style="margin-bottom: 20px; font-size: 13px; color: var(--text-secondary); line-height: 1.5;">
+              <p style="margin-bottom: 8px;">Upload an Excel sheet containing part specifications to add them in bulk.</p>
+              <ul style="padding-left: 20px; list-style-type: disc; margin-bottom: 12px;">
+                <li><strong>Required columns:</strong> Part No, JMREF No, Description.</li>
+                <li><strong>Optional columns:</strong> 10 Digit No, Compound Code, Sale Price, Time (Minutes), Temperature, Pressure, Sheet Thickness, Blank Length, Blank Weight.</li>
+              </ul>
+              <button class="btn btn-ghost btn-sm" onclick="MasterModule.downloadTemplate()">📥 Download Template Excel</button>
+            </div>
+            
+            <div class="form-group">
+              <label class="form-label">Select Excel File (.xlsx, .xls)</label>
+              <input type="file" id="bulk-file-input" class="form-control" accept=".xlsx, .xls" onchange="MasterModule.handleFileSelect(event)">
+            </div>
+            
+            <div id="bulk-preview-container" class="hidden" style="margin-top:20px;">
+              <h4 style="font-size:13.5px; font-weight:600; margin-bottom:10px;" id="bulk-preview-title">Preview parsed records</h4>
+              <div class="table-wrap" style="max-height: 240px; overflow-y: auto;">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Part No</th>
+                      <th>JMREF No</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody id="bulk-preview-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="document.getElementById('master-bulk-modal').classList.add('hidden')">Cancel</button>
+            <button class="btn btn-primary" id="bulk-save-btn" disabled onclick="MasterModule.saveBulk()">Upload Parts</button>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function openBulk() {
+    const input = document.getElementById('bulk-file-input');
+    if (input) input.value = '';
+    const container = document.getElementById('bulk-preview-container');
+    if (container) container.classList.add('hidden');
+    const saveBtn = document.getElementById('bulk-save-btn');
+    if (saveBtn) saveBtn.disabled = true;
+    
+    document.getElementById('master-bulk-modal').classList.remove('hidden');
+  }
+
+  function downloadTemplate() {
+    if (typeof XLSX === 'undefined') {
+      showToast('Excel library is still loading, please wait', 'warning');
+      return;
+    }
+    const headers = [
+      'Part No', 'JMREF No', 'Description', '10 Digit No', 'Compound Code',
+      'Sale Price', 'Time (Minutes)', 'Temperature', 'Pressure', 
+      'Sheet Thickness', 'Blank Length', 'Blank Weight'
+    ];
+    const rows = [
+      ['OR-101', 'JMREF-2026-101', 'O-Ring 101 Description', '1234567890', 'CC-70', '12.50', '8', '140', '100', '2.0', '150', '3.5'],
+      ['OR-102', 'JMREF-2026-102', 'O-Ring 102 Description', '0987654321', 'CC-80', '18.00', '10', '150', '110', '2.5', '180', '4.2']
+    ];
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Parts Template');
+    XLSX.writeFile(wb, 'JMPL_Parts_Upload_Template.xlsx');
+    showToast('Template Excel downloaded', 'success');
+  }
+
+  function handleFileSelect(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    if (typeof XLSX === 'undefined') {
+      showToast('Excel library not loaded. Refresh and try again.', 'error');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      try {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        const rawJson = XLSX.utils.sheet_to_json(worksheet);
+        validateAndPreview(rawJson);
+      } catch (err) {
+        console.error(err);
+        showToast('Error reading Excel: ' + err.message, 'error');
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  function validateAndPreview(rawJson) {
+    const tbody = document.getElementById('bulk-preview-tbody');
+    const container = document.getElementById('bulk-preview-container');
+    const saveBtn = document.getElementById('bulk-save-btn');
+    if (!tbody || !container || !saveBtn) return;
+
+    tbody.innerHTML = '';
+    parsedRows = [];
+
+    const existingMaster = DB.Master.all();
+    const seenPartNo = new Set();
+    const seenJmref = new Set();
+    let validCount = 0;
+
+    rawJson.forEach(row => {
+      // Normalise key names (lowercase and trim spaces)
+      const normRow = {};
+      Object.keys(row).forEach(k => {
+        normRow[k.trim().toLowerCase()] = String(row[k]).trim();
+      });
+
+      const partNo = normRow['part no'] || normRow['partno'] || '';
+      const jmrefNo = normRow['jmref no'] || normRow['jmrefno'] || normRow['jmref'] || '';
+      const description = normRow['description'] || normRow['desc'] || '';
+      const tenDigitNo = normRow['10 digit no'] || normRow['tendigit'] || '';
+      const compoundCode = normRow['compound code'] || normRow['compoundcode'] || normRow['compound'] || '';
+      
+      const salePrice = normRow['sale price'] || normRow['saleprice'] || '';
+      const timeMinutes = normRow['time (minutes)'] || normRow['time'] || '';
+      const temperature = normRow['temperature'] || normRow['temp'] || '';
+      const pressure = normRow['pressure'] || '';
+      const sheetThickness = normRow['sheet thickness'] || normRow['thickness'] || '';
+      const blankLength = normRow['blank length'] || normRow['length'] || '';
+      const blankWeight = normRow['blank weight'] || normRow['weight'] || '';
+
+      let status = 'Valid';
+      let isValid = true;
+
+      if (!partNo || !jmrefNo || !description) {
+        status = 'Missing required fields';
+        isValid = false;
+      } else if (existingMaster.some(p => p.partNo === partNo) || seenPartNo.has(partNo)) {
+        status = 'Duplicate Part No';
+        isValid = false;
+      } else if (existingMaster.some(p => p.jmrefNo === jmrefNo) || seenJmref.has(jmrefNo)) {
+        status = 'Duplicate JMREF No';
+        isValid = false;
+      }
+
+      if (isValid) {
+        seenPartNo.add(partNo);
+        seenJmref.add(jmrefNo);
+        validCount++;
+      }
+
+      const record = {
+        partNo,
+        jmrefNo,
+        description,
+        tenDigitNo,
+        compoundCode,
+        salePrice: salePrice !== '' ? parseFloat(salePrice) : null,
+        timeMinutes: timeMinutes !== '' ? parseFloat(timeMinutes) : null,
+        temperature: temperature !== '' ? parseFloat(temperature) : null,
+        pressure: pressure !== '' ? parseFloat(pressure) : null,
+        sheetThickness: sheetThickness !== '' ? parseFloat(sheetThickness) : null,
+        blankLength: blankLength !== '' ? parseFloat(blankLength) : null,
+        blankWeight: blankWeight !== '' ? parseFloat(blankWeight) : null,
+        isValid
+      };
+
+      parsedRows.push(record);
+
+      const statusBadge = isValid 
+        ? `<span class="badge badge-green">Valid</span>`
+        : `<span class="badge badge-red" title="${status}">${status}</span>`;
+
+      tbody.innerHTML += `
+        <tr>
+          <td class="font-semibold">${partNo || '<span class="text-danger">—</span>'}</td>
+          <td><span class="badge badge-teal">${jmrefNo || '—'}</span></td>
+          <td>${statusBadge}</td>
+        </tr>`;
+    });
+
+    document.getElementById('bulk-preview-title').textContent = `Parsed ${rawJson.length} records (${validCount} valid)`;
+    container.classList.remove('hidden');
+    saveBtn.disabled = validCount === 0;
+  }
+
+  function saveBulk() {
+    let uploadedCount = 0;
+    parsedRows.forEach(row => {
+      if (row.isValid) {
+        const fields = { ...row };
+        delete fields.isValid;
+        DB.Master.insert(fields);
+        uploadedCount++;
+      }
+    });
+
+    showToast(`Successfully uploaded ${uploadedCount} parts!`, 'success');
+    document.getElementById('master-bulk-modal').classList.add('hidden');
+    
+    // Clear input
+    const input = document.getElementById('bulk-file-input');
+    if (input) input.value = '';
+    
+    // Refresh stats & table
+    renderStats();
+    renderTable();
+  }
+
+  return { render, search, openAdd, openEdit, save, remove, openBulk, downloadTemplate, handleFileSelect, saveBulk };
 })();

@@ -33,6 +33,20 @@ const AIAgentModule = (() => {
           min-height: 500px;
           max-height: 800px;
         }
+        @media (max-width: 900px) {
+          .ai-layout {
+            flex-direction: column;
+            height: auto;
+            min-height: auto;
+            max-height: none;
+          }
+          .ai-chat-card {
+            height: 450px;
+          }
+          .ai-sidebar-card {
+            height: 350px;
+          }
+        }
         .ai-chat-card {
           flex: 7;
           display: flex;

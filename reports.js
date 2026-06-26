@@ -229,7 +229,7 @@ const ReportsModule = (() => {
     if (!losses.length) return emptyState();
 
     const stageRecs = DB.StageRecords.all();
-    const headers = ['#','Batch No','JMREF','Part No','Input Qty','Output Qty','Loss Qty','Date', ...extraCols];
+    const headers = ['#','Batch No','JMREF','Part No','Input Qty','Output Qty','Loss Qty','% Loss','Date', ...extraCols];
     const dataRows = losses.map((l, i) => {
       const batch = DB.Batches.find(l.batchId) || {};
       const sr = stageRecs.find(r => r.batchId === l.batchId && r.stage === stage);
@@ -238,11 +238,19 @@ const ReportsModule = (() => {
         if (col === 'Recheck #') return l.iterationNo || '-';
         return '-';
       });
-      return [i+1, batch.batchNo||'', l.jmrefNo||'', l.partNo||'', sr?.inputQty||'', sr?.outputQty||'', l.lossQty||0, (l.date||'').slice(0,10), ...extra];
+      const input = sr?.inputQty || 0;
+      const loss = l.lossQty || 0;
+      const pct = input ? ((loss / input) * 100).toFixed(1) + '%' : '0.0%';
+      return [i+1, batch.batchNo||'', l.jmrefNo||'', l.partNo||'', input, sr?.outputQty||'', loss, pct, (l.date||'').slice(0,10), ...extra];
     });
 
     const totalLoss = losses.reduce((s, l) => s + (l.lossQty||0), 0);
-    const summaryRow = ['','','','','','TOTAL LOSS', totalLoss,'', ...extraCols.map(()=>'')];
+    const totalInput = losses.reduce((s, l) => {
+      const sr = stageRecs.find(r => r.batchId === l.batchId && r.stage === stage);
+      return s + (sr?.inputQty || 0);
+    }, 0);
+    const totalPct = totalInput ? ((totalLoss / totalInput) * 100).toFixed(1) + '%' : '0.0%';
+    const summaryRow = ['','','','','','TOTAL LOSS', totalLoss, totalPct, '', ...extraCols.map(()=>'')];
     dataRows.push(summaryRow);
 
     const html = `<div class="table-wrap"><table class="data-table">
@@ -278,11 +286,13 @@ const ReportsModule = (() => {
 
     if (!rechecks.length) return emptyState();
     const users = DB.Users.all();
-    const headers = ['#','Batch No','JMREF','Sent To Stage','Qty','Loss At QF','Recheck #','Recorded By','Date'];
+    const headers = ['#','Batch No','JMREF','Sent To Stage','Qty','Loss At QF','% Loss','Recheck #','Recorded By','Date'];
     const dataRows = rechecks.map((r, i) => {
       const batch = DB.Batches.find(r.batchId) || {};
       const user = users.find(u => u.id === r.recordedBy) || {};
-      return [i+1, batch.batchNo||'', batch.jmrefNo||'', STAGE_LABELS[r.toStage]||r.toStage, r.qty||0, r.lossQty||0, r.recheckNo||1, user.name||'-', (r.date||'').slice(0,10)];
+      const totalBefore = r.qty + r.lossQty;
+      const pct = totalBefore ? ((r.lossQty / totalBefore) * 100).toFixed(1) + '%' : '0.0%';
+      return [i+1, batch.batchNo||'', batch.jmrefNo||'', STAGE_LABELS[r.toStage]||r.toStage, r.qty||0, r.lossQty||0, pct, r.recheckNo||1, user.name||'-', (r.date||'').slice(0,10)];
     });
     const html = `<div class="table-wrap"><table class="data-table">
       <thead><tr>${headers.map(th).join('')}</tr></thead>
@@ -399,85 +409,43 @@ const ReportsModule = (() => {
   ];
 
   // ── Render ────────────────────────────────────────────────
-  function render() {
+  function render(reportKey = 'inventory') {
     const session = Auth.getSession();
     const el = document.getElementById('content');
     if (!el) return;
+
+    const report = REPORTS.find(r => r.key === reportKey);
+    if (!report) return;
 
     el.innerHTML = `
       <div class="animate-in">
         <div class="flex items-center justify-between mb-6">
           <div>
-            <h2 class="font-bold" style="font-size:20px;">Reports &amp; Analytics</h2>
-            <p class="text-sm text-muted mt-1">Generate, filter and export all reports</p>
+            <h2 class="font-bold" style="font-size:20px;">${report.label}</h2>
+            <p class="text-sm text-muted mt-1">${report.desc}</p>
           </div>
         </div>
 
-        <div style="display:grid;grid-template-columns:280px 1fr;gap:24px;align-items:start;">
-
-          <!-- Report Selector -->
-          <div class="card" style="position:sticky;top:80px;">
-            <div class="card-header"><h3>📊 Select Report</h3></div>
-            <div style="padding:8px 0;">
-              ${REPORTS.map(r => `
-                <button class="nav-item report-nav-btn w-full" data-report="${r.key}" id="rpt-nav-${r.key}">
-                  <span style="font-size:15px;">${r.label.split(' ')[0]}</span>
-                  <div style="flex:1;text-align:left;">
-                    <div style="font-size:13px;font-weight:600;">${r.label.split(' ').slice(1).join(' ')}</div>
-                    <div style="font-size:11px;color:var(--text-muted);">${r.desc}</div>
-                  </div>
-                </button>`).join('')}
+        <div class="card animate-in">
+          <div class="card-header">
+            <h3>${report.label}</h3>
+            <div class="flex gap-2">
+              <button class="btn btn-secondary btn-sm no-print" id="rpt-export-csv">⬇️ CSV</button>
+              <button class="btn btn-teal btn-sm no-print" id="rpt-export-excel">📊 Excel</button>
+              <button class="btn btn-ghost btn-sm no-print" onclick="window.print()">🖨️ Print</button>
             </div>
           </div>
-
-          <!-- Report Content -->
-          <div id="report-area">
-            <div class="card" style="text-align:center;padding:60px 20px;">
-              <div style="font-size:48px;margin-bottom:16px;">📊</div>
-              <h3 style="font-size:16px;font-weight:700;margin-bottom:8px;">Select a Report</h3>
-              <p class="text-muted text-sm">Choose a report from the list on the left to get started</p>
+          <div class="card-body">
+            <!-- Filters -->
+            <div class="filter-bar" id="rpt-filters" style="flex-wrap:wrap;gap:12px;margin-bottom:24px;">
+              ${buildFilters(reportKey)}
+              <div class="form-group mb-0" style="display:flex;align-items:flex-end;">
+                <button class="btn btn-primary" id="rpt-run-btn">🔍 Generate Report</button>
+              </div>
             </div>
-          </div>
-        </div>
-      </div>`;
-
-    // Attach nav clicks
-    document.querySelectorAll('.report-nav-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        document.querySelectorAll('.report-nav-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        loadReport(btn.dataset.report);
-      });
-    });
-  }
-
-  function loadReport(reportKey) {
-    const report = REPORTS.find(r => r.key === reportKey);
-    if (!report) return;
-
-    const area = document.getElementById('report-area');
-    if (!area) return;
-
-    area.innerHTML = `
-      <div class="card animate-in">
-        <div class="card-header">
-          <h3>${report.label}</h3>
-          <div class="flex gap-2">
-            <button class="btn btn-secondary btn-sm no-print" id="rpt-export-csv">⬇️ CSV</button>
-            <button class="btn btn-teal btn-sm no-print" id="rpt-export-excel">📊 Excel</button>
-            <button class="btn btn-ghost btn-sm no-print" onclick="window.print()">🖨️ Print</button>
-          </div>
-        </div>
-        <div class="card-body">
-          <!-- Filters -->
-          <div class="filter-bar" id="rpt-filters" style="flex-wrap:wrap;gap:12px;margin-bottom:24px;">
-            ${buildFilters(reportKey)}
-            <div class="form-group mb-0" style="display:flex;align-items:flex-end;">
-              <button class="btn btn-primary" id="rpt-run-btn">🔍 Generate Report</button>
+            <div id="report-output">
+              <div class="empty-state"><div class="empty-icon">🔍</div><p>Set filters and click Generate Report</p></div>
             </div>
-          </div>
-          <div id="report-output">
-            <div class="empty-state"><div class="empty-icon">🔍</div><p>Set filters and click Generate Report</p></div>
           </div>
         </div>
       </div>`;
