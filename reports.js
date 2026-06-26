@@ -437,9 +437,10 @@ const ReportsModule = (() => {
           </div>
           <div class="card-body">
             <!-- Filters -->
-            <div class="filter-bar" id="rpt-filters" style="flex-wrap:wrap;gap:12px;margin-bottom:24px;">
+            <div class="filter-bar" id="rpt-filters" style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:24px;align-items:flex-end;">
               ${buildFilters(reportKey)}
-              <div class="form-group mb-0" style="display:flex;align-items:flex-end;">
+              <div class="form-group mb-0">
+                <label class="form-label" style="visibility:hidden;display:block;">&nbsp;</label>
                 <button class="btn btn-primary" id="rpt-run-btn">🔍 Generate Report</button>
               </div>
             </div>
