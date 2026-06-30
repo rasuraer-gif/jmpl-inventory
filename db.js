@@ -36,7 +36,9 @@ const DB = (() => {
     recheckTracker: [],
     stockUploads: [],
     sales: [],
-    productionRecords: []
+    productionRecords: [],
+    monthlyPlans: [],
+    productionSchedules: []
   };
 
   // Helper to load localStorage cache into memory on startup
@@ -116,8 +118,8 @@ const DB = (() => {
                                 (document.activeElement.tagName === 'INPUT' || 
                                  document.activeElement.tagName === 'TEXTAREA');
                 
-                // Only auto-refresh if the user is not actively typing or interacting with modals
-                if (!modalOpen && !isTyping) {
+                // Only auto-refresh if the user is not actively typing, interacting with modals, or in a blocked workflow
+                if (!modalOpen && !isTyping && !window.preventAutoRefresh) {
                   console.log(`Live update: Refreshed page due to cloud changes in "${table}"`);
                   App.navigate(App.current);
                 }
@@ -281,6 +283,20 @@ const DB = (() => {
       db.collection(table).doc(id).delete().catch(err => {
         console.error(`Firebase delete error on ${table}/${id}:`, err);
       });
+    }
+  }
+
+  function clearTable(table) {
+    cache[table] = [];
+    saveLocal(table);
+    if (db) {
+      db.collection(table).get().then(snapshot => {
+        const batch = db.batch();
+        snapshot.docs.forEach(doc => {
+          batch.delete(doc.ref);
+        });
+        return batch.commit();
+      }).catch(err => console.error(`Error clearing Firestore collection ${table}:`, err));
     }
   }
 
@@ -457,6 +473,29 @@ const DB = (() => {
     insert: (r) => insert('stockUploads', r),
   };
 
+  // ── MONTHLY PLANS ─────────────────────────────────────────
+  const MonthlyPlans = {
+    all: () => getAll('monthlyPlans'),
+    find: (id) => findById('monthlyPlans', id),
+    byMonth: (month) => getAll('monthlyPlans').filter(r => r.month === month),
+    byMonthAndJmref: (month, jmrefNo) => getAll('monthlyPlans').find(r => r.month === month && r.jmrefNo === jmrefNo) || null,
+    insert: (r) => insert('monthlyPlans', r),
+    update: (id, c) => update('monthlyPlans', id, c),
+    remove: (id) => remove('monthlyPlans', id)
+  };
+
+  // ── PRODUCTION SCHEDULES ──────────────────────────────────
+  const ProductionSchedules = {
+    all: () => getAll('productionSchedules'),
+    find: (id) => findById('productionSchedules', id),
+    byMonth: (month) => getAll('productionSchedules').filter(r => r.month === month),
+    byJmref: (jmrefNo) => getAll('productionSchedules').filter(r => r.jmrefNo === jmrefNo),
+    byMonthAndJmref: (month, jmrefNo) => getAll('productionSchedules').filter(r => r.month === month && r.jmrefNo === jmrefNo),
+    insert: (r) => insert('productionSchedules', r),
+    update: (id, c) => update('productionSchedules', id, c),
+    remove: (id) => remove('productionSchedules', id)
+  };
+
   // ── SALES ─────────────────────────────────────────────────
   const Sales = {
     all: () => getAll('sales'),
@@ -500,11 +539,11 @@ const DB = (() => {
   };
 
   return {
-    init, genId, seedDefaults,
+    init, genId, seedDefaults, clearTable,
     Users, Master, Subcontractors, Vendors, Operators, Inspectors,
     Batches, StageRecords, LossTracker, RejectionTracker,
     RecheckTracker, StockUploads, Sales, StoreInventory,
-    ProductionRecords,
+    ProductionRecords, MonthlyPlans, ProductionSchedules,
     raw: { getAll, setAll, insert, update, remove, findById, findWhere }
   };
 })();

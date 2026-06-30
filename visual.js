@@ -4,12 +4,16 @@
 const VisualModule = (() => {
   function getInputQty(batchId) {
     const recs = DB.StageRecords.all().filter(r => r.batchId === batchId && r.movedTo === 'visual');
-    return recs.length ? recs[recs.length-1].outputQty : (DB.Batches.find(batchId)||{}).initialQty||0;
+    if (!recs.length) return (DB.Batches.find(batchId)||{}).initialQty||0;
+    const lastRec = recs[recs.length - 1];
+    return lastRec.isRecheck ? lastRec.recheckQty : lastRec.outputQty;
   }
 
   let historySearch = '';
+  let pendingSearch = '';
 
   function render() {
+    pendingSearch = '';
     const el = document.getElementById('content');
     const batches = DB.Batches.byStage('visual');
     const history = DB.StageRecords.byStage('visual');
@@ -42,8 +46,13 @@ const VisualModule = (() => {
   }
 
   function pendingTab(batches) {
-    if (!batches.length) return `<div class="card card-body"><div class="empty-state"><div class="empty-icon">&#128065;&#65039;</div><p>No batches pending visual inspection</p></div></div>`;
-    const rows = batches.map(b => {
+    let filtered = batches;
+    if (pendingSearch) {
+      const q = pendingSearch.toLowerCase();
+      filtered = batches.filter(b => (b.batchNo || '').toLowerCase().includes(q));
+    }
+    if (!filtered.length && !pendingSearch) return `<div class="card card-body"><div class="empty-state"><div class="empty-icon">&#128065;&#65039;</div><p>No batches pending visual inspection</p></div></div>`;
+    const rows = filtered.map(b => {
       const inputQty = getInputQty(b.id);
       const isRecheck = !!(b.recheckCount && b.recheckCount > 0);
       return `<tr>
@@ -60,7 +69,15 @@ const VisualModule = (() => {
         </td>
       </tr>`;
     }).join('');
-    return `<div class="card"><div class="card-header"><h3>Pending Batches</h3></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Input Qty</th><th>Received</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    return `<div class="card">
+      <div class="card-header" style="flex-direction:row; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+        <h3>Pending Batches</h3>
+        <div class="search-input" style="max-width: 250px; margin: 0;">
+          <span class="search-icon">&#128269;</span>
+          <input type="text" id="vis-pending-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${pendingSearch}" oninput="VisualModule.filterPending(this.value)">
+        </div>
+      </div>
+      <div class="table-wrap"><table class="data-table"><thead><tr><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Input Qty</th><th>Received</th><th>Actions</th></tr></thead><tbody>${rows || '<tr><td colspan="6" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody></table></div></div>`;
   }
 
   function historyTab() {
@@ -280,5 +297,19 @@ const VisualModule = (() => {
     }
   });
 
-  return { render, openProcess, calcLoss, process, openReject, rejectBatch, showInspectorDropdown, filterInspectors, selectInspector, filterHistory };
+  function filterPending(val) {
+    pendingSearch = val;
+    const content = document.getElementById('vis-content');
+    if (content) {
+      const batches = DB.Batches.byStage('visual');
+      content.innerHTML = pendingTab(batches);
+      const inp = document.getElementById('vis-pending-search');
+      if (inp) {
+        inp.focus();
+        inp.setSelectionRange(inp.value.length, inp.value.length);
+      }
+    }
+  }
+
+  return { render, openProcess, calcLoss, process, openReject, rejectBatch, showInspectorDropdown, filterInspectors, selectInspector, filterHistory, filterPending };
 })();

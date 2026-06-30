@@ -3,19 +3,21 @@
 // ============================================================
 const ProductionModule = (() => {
   let activeTab = 'active';
+  let pendingSearch = '';
 
   function getInputQtyForBatch(batch) {
     return batch.initialQty || 0;
   }
 
   function render() {
+    pendingSearch = '';
     const el = document.getElementById('content');
     el.innerHTML = `
       <div class="animate-in">
         <div class="flex items-center justify-between mb-6">
           <div><h2 class="font-bold" style="font-size:20px;">Production</h2><p class="text-sm text-muted mt-1">Create and manage production batches</p></div>
         </div>
-        <div id="prod-stats" class="stats-grid" style="grid-template-columns:repeat(auto-fill,minmax(160px,1fr));margin-bottom:24px;"></div>
+        <div id="prod-stats" class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));margin-bottom:24px;"></div>
         <div class="tabs" id="prod-tabs">
           <button class="tab-btn ${activeTab==='active'?'active':''}" data-tab="active">Active Batches</button>
           <button class="tab-btn ${activeTab==='create'?'active':''}" data-tab="create">+ Create Batch</button>
@@ -24,7 +26,7 @@ const ProductionModule = (() => {
         </div>
         <div id="prod-tab-content"></div>
       </div>
-      ${moveModal()}${rejectModal()}`;
+      ${moveModal()}${rejectModal()}${printSuccessModal()}`;
 
     document.querySelectorAll('#prod-tabs .tab-btn').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -62,10 +64,14 @@ const ProductionModule = (() => {
   }
 
   function activeBatchesTab() {
-    const batches = DB.Batches.byStage('production');
+    let batches = DB.Batches.byStage('production');
+    if (pendingSearch) {
+      const q = pendingSearch.toLowerCase();
+      batches = batches.filter(b => (b.batchNo || '').toLowerCase().includes(q));
+    }
     const subs = DB.Subcontractors.all();
     const ops  = DB.Operators.all();
-    if (!batches.length) return `<div class="card"><div class="card-body"><div class="empty-state"><div class="empty-icon">&#127981;</div><p>No active batches in Production. Create a new batch to get started.</p></div></div></div>`;
+    if (!batches.length && !pendingSearch) return `<div class="card"><div class="card-body"><div class="empty-state"><div class="empty-icon">&#127981;</div><p>No active batches in Production. Create a new batch to get started.</p></div></div></div>`;
     const rows = batches.map(b => {
       const sub = subs.find(s => s.id === b.subcontractorId);
       const op  = ops.find(o => o.id === b.operatorId);
@@ -83,17 +89,24 @@ const ProductionModule = (() => {
             <div class="flex gap-2">
               <button class="btn btn-primary btn-xs" onclick="ProductionModule.openMove('${b.id}')">Move Stage</button>
               <button class="btn btn-danger btn-xs" onclick="ProductionModule.openReject('${b.id}')">Reject</button>
+              <button class="btn btn-teal btn-xs" onclick="ProductionModule.printBarcode('${b.id}')">🖨️ Print</button>
             </div>
           </td>
         </tr>`;
     }).join('');
     return `
       <div class="card">
-        <div class="card-header"><h3>Active Batches in Production</h3></div>
+        <div class="card-header" style="flex-direction:row; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+          <h3>Active Batches in Production</h3>
+          <div class="search-input" style="max-width: 250px; margin: 0;">
+            <span class="search-icon">&#128269;</span>
+            <input type="text" id="prod-pending-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${pendingSearch}" oninput="ProductionModule.filterPending(this.value)">
+          </div>
+        </div>
         <div class="table-wrap">
           <table class="data-table">
             <thead><tr><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Type</th><th>Subcontractor</th><th>Operator</th><th>Initial Qty</th><th>Created</th><th>Actions</th></tr></thead>
-            <tbody>${rows}</tbody>
+            <tbody>${rows || '<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody>
           </table>
         </div>
       </div>`;
@@ -192,8 +205,11 @@ const ProductionModule = (() => {
         <td><span class="badge badge-green">Completed</span></td>
         <td class="text-muted text-sm">${(b.createdAt||'').slice(0,10)}</td>
         <td class="text-muted text-sm">${(b.completedAt||'').slice(0,10)}</td>
+        <td>
+          <button class="btn btn-teal btn-xs" onclick="ProductionModule.printBarcode('${b.id}')">🖨️ Print</button>
+        </td>
       </tr>`).join('');
-    return `<div class="card"><div class="card-header"><h3>Completed Batches</h3></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Status</th><th>Created</th><th>Completed</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    return `<div class="card"><div class="card-header"><h3>Completed Batches</h3></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Status</th><th>Created</th><th>Completed</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
   }
 
   function rejectedTab() {
@@ -488,6 +504,19 @@ const ProductionModule = (() => {
     
     showToast('Batch ' + batch.batchNo + ' created successfully', 'success');
     renderStats();
+
+    // Show print barcode confirmation modal
+    const pModal = document.getElementById('prod-print-success-modal');
+    if (pModal) {
+      document.getElementById('print-success-batch-no').textContent = batch.batchNo;
+      const pBtn = document.getElementById('print-success-btn');
+      pBtn.onclick = () => {
+        ProductionModule.printBarcode(batch.id);
+        pModal.classList.add('hidden');
+      };
+      pModal.classList.remove('hidden');
+    }
+
     activeTab = 'active';
     document.querySelectorAll('#prod-tabs .tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === 'active'));
     renderTab('active');
@@ -502,5 +531,175 @@ const ProductionModule = (() => {
     }
   });
 
-  return { render, openMove, calcLoss, moveBatch, openReject, rejectBatch, onTypeChange, createBatch, resetForm, showPartDropdown, filterParts, selectPart, updateDynamicBatchNo };
+  function printSuccessModal() {
+    return `
+      <div class="modal-overlay hidden" id="prod-print-success-modal">
+        <div class="modal modal-sm">
+          <div class="modal-header">
+            <h3>Batch Created Successfully</h3>
+            <button class="modal-close" onclick="document.getElementById('prod-print-success-modal').classList.add('hidden')">&#x2715;</button>
+          </div>
+          <div class="modal-body" style="text-align:center; padding: 24px 16px;">
+            <div style="font-size:48px; margin-bottom: 16px;">✅</div>
+            <h4 style="font-size: 16px; font-weight:700; margin-bottom:8px; color:var(--accent-teal);" id="print-success-batch-no">JMPL-00001</h4>
+            <p class="text-sm text-muted">Batch has been successfully registered. Click below to print the 4x6 inch thermal barcode sticker.</p>
+          </div>
+          <div class="modal-footer" style="justify-content:center; gap:12px;">
+            <button class="btn btn-secondary" onclick="document.getElementById('prod-print-success-modal').classList.add('hidden')">Skip / Done</button>
+            <button class="btn btn-primary" id="print-success-btn">🖨️ Print Barcode</button>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function printBarcode(batchId) {
+    const batch = DB.Batches.find(batchId);
+    if (!batch) { showToast('Batch not found', 'error'); return; }
+
+    const printWindow = window.open('', '_blank', 'width=600,height=800');
+    if (!printWindow) {
+      showToast('Popup blocked! Please allow popups for barcode printing.', 'warning');
+      return;
+    }
+
+    const formattedDate = batch.productionDate ? formatDate(batch.productionDate) : formatDate(batch.createdAt);
+
+    printWindow.document.write(`
+      <html>
+      <head>
+        <title>Print Barcode - ${batch.batchNo}</title>
+        <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
+        <style>
+          @page {
+            size: 4in 6in;
+            margin: 0;
+          }
+          body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            box-sizing: border-box;
+            height: 100vh;
+            text-align: center;
+            background: #fff;
+            color: #000;
+          }
+          .label-container {
+            width: 3.6in;
+            height: 5.6in;
+            border: 2px dashed #000;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: space-between;
+            box-sizing: border-box;
+            padding: 20px 10px;
+          }
+          .company-title {
+            font-size: 16px;
+            font-weight: 800;
+            letter-spacing: 1px;
+            border-bottom: 2px double #000;
+            padding-bottom: 6px;
+            width: 100%;
+            margin-bottom: 10px;
+          }
+          .barcode-wrapper {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+          }
+          #barcode {
+            max-width: 100%;
+            max-height: 150px;
+          }
+          .details {
+            width: 100%;
+            border-top: 2px solid #000;
+            padding-top: 12px;
+            font-size: 14.5px;
+            text-align: left;
+          }
+          .detail-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            line-height: 1.3;
+          }
+          .label {
+            font-weight: bold;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="label-container">
+          <div class="company-title">JANANI MOULDINGS PVT. LTD.</div>
+          <div class="barcode-wrapper">
+            <svg id="barcode"></svg>
+          </div>
+          <div class="details">
+            <div class="detail-row">
+              <span class="label">JMREF:</span>
+              <span>${batch.jmrefNo}</span>
+            </div>
+            <div class="detail-row">
+              <span class="label">Part No:</span>
+              <span>${batch.partNo || '—'}</span>
+            </div>
+            <div class="detail-row">
+              <span class="label">Prod Date:</span>
+              <span>${formattedDate}</span>
+            </div>
+            <div class="detail-row">
+              <span class="label">Batch Code:</span>
+              <span>${batch.batchNo}</span>
+            </div>
+          </div>
+        </div>
+        <script>
+          try {
+            JsBarcode("#barcode", "${batch.batchNo}", {
+              format: "CODE128",
+              width: 2,
+              height: 80,
+              displayValue: true,
+              fontSize: 14,
+              textMargin: 4
+            });
+          } catch (e) {
+            console.error("Barcode generation error", e);
+          }
+          window.onload = function() {
+            setTimeout(function() {
+              window.print();
+              window.close();
+            }, 500);
+          };
+        </script>
+      </body>
+      </html>
+    `);
+    printWindow.document.close();
+  }
+
+  function filterPending(val) {
+    pendingSearch = val;
+    const content = document.getElementById('prod-tab-content');
+    if (content && activeTab === 'active') {
+      content.innerHTML = activeBatchesTab();
+      const inp = document.getElementById('prod-pending-search');
+      if (inp) {
+        inp.focus();
+        inp.setSelectionRange(inp.value.length, inp.value.length);
+      }
+    }
+  }
+
+  return { render, openMove, calcLoss, moveBatch, openReject, rejectBatch, onTypeChange, createBatch, resetForm, showPartDropdown, filterParts, selectPart, updateDynamicBatchNo, printBarcode, filterPending };
 })();

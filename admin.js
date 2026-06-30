@@ -44,6 +44,7 @@ const AdminModule = (() => {
           <button class="tab-btn ${activeTab==='vendor'?'active':''}" data-tab="vendor">🤝 Vendors</button>
           <button class="tab-btn ${activeTab==='op'?'active':''}" data-tab="op">👷 Operators</button>
           <button class="tab-btn ${activeTab==='insp'?'active':''}" data-tab="insp">🔍 Inspectors</button>
+          <button class="tab-btn ${activeTab==='system'?'active':''}" data-tab="system">⚙️ Maintenance</button>
         </div>
         <div id="admin-tab-content"></div>
       </div>
@@ -68,6 +69,7 @@ const AdminModule = (() => {
     if (tab === 'vendor') el.innerHTML = vendorTab();
     if (tab === 'op')     el.innerHTML = opTab();
     if (tab === 'insp')   el.innerHTML = inspectorTab();
+    if (tab === 'system') el.innerHTML = systemTab();
   }
 
   // ── USERS TAB ───────────────────────────────────────────
@@ -591,5 +593,58 @@ const AdminModule = (() => {
     renderTab('insp');
   }
 
-  return { render, openAddUser, editUser, saveUser, toggleUser, onRoleChange, openAddSub, editSub, saveSub, toggleSub, openAddVendor, editVendor, saveVendor, toggleVendor, openAddOp, editOp, saveOp, toggleOp, openAddInspector, editInspector, saveInspector, toggleInspector };
+  function systemTab() {
+    return `
+      <div class="card animate-in">
+        <div class="card-header">
+          <h3>⚙️ System Maintenance</h3>
+        </div>
+        <div class="card-body">
+          <div class="alert alert-danger" style="margin-bottom: 24px; padding: 16px; background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 8px;">
+            <h4 class="font-bold text-danger" style="margin-bottom: 8px; font-size:15px;">⚠️ Danger Zone</h4>
+            <p class="text-sm text-muted">The actions listed here are permanent database operations. They cannot be undone.</p>
+          </div>
+
+          <div style="display:flex; justify-content:space-between; align-items:center; padding: 20px; border: 1px solid var(--border-color); border-radius: 8px; background:var(--bg-card); flex-wrap:wrap; gap:16px;">
+            <div>
+              <h4 class="font-bold" style="font-size:15px; margin-bottom:4px;">Clear Production &amp; Sales Data</h4>
+              <p class="text-xs text-muted" style="max-width: 480px;">Deletes all batches, department movements, inspection records, sales records, recheck history, and production schedules. <strong>All master registers (Users, Inventory Master Parts, Subcontractors, Vendors, Operators, and Inspectors) will be preserved.</strong></p>
+            </div>
+            <button class="btn btn-danger" onclick="AdminModule.clearTransactionData()">Clear Transactional Data</button>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function clearTransactionData() {
+    const text = 'Are you sure you want to clear all transactional data (batches, movements, schedules, sales)? This action is permanent and cannot be undone!';
+    if (!confirm(text)) return;
+
+    const code = prompt('Please type "CONFIRM CLEAR" (case-sensitive) to proceed:');
+    if (code !== 'CONFIRM CLEAR') {
+      showToast('Action cancelled: Confirmation code was incorrect.', 'warning');
+      return;
+    }
+
+    try {
+      DB.clearTable('batches');
+      DB.clearTable('stageRecords');
+      DB.clearTable('lossTracker');
+      DB.clearTable('rejectionTracker');
+      DB.clearTable('recheckTracker');
+      DB.clearTable('stockUploads');
+      DB.clearTable('sales');
+      DB.clearTable('productionRecords');
+      DB.clearTable('monthlyPlans');
+      DB.clearTable('productionSchedules');
+
+      showToast('All production, schedule, and sales data cleared successfully!', 'success');
+      App.navigate('dashboard');
+    } catch (e) {
+      console.error(e);
+      showToast('Error resetting database: ' + e.message, 'error');
+    }
+  }
+
+  return { render, openAddUser, editUser, saveUser, toggleUser, onRoleChange, openAddSub, editSub, saveSub, toggleSub, openAddVendor, editVendor, saveVendor, toggleVendor, openAddOp, editOp, saveOp, toggleOp, openAddInspector, editInspector, saveInspector, toggleInspector, clearTransactionData };
 })();

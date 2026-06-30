@@ -34,6 +34,7 @@ const MasterModule = (() => {
                   <th>JMREF No</th>
                   <th>Sale Price</th>
                   <th>Blank Wt (g)</th>
+                  <th>Target Inv</th>
                   <th>Description</th>
                   <th>Created Date</th>
                   <th>Actions</th>
@@ -119,6 +120,14 @@ const MasterModule = (() => {
                 <input type="text" id="master-desc" class="form-control" placeholder="Product description">
               </div>
             </div>
+
+            <div class="form-row">
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Average Target Inventory (Qty)</label>
+                <input type="number" id="master-avgtarget" class="form-control" placeholder="e.g. 5000" min="0">
+              </div>
+              <div class="form-group" style="flex:1;"></div>
+            </div>
           </div>
           <div class="modal-footer">
             <button class="btn btn-secondary" onclick="document.getElementById('master-modal').classList.add('hidden')">Cancel</button>
@@ -156,7 +165,7 @@ const MasterModule = (() => {
       );
     }
     if (!parts.length) {
-      tbody.innerHTML = '<tr><td colspan="8"><div class="empty-state"><div class="empty-icon">&#128203;</div><p>No parts found. Add your first part.</p></div></td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9"><div class="empty-state"><div class="empty-icon">&#128203;</div><p>No parts found. Add your first part.</p></div></td></tr>';
       return;
     }
     tbody.innerHTML = parts.map((p, i) => `
@@ -166,6 +175,7 @@ const MasterModule = (() => {
         <td><span class="badge badge-teal">${p.jmrefNo}</span></td>
         <td class="font-semibold">${p.salePrice != null ? p.salePrice : '—'}</td>
         <td>${p.blankWeight != null ? p.blankWeight : '—'}</td>
+        <td class="font-semibold text-success">${p.averageTargetInventory != null ? formatNum(p.averageTargetInventory) : '—'}</td>
         <td>${p.description}</td>
         <td class="text-muted text-sm">${(p.createdAt||'').slice(0,10)}</td>
         <td>
@@ -194,6 +204,7 @@ const MasterModule = (() => {
     document.getElementById('master-thickness').value = '';
     document.getElementById('master-length').value = '';
     document.getElementById('master-weight').value = '';
+    document.getElementById('master-avgtarget').value = '';
     document.getElementById('master-modal').classList.remove('hidden');
   }
 
@@ -214,6 +225,7 @@ const MasterModule = (() => {
     document.getElementById('master-thickness').value = p.sheetThickness != null ? p.sheetThickness : '';
     document.getElementById('master-length').value = p.blankLength != null ? p.blankLength : '';
     document.getElementById('master-weight').value = p.blankWeight != null ? p.blankWeight : '';
+    document.getElementById('master-avgtarget').value = p.averageTargetInventory != null ? p.averageTargetInventory : '';
     document.getElementById('master-modal').classList.remove('hidden');
   }
 
@@ -232,6 +244,7 @@ const MasterModule = (() => {
     const sheetThickness = document.getElementById('master-thickness').value !== '' ? parseFloat(document.getElementById('master-thickness').value) : null;
     const blankLength = document.getElementById('master-length').value !== '' ? parseFloat(document.getElementById('master-length').value) : null;
     const blankWeight = document.getElementById('master-weight').value !== '' ? parseFloat(document.getElementById('master-weight').value) : null;
+    const averageTargetInventory = document.getElementById('master-avgtarget').value !== '' ? parseInt(document.getElementById('master-avgtarget').value, 10) : null;
 
     if (!partNo || !jmrefNo || !description) { showToast('Part No, JMREF No, and Description are required', 'error'); return; }
     const all = DB.Master.all();
@@ -250,7 +263,8 @@ const MasterModule = (() => {
       pressure,
       sheetThickness,
       blankLength,
-      blankWeight
+      blankWeight,
+      averageTargetInventory
     };
 
     if (id) { 
@@ -287,7 +301,7 @@ const MasterModule = (() => {
               <p style="margin-bottom: 8px;">Upload an Excel sheet containing part specifications to add them in bulk.</p>
               <ul style="padding-left: 20px; list-style-type: disc; margin-bottom: 12px;">
                 <li><strong>Required columns:</strong> Part No, JMREF No, Description.</li>
-                <li><strong>Optional columns:</strong> 10 Digit No, Compound Code, Sale Price, Time (Minutes), Temperature, Pressure, Sheet Thickness, Blank Length, Blank Weight.</li>
+                <li><strong>Optional columns:</strong> 10 Digit No, Compound Code, Sale Price, Time (Minutes), Temperature, Pressure, Sheet Thickness, Blank Length, Blank Weight, Average Target Inventory.</li>
               </ul>
               <button class="btn btn-ghost btn-sm" onclick="MasterModule.downloadTemplate()">📥 Download Template Excel</button>
             </div>
@@ -340,11 +354,11 @@ const MasterModule = (() => {
     const headers = [
       'Part No', 'JMREF No', 'Description', '10 Digit No', 'Compound Code',
       'Sale Price', 'Time (Minutes)', 'Temperature', 'Pressure', 
-      'Sheet Thickness', 'Blank Length', 'Blank Weight'
+      'Sheet Thickness', 'Blank Length', 'Blank Weight', 'Average Target Inventory'
     ];
     const rows = [
-      ['OR-101', 'JMREF-2026-101', 'O-Ring 101 Description', '1234567890', 'CC-70', '12.50', '8', '140', '100', '2.0', '150', '3.5'],
-      ['OR-102', 'JMREF-2026-102', 'O-Ring 102 Description', '0987654321', 'CC-80', '18.00', '10', '150', '110', '2.5', '180', '4.2']
+      ['OR-101', 'JMREF-2026-101', 'O-Ring 101 Description', '1234567890', 'CC-70', '12.50', '8', '140', '100', '2.0', '150', '3.5', '5000'],
+      ['OR-102', 'JMREF-2026-102', 'O-Ring 102 Description', '0987654321', 'CC-80', '18.00', '10', '150', '110', '2.5', '180', '4.2', '8000']
     ];
     const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
     const wb = XLSX.utils.book_new();
@@ -413,6 +427,7 @@ const MasterModule = (() => {
       const sheetThickness = normRow['sheet thickness'] || normRow['thickness'] || '';
       const blankLength = normRow['blank length'] || normRow['length'] || '';
       const blankWeight = normRow['blank weight'] || normRow['weight'] || '';
+      const averageTargetInventory = normRow['average target inventory'] || normRow['avgtarget'] || normRow['average target inventory (qty)'] || normRow['target inventory'] || normRow['target'] || '';
 
       let status = 'Valid';
       let isValid = true;
@@ -447,6 +462,7 @@ const MasterModule = (() => {
         sheetThickness: sheetThickness !== '' ? parseFloat(sheetThickness) : null,
         blankLength: blankLength !== '' ? parseFloat(blankLength) : null,
         blankWeight: blankWeight !== '' ? parseFloat(blankWeight) : null,
+        averageTargetInventory: averageTargetInventory !== '' ? parseInt(averageTargetInventory, 10) : null,
         isValid
       };
 

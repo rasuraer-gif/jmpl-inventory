@@ -8,7 +8,7 @@ const ReportsModule = (() => {
 
   const MODULES = [
     'inventory','sales','production','cryogenic','deflashing',
-    'trimming','visual','gauge','rejected','recheck'
+    'trimming','visual','gauge','rejected','recheck','slob','aging'
   ];
 
   const STAGE_LABELS = {
@@ -301,6 +301,232 @@ const ReportsModule = (() => {
     return { html, headers, dataRows };
   }
 
+  // ── Render Report 11: SLOB Report ────────────────────────
+  function renderSlob(filters) {
+    const master = DB.Master.all();
+    const sales = DB.Sales.all();
+    const today = new Date();
+    
+    // Filter parts having available store stock > 0
+    const stockParts = master.map(p => {
+      const stock = DB.StoreInventory.availableByJmref(p.jmrefNo);
+      return { part: p, stock };
+    }).filter(item => item.stock > 0);
+
+    if (!stockParts.length) return emptyState('No stock available in store for SLOB calculation.');
+
+    const headers = ['#', 'JMREF No', 'Part No', 'Store Stock', 'Sale Price', 'Stock Value', 'Last Sale Date', 'Days Idle', 'SLOB Status'];
+    const dataRows = stockParts.map((item, i) => {
+      const p = item.part;
+      const stock = item.stock;
+      const partSales = sales.filter(s => s.jmrefNo === p.jmrefNo)
+                            .sort((a, b) => b.saleDate.localeCompare(a.saleDate));
+      
+      let lastSaleDateStr = '—';
+      let daysIdle = 0;
+      let referenceDate = p.createdAt ? new Date(p.createdAt) : today;
+
+      if (partSales.length > 0) {
+        lastSaleDateStr = partSales[0].saleDate;
+        referenceDate = new Date(lastSaleDateStr);
+      }
+
+      const diffTime = Math.abs(today - referenceDate);
+      daysIdle = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+      let status = 'Active';
+      if (daysIdle > 180) {
+        status = 'Obsolete';
+      } else if (daysIdle > 30) {
+        status = 'Slow-Moving';
+      }
+
+      const val = stock * (p.salePrice || 0);
+
+      return [
+        i + 1,
+        p.jmrefNo,
+        p.partNo,
+        stock,
+        p.salePrice || 0,
+        val,
+        lastSaleDateStr,
+        daysIdle,
+        status
+      ];
+    });
+
+    const totalVal = dataRows.reduce((sum, r) => sum + r[5], 0);
+    const totalQty = dataRows.reduce((sum, r) => sum + r[3], 0);
+
+    const htmlRows = dataRows.map(r => {
+      const status = r[8];
+      const badgeCls = status === 'Active' ? 'badge-green' : status === 'Slow-Moving' ? 'badge-amber' : 'badge-red';
+      return `
+        <tr>
+          <td>${r[0]}</td>
+          <td><span class="badge badge-teal">${r[1]}</span></td>
+          <td class="font-semibold text-blue">${r[2]}</td>
+          <td class="font-bold">${formatNum(r[3])}</td>
+          <td>${formatNum(r[4])}</td>
+          <td class="font-bold">${formatNum(r[5])}</td>
+          <td>${r[6]}</td>
+          <td>${formatNum(r[7])} days</td>
+          <td><span class="badge ${badgeCls}">${status}</span></td>
+        </tr>`;
+    }).join('');
+
+    const html = `
+      <div style="display:flex; gap:16px; margin-bottom: 20px; flex-wrap:wrap;">
+        <div class="stat-card green" style="flex:1; min-width: 140px;"><div class="stat-label">Total Store Stock</div><div class="stat-value green">${formatNum(totalQty)}</div></div>
+        <div class="stat-card blue" style="flex:1; min-width: 140px;"><div class="stat-label">Stock Value (Sale Price)</div><div class="stat-value blue">${formatNum(totalVal)}</div></div>
+        <div class="stat-card red" style="flex:1; min-width: 140px;">
+          <div class="stat-label">Obsolete Stock Value</div>
+          <div class="stat-value red">
+            ${formatNum(dataRows.filter(r => r[8] === 'Obsolete').reduce((s, r) => s + r[5], 0))}
+          </div>
+        </div>
+        <div class="stat-card amber" style="flex:1; min-width: 140px;">
+          <div class="stat-label">Slow-Moving Stock Value</div>
+          <div class="stat-value amber">
+            ${formatNum(dataRows.filter(r => r[8] === 'Slow-Moving').reduce((s, r) => s + r[5], 0))}
+          </div>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>JMREF No</th>
+              <th>Part No</th>
+              <th>Store Stock</th>
+              <th>Sale Price (INR)</th>
+              <th>Stock Value</th>
+              <th>Last Sale Date</th>
+              <th>Days Idle</th>
+              <th>SLOB Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${htmlRows}
+          </tbody>
+        </table>
+      </div>`;
+
+    return { html, headers, dataRows };
+  }
+
+  // ── Render Report 12: Aging WIP Report (> 1 Week) ─────────
+  function renderAging(filters) {
+    const batches = DB.Batches.all().filter(b => b.status === 'active');
+    const stageRecs = DB.StageRecords.all();
+    const master = DB.Master.all();
+    const today = new Date();
+
+    const agingBatches = [];
+
+    batches.forEach(b => {
+      let entryDateStr = '';
+      
+      const recs = stageRecs.filter(r => r.batchId === b.id && r.movedTo === b.currentStage)
+                            .sort((a, b) => (a.createdAt || a.date).localeCompare(b.createdAt || b.date));
+
+      if (recs.length > 0) {
+        entryDateStr = recs[recs.length - 1].date || recs[recs.length - 1].createdAt || '';
+      } else {
+        entryDateStr = b.productionDate || b.createdAt || '';
+      }
+
+      if (!entryDateStr) return;
+
+      const entryDate = new Date(entryDateStr.slice(0, 10));
+      const diffTime = Math.abs(today - entryDate);
+      const days = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+      if (days > 7) {
+        let qty = b.initialQty || 0;
+        if (b.currentStage !== 'production') {
+          const incoming = stageRecs.filter(r => r.batchId === b.id && r.movedTo === b.currentStage);
+          if (incoming.length > 0) {
+            const lastRec = incoming[incoming.length - 1];
+            qty = lastRec.isRecheck ? lastRec.recheckQty : lastRec.outputQty;
+          }
+        }
+
+        agingBatches.push({
+          batch: b,
+          stage: b.currentStage,
+          entryDate: entryDateStr.slice(0, 10),
+          days,
+          qty
+        });
+      }
+    });
+
+    if (!agingBatches.length) return emptyState('No active batches pending in their stage for more than a week.');
+
+    agingBatches.sort((a, b) => b.days - a.days);
+
+    const headers = ['#', 'Stage', 'Batch No', 'JMREF No', 'Part No', 'Current Qty', 'Stage Entry Date', 'Days Aging'];
+    
+    const dataRows = agingBatches.map((item, i) => {
+      const p = master.find(m => m.jmrefNo === item.batch.jmrefNo) || {};
+      return [
+        i + 1,
+        STAGE_LABELS[item.stage] || item.stage,
+        item.batch.batchNo,
+        item.batch.jmrefNo,
+        p.partNo || item.batch.partNo || '—',
+        item.qty,
+        item.entryDate,
+        `${item.days} days`
+      ];
+    });
+
+    const htmlRows = agingBatches.map((item, i) => {
+      const p = master.find(m => m.jmrefNo === item.batch.jmrefNo) || {};
+      return `
+        <tr>
+          <td>${i + 1}</td>
+          <td><span class="badge badge-blue">${STAGE_LABELS[item.stage] || item.stage}</span></td>
+          <td class="font-semibold text-blue">${item.batch.batchNo}</td>
+          <td><span class="badge badge-teal">${item.batch.jmrefNo}</span></td>
+          <td class="font-semibold">${p.partNo || item.batch.partNo || '—'}</td>
+          <td class="font-bold">${formatNum(item.qty)}</td>
+          <td>${formatDate(item.entryDate)}</td>
+          <td class="font-bold text-danger">${item.days} days</td>
+        </tr>`;
+    }).join('');
+
+    const html = `
+      <div style="display:flex; gap:16px; margin-bottom: 20px; flex-wrap:wrap;">
+        <div class="stat-card red" style="flex:1; min-width: 140px;"><div class="stat-label">Aging Batches (>7 Days)</div><div class="stat-value red">${agingBatches.length}</div></div>
+        <div class="stat-card amber" style="flex:1; min-width: 140px;"><div class="stat-label">Total Aging Quantity</div><div class="stat-value amber">${formatNum(agingBatches.reduce((s,i)=>s+i.qty,0))}</div></div>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Current Stage</th>
+              <th>Batch No</th>
+              <th>JMREF No</th>
+              <th>Part No</th>
+              <th>Current Qty</th>
+              <th>Stage Entry Date</th>
+              <th>Days Aging</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${htmlRows}
+          </tbody>
+        </table>
+      </div>`;
+
+    return { html, headers, dataRows };
+  }
+
   // ── Build Filter UI ────────────────────────────────────────
   function buildFilters(report) {
     const masterList = DB.Master.all();
@@ -377,6 +603,8 @@ const ReportsModule = (() => {
       case 'gauge':      result = renderStageLoss('gauge', filters); break;
       case 'rejected':   result = renderRejected(); break;
       case 'recheck':    result = renderRecheck(filters); break;
+      case 'slob':       result = renderSlob(filters); break;
+      case 'aging':      result = renderAging(filters); break;
       default: result = emptyState('Unknown report');
     }
 
@@ -406,6 +634,8 @@ const ReportsModule = (() => {
     { key:'gauge',      label:'📏 Gauge Inspection Report',    desc:'Loss during gauge inspection' },
     { key:'rejected',   label:'🚫 Rejected Batch Report',      desc:'All batches rejected due to quality issues' },
     { key:'recheck',    label:'🔄 Quality Final Recheck',      desc:'Date-wise and operator-wise recheck tracking' },
+    { key:'slob',       label:'📉 SLOB Report',                desc:'Slow-moving and Obsolete inventory aging analysis' },
+    { key:'aging',      label:'⏳ Aging WIP Report (> 1 Week)', desc:'Active batches sitting in the same stage for more than 7 days' },
   ];
 
   // ── Render ────────────────────────────────────────────────

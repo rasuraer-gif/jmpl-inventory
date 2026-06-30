@@ -265,6 +265,9 @@ const AIAgentModule = (() => {
                   <p>Welcome back! I am your <strong>JMPL AI Assistant</strong>. 🔩</p>
                   <p>I have direct, real-time access to the JMPL database. You can ask me questions about batches, stages, part stock, monthly sales, or manufacturing losses.</p>
                   <p><em>Tip: You can use your voice by clicking the microphone button! 🎤</em></p>
+                  <p style="font-size: 11.5px; color: var(--text-muted); background: rgba(255,255,255,0.03); padding: 8px 12px; border-radius: 6px; border: 1px dashed var(--border); margin-top: 10px; line-height: 1.4;">
+                    🔑 <strong>Setup Required:</strong> If you get an authentication error, please get a free API key at <a href="https://aistudio.google.com/" target="_blank" style="color:var(--primary);text-decoration:underline;">Google AI Studio</a> and save it in the <strong>Gemini API Key</strong> input under settings on the right.
+                  </p>
                 </div>
               </div>
             </div>

@@ -62,6 +62,9 @@ const NAV = [
   { id:'store',      label:'Store & Sales',       icon:'🏪', module:'store',     section:'dept', perm:'store' },
   // Tools
   { id:'stock',      label:'Stock Upload',        icon:'📤', module:'stock',     section:'tools', perm:'stock' },
+  { id:'monthly-plan', label:'Monthly Plan',      icon:'📅', module:'monthly-plan',section:'tools', perm:'production' },
+  { id:'prod-sched',  label:'Production Schedule', icon:'📝', module:'prod-sched',  section:'tools', perm:'production' },
+  { id:'replenishment',label:'Replenishment Planner',icon:'🎯', module:'replenishment',section:'tools', perm:'production' },
   { id:'reports',    label:'Reports',             icon:'📊', module:'reports',   section:'tools' },
   // Sub-reports
   { id:'rpt-inventory', label:'Inventory Report',  icon:'📦', module:'report_inventory', section:'tools', parent:'reports', perm:'report_inventory' },
@@ -74,6 +77,8 @@ const NAV = [
   { id:'rpt-gauge',     label:'Gauge Inspection',  icon:'📏', module:'report_gauge',     section:'tools', parent:'reports', perm:'report_gauge' },
   { id:'rpt-rejected',  label:'Rejected Batches',  icon:'🚫', module:'report_rejected',  section:'tools', parent:'reports', perm:'report_rejected' },
   { id:'rpt-recheck',   label:'QF Recheck Report', icon:'🔄', module:'report_recheck',   section:'tools', parent:'reports', perm:'report_recheck' },
+  { id:'rpt-slob',      label:'SLOB Report',       icon:'📉', module:'report_slob',      section:'tools', parent:'reports', perm:'report_inventory' },
+  { id:'rpt-aging',     label:'Aging WIP Report',  icon:'⏳', module:'report_aging',     section:'tools', parent:'reports', perm:'report_inventory' },
 
   { id:'ai-agent',   label:'AI Assistant',        icon:'🤖', module:'ai-agent',  section:'tools' },
   // Admin
@@ -99,6 +104,9 @@ const App = (() => {
     quality:    () => QualityModule?.render(),
     store:      () => StoreModule?.render(),
     stock:      () => StockModule?.render(),
+    'monthly-plan': () => MonthlyPlanModule?.render(),
+    'prod-sched':   () => ProductionScheduleModule?.render(),
+    replenishment:  () => ReplenishmentModule?.render(),
     reports:    () => ReportsModule?.render('inventory'),
     admin:      () => AdminModule?.render(),
     'ai-agent': () => AIAgentModule?.render(),
@@ -112,6 +120,8 @@ const App = (() => {
     report_gauge:      () => ReportsModule?.render('gauge'),
     report_rejected:   () => ReportsModule?.render('rejected'),
     report_recheck:    () => ReportsModule?.render('recheck'),
+    report_slob:       () => ReportsModule?.render('slob'),
+    report_aging:      () => ReportsModule?.render('aging'),
   };
 
   const PAGE_TITLES = {
@@ -120,6 +130,9 @@ const App = (() => {
     visual:'Visual Inspection', gauge:'Gauge Inspection', quality:'Quality Final',
     store:'Store & Sales', stock:'Stock Upload', reports:'Reports', admin:'Admin Panel',
     'ai-agent':'AI Assistant',
+    'monthly-plan':'Monthly Plan',
+    'prod-sched':'Production Schedule',
+    replenishment:'Replenishment Planner',
     report_inventory:'Inventory Report',
     report_sales:'Sales Report',
     report_production:'Production Report',
@@ -130,6 +143,8 @@ const App = (() => {
     report_gauge:'Gauge Inspection Report',
     report_rejected:'Rejected Batch Report',
     report_recheck:'Quality Final Recheck',
+    report_slob:'SLOB Report',
+    report_aging:'Aging WIP Report',
   };
 
   function navigate(moduleId) {
