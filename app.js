@@ -407,10 +407,82 @@ function renderDashboard() {
   // Monthly stats
   const thisMonth = new Date().toISOString().slice(0,7);
   const salesThisMonth = sales.filter(s => (s.saleDate||'').startsWith(thisMonth)).reduce((s,r)=>s+(r.qty||0),0);
-  const batchesThisMonth = batches.filter(b => (b.createdAt||'').startsWith(thisMonth)).length;
+
+  // Production plan & schedule metrics
+  const monthlyPlans = DB.MonthlyPlans.all().filter(p => p.month === thisMonth);
+  const planQtyThisMonth = monthlyPlans.reduce((s, p) => s + (p.qty || 0), 0);
+  const scheduledQtyThisMonth = DB.ProductionSchedules.all().filter(s => s.month === thisMonth).reduce((s, sch) => s + (sch.qty || 0), 0);
+  const producedQtyThisMonth = batches.filter(b => {
+    const bd = (b.productionDate || b.createdAt || '').slice(0, 7);
+    return bd === thisMonth;
+  }).reduce((s, b) => s + (b.initialQty || 0), 0);
+
+  // Active WIP rechecks
+  const activeRechecks = rechecks.filter(r => {
+    const b = DB.Batches.find(r.batchId);
+    return b && b.status === 'active';
+  }).length;
+
+  // Critical replenishments (stock < 30% of target level)
+  let criticalCount = 0;
+  const STAGES = ['production', 'cryogenic', 'deflashing', 'trimming', 'visual', 'gauge', 'quality'];
+  
+  function getStageLossRate(partId, stage) {
+    const stageRecords = DB.StageRecords.all().filter(r => {
+      const b = DB.Batches.find(r.batchId);
+      return b && b.partId === partId && r.stage === stage;
+    });
+    if (stageRecords.length === 0) {
+      const generalRecords = DB.StageRecords.all().filter(r => r.stage === stage);
+      if (generalRecords.length === 0) return 0.05;
+      const totalIn = generalRecords.reduce((s, r) => s + (r.inputQty || 0), 0);
+      const totalLoss = generalRecords.reduce((s, r) => s + (r.lossQty || 0), 0);
+      return totalIn > 0 ? (totalLoss / totalIn) : 0.05;
+    }
+    const totalIn = stageRecords.reduce((s, r) => s + (r.inputQty || 0), 0);
+    const totalLoss = stageRecords.reduce((s, r) => s + (r.lossQty || 0), 0);
+    return totalIn > 0 ? (totalLoss / totalIn) : 0.0;
+  }
+
+  function getWIPQty(partId, stage) {
+    const activeBatches = DB.Batches.all().filter(b => b.partId === partId && b.currentStage === stage && b.status === 'active');
+    const stageRecords = DB.StageRecords.all();
+    return activeBatches.reduce((sum, b) => {
+      const incoming = stageRecords.filter(r => r.batchId === b.id && r.movedTo === stage);
+      if (incoming.length) {
+        return sum + (incoming[incoming.length - 1].outputQty || 0);
+      }
+      return sum + (b.initialQty || 0);
+    }, 0);
+  }
+
+  master.forEach(p => {
+    const target = p.averageTargetInventory || 0;
+    if (target <= 0) return;
+    const storeStock = DB.StoreInventory.availableByJmref(p.jmrefNo);
+    
+    let wipYield = 0;
+    const lossRates = STAGES.map(stage => getStageLossRate(p.id, stage));
+    const wipCounts = STAGES.map(stage => getWIPQty(p.id, stage));
+
+    for (let i = 0; i < STAGES.length; i++) {
+      const wip = wipCounts[i];
+      if (wip <= 0) continue;
+
+      let survivalRate = 1.0;
+      for (let j = i; j < STAGES.length; j++) {
+        survivalRate *= (1.0 - lossRates[j]);
+      }
+      wipYield += Math.round(wip * survivalRate);
+    }
+
+    const netAvailable = storeStock + wipYield;
+    if (netAvailable / target <= 0.3) {
+      criticalCount++;
+    }
+  });
 
   // Stage pipeline
-  const STAGES = ['production','cryogenic','deflashing','trimming','visual','gauge','quality','store'];
   const STAGE_ICONS = { production:'🏭', cryogenic:'❄️', deflashing:'🔧', trimming:'✂️', visual:'👁️', gauge:'📏', quality:'⭐', store:'🏪' };
   const STAGE_NAMES = { production:'Production', cryogenic:'Cryogenic', deflashing:'DE Flashing', trimming:'Trimming', visual:'Visual', gauge:'Gauge', quality:'QC Final', store:'Store' };
 
@@ -436,14 +508,86 @@ function renderDashboard() {
         <p class="text-sm text-muted mt-1">Here's your JMPL inventory overview for today</p>
       </div>
 
-      <!-- Top Stats -->
-      <div class="stats-grid" style="grid-template-columns:repeat(auto-fill,minmax(180px,1fr));margin-bottom:28px;">
-        <div class="stat-card blue"><div class="stat-label">Active Batches</div><div class="stat-value blue">${formatNum(active)}</div><div class="stat-sub">in production pipeline</div></div>
-        <div class="stat-card teal"><div class="stat-label">Parts in Master</div><div class="stat-value teal">${formatNum(master.length)}</div><div class="stat-sub">registered products</div></div>
-        <div class="stat-card green"><div class="stat-label">Store Stock</div><div class="stat-value green">${formatNum(totalStock)}</div><div class="stat-sub">units available</div></div>
-        <div class="stat-card amber"><div class="stat-label">Sales This Month</div><div class="stat-value amber">${formatNum(salesThisMonth)}</div><div class="stat-sub">units sold</div></div>
-        <div class="stat-card red"><div class="stat-label">Total Loss</div><div class="stat-value red">${formatNum(totalLoss)}</div><div class="stat-sub">cumulative loss across stages</div></div>
-        <div class="stat-card purple"><div class="stat-label">Rejected Batches</div><div class="stat-value purple">${formatNum(rejectedCount)}</div><div class="stat-sub">total rejected</div></div>
+      <!-- Top Stats Row 1: Production & Execution -->
+      <h3 style="font-size:14px;font-weight:700;margin-bottom:12px;text-transform:uppercase;letter-spacing:0.5px;color:var(--accent-blue);">🏭 Production &amp; Execution</h3>
+      <div class="dashboard-stats-grid-6">
+        <div class="stat-card blue">
+          <div style="font-size:22px;margin-bottom:8px;">🔄</div>
+          <div class="stat-label">Active Batches</div>
+          <div class="stat-value blue" style="font-size:22px;">${formatNum(active)}</div>
+          <div class="stat-sub">batches in pipeline</div>
+        </div>
+        <div class="stat-card purple">
+          <div style="font-size:22px;margin-bottom:8px;">🎯</div>
+          <div class="stat-label">Planned Target</div>
+          <div class="stat-value purple" style="font-size:22px;">${formatNum(planQtyThisMonth)}</div>
+          <div class="stat-sub">monthly plan target</div>
+        </div>
+        <div class="stat-card teal">
+          <div style="font-size:22px;margin-bottom:8px;">🗓️</div>
+          <div class="stat-label">Production Schedule</div>
+          <div class="stat-value teal" style="font-size:22px;">${formatNum(scheduledQtyThisMonth)}</div>
+          <div class="stat-sub">scheduled target</div>
+        </div>
+        <div class="stat-card green">
+          <div style="font-size:22px;margin-bottom:8px;">🏗️</div>
+          <div class="stat-label">Actual Produced</div>
+          <div class="stat-value green" style="font-size:22px;">${formatNum(producedQtyThisMonth)}</div>
+          <div class="stat-sub">launched this month</div>
+        </div>
+        <div class="stat-card amber">
+          <div style="font-size:22px;margin-bottom:8px;">🔁</div>
+          <div class="stat-label">Rechecks Active</div>
+          <div class="stat-value amber" style="font-size:22px;">${formatNum(activeRechecks)}</div>
+          <div class="stat-sub">batches undergoing rework</div>
+        </div>
+        <div class="stat-card purple">
+          <div style="font-size:22px;margin-bottom:8px;">🚫</div>
+          <div class="stat-label">Rejected Batches</div>
+          <div class="stat-value purple" style="font-size:22px;">${formatNum(rejectedCount)}</div>
+          <div class="stat-sub">scrapped production batches</div>
+        </div>
+      </div>
+
+      <!-- Top Stats Row 2: Inventory, Sales & Health -->
+      <h3 style="font-size:14px;font-weight:700;margin-top:20px;margin-bottom:12px;text-transform:uppercase;letter-spacing:0.5px;color:var(--accent-teal);">📦 Stocks, Sales &amp; Health</h3>
+      <div class="dashboard-stats-grid-6">
+        <div class="stat-card green">
+          <div style="font-size:22px;margin-bottom:8px;">📦</div>
+          <div class="stat-label">Total Store Stock</div>
+          <div class="stat-value green" style="font-size:22px;">${formatNum(totalStock)}</div>
+          <div class="stat-sub">units in store</div>
+        </div>
+        <div class="stat-card teal">
+          <div style="font-size:22px;margin-bottom:8px;">🗂️</div>
+          <div class="stat-label">Parts in Master</div>
+          <div class="stat-value teal" style="font-size:22px;">${formatNum(master.length)}</div>
+          <div class="stat-sub">registered products</div>
+        </div>
+        <div class="stat-card amber">
+          <div style="font-size:22px;margin-bottom:8px;">💰</div>
+          <div class="stat-label">Sales This Month</div>
+          <div class="stat-value amber" style="font-size:22px;">${formatNum(salesThisMonth)}</div>
+          <div class="stat-sub">units sold this month</div>
+        </div>
+        <div class="stat-card red">
+          <div style="font-size:22px;margin-bottom:8px;">📉</div>
+          <div class="stat-label">Total Loss</div>
+          <div class="stat-value red" style="font-size:22px;">${formatNum(totalLoss)}</div>
+          <div class="stat-sub">loss across all stages</div>
+        </div>
+        <div class="stat-card red">
+          <div style="font-size:22px;margin-bottom:8px;">🚨</div>
+          <div class="stat-label">Critical Alerts</div>
+          <div class="stat-value red" style="font-size:22px;">${formatNum(criticalCount)}</div>
+          <div class="stat-sub">replenish priority</div>
+        </div>
+        <div class="stat-card blue">
+          <div style="font-size:22px;margin-bottom:8px;">✅</div>
+          <div class="stat-label">Completed Batches</div>
+          <div class="stat-value blue" style="font-size:22px;">${formatNum(completed)}</div>
+          <div class="stat-sub">total batches completed</div>
+        </div>
       </div>
 
       <!-- Stage Pipeline -->
