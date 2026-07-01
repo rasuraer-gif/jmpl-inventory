@@ -558,7 +558,7 @@ const ProductionModule = (() => {
 
     const printWindow = window.open('', '_blank', 'width=600,height=800');
     if (!printWindow) {
-      showToast('Popup blocked! Please allow popups for barcode printing.', 'warning');
+      showToast('Popup blocked! Please allow popups for printing.', 'warning');
       return;
     }
 
@@ -567,8 +567,7 @@ const ProductionModule = (() => {
     printWindow.document.write(`
       <html>
       <head>
-        <title>Print Barcode - ${batch.batchNo}</title>
-        <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
+        <title>Print Label - ${batch.batchNo}</title>
         <style>
           @page {
             size: 4in 6in;
@@ -576,55 +575,60 @@ const ProductionModule = (() => {
           }
           body {
             margin: 0;
-            padding: 20px;
-            font-family: Arial, sans-serif;
+            padding: 0;
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
             display: flex;
-            flex-direction: column;
             align-items: center;
             justify-content: center;
-            box-sizing: border-box;
             height: 100vh;
-            text-align: center;
+            width: 100vw;
             background: #fff;
             color: #000;
+            box-sizing: border-box;
           }
           .label-container {
-            width: 3.6in;
-            height: 5.6in;
-            border: 2px dashed #000;
+            width: 3.8in;
+            height: 5.8in;
+            border: 3px solid #000;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: space-between;
             box-sizing: border-box;
-            padding: 20px 10px;
+            padding: 16px;
           }
           .company-title {
-            font-size: 16px;
-            font-weight: 800;
-            letter-spacing: 1px;
-            border-bottom: 2px double #000;
+            font-size: 20px;
+            font-weight: 900;
+            letter-spacing: 0.5px;
+            border-bottom: 3px solid #000;
             padding-bottom: 6px;
             width: 100%;
-            margin-bottom: 10px;
+            text-align: center;
+            text-transform: uppercase;
           }
-          .barcode-wrapper {
-            flex: 1;
+          .qr-wrapper {
+            margin: 12px 0;
             display: flex;
             align-items: center;
             justify-content: center;
-            width: 100%;
           }
-          #barcode {
-            max-width: 100%;
-            max-height: 150px;
+          .batch-no-display {
+            font-size: 28px;
+            font-weight: 800;
+            letter-spacing: 0.5px;
+            margin-bottom: 12px;
+            border: 3px solid #000;
+            padding: 8px 16px;
+            border-radius: 4px;
+            background: #f3f4f6;
+            text-align: center;
           }
           .details {
             width: 100%;
-            border-top: 2px solid #000;
+            border-top: 3px solid #000;
             padding-top: 12px;
-            font-size: 14.5px;
-            text-align: left;
+            font-size: 18px;
           }
           .detail-row {
             display: flex;
@@ -633,53 +637,51 @@ const ProductionModule = (() => {
             line-height: 1.3;
           }
           .label {
-            font-weight: bold;
+            font-weight: 800;
+            text-transform: uppercase;
+            font-size: 18px;
+          }
+          .value {
+            font-weight: 800;
+            font-size: 20px;
+            white-space: nowrap;
           }
         </style>
       </head>
       <body>
         <div class="label-container">
           <div class="company-title">JANANI MOULDINGS PVT. LTD.</div>
-          <div class="barcode-wrapper">
-            <svg id="barcode"></svg>
+          <div class="qr-wrapper">
+            <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(batch.batchNo)}" style="width: 200px; height: 200px; display: block;" onload="triggerPrint()" />
           </div>
+          <div class="batch-no-display">${batch.batchNo}</div>
           <div class="details">
             <div class="detail-row">
               <span class="label">JMREF:</span>
-              <span>${batch.jmrefNo}</span>
+              <span class="value">${batch.jmrefNo}</span>
             </div>
             <div class="detail-row">
               <span class="label">Part No:</span>
-              <span>${batch.partNo || '—'}</span>
+              <span class="value">${batch.partNo || '—'}</span>
             </div>
             <div class="detail-row">
               <span class="label">Prod Date:</span>
-              <span>${formattedDate}</span>
-            </div>
-            <div class="detail-row">
-              <span class="label">Batch Code:</span>
-              <span>${batch.batchNo}</span>
+              <span class="value">${formattedDate}</span>
             </div>
           </div>
         </div>
         <script>
-          try {
-            JsBarcode("#barcode", "${batch.batchNo}", {
-              format: "CODE128",
-              width: 2,
-              height: 80,
-              displayValue: true,
-              fontSize: 14,
-              textMargin: 4
-            });
-          } catch (e) {
-            console.error("Barcode generation error", e);
-          }
-          window.onload = function() {
+          let printed = false;
+          function triggerPrint() {
+            if (printed) return;
+            printed = true;
             setTimeout(function() {
               window.print();
               window.close();
-            }, 500);
+            }, 300);
+          }
+          window.onload = function() {
+            setTimeout(triggerPrint, 1000); // fallback in case image load event doesn't fire
           };
         </script>
       </body>

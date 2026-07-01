@@ -2,7 +2,7 @@
 // admin.js — Admin Panel Module
 // ============================================================
 const AdminModule = (() => {
-  const PERMS = ['master','production','cryogenic','deflashing','trimming','visual','gauge','quality','store','stock','report_inventory','report_sales','report_production','report_cryogenic','report_deflashing','report_trimming','report_visual','report_gauge','report_rejected','report_recheck'];
+  const PERMS = ['master','production','cryogenic','deflashing','trimming','visual','gauge','quality','store','stock','monthly-plan','prod-sched','replenishment','report_inventory','report_sales','report_production','report_cryogenic','report_deflashing','report_trimming','report_visual','report_gauge','report_rejected','report_recheck'];
   const PERM_LABELS = {
     master: 'Inventory Master',
     production: 'Production',
@@ -14,6 +14,9 @@ const AdminModule = (() => {
     quality: 'Quality Final',
     store: 'Store',
     stock: 'Stock Upload',
+    'monthly-plan': 'Monthly Plan',
+    'prod-sched': 'Production Schedule',
+    replenishment: 'Replenishment Planner',
     report_inventory: 'Report: Inventory',
     report_sales: 'Report: Sales',
     report_production: 'Report: Production',

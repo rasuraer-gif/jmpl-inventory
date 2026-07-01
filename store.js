@@ -140,7 +140,7 @@ const StoreModule = (() => {
             <div style="font-weight:700;margin-bottom:8px;color:var(--accent-blue);">&#8505;&#65039; How to use</div>
             <ol style="margin:0;padding-left:20px;color:var(--text-muted);font-size:13px;line-height:1.8;">
               <li>Download the Excel template using the button above</li>
-              <li>Fill in <strong>Date</strong> (YYYY-MM-DD), <strong>JMREF</strong>, <strong>Sold Quantity</strong> — one row per sale</li>
+              <li>Fill in <strong>Date</strong> (DD-MM-YYYY), <strong>JMREF</strong>, <strong>Sold Quantity</strong>, <strong>Sale Price</strong> — one row per sale</li>
               <li>Upload the completed file below</li>
               <li>Review the preview table — check for errors highlighted in red</li>
               <li>Click <strong>Confirm &amp; Save</strong> to apply FIFO deductions</li>
@@ -174,12 +174,17 @@ const StoreModule = (() => {
   function downloadTemplate(e) {
     e.preventDefault();
     if (typeof XLSX === 'undefined') { showToast('Excel library not loaded', 'error'); return; }
+    const today = new Date();
+    const dd = String(today.getDate()).padStart(2, '0');
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const yyyy = today.getFullYear();
+    const dateStr = `${dd}-${mm}-${yyyy}`;
     const ws = XLSX.utils.aoa_to_sheet([
-      ['Date', 'JMREF', 'Sold Quantity'],
-      [new Date().toISOString().slice(0, 10), 'JMREF-2024-001', 100],
-      [new Date().toISOString().slice(0, 10), 'JMREF-2024-002', 50],
+      ['Date', 'JMREF', 'Sold Quantity', 'Sale Price'],
+      [dateStr, 'JMREF-2024-001', 100, 12.5],
+      [dateStr, 'JMREF-2024-002', 50, 8.75],
     ]);
-    ws['!cols'] = [{ wch: 14 }, { wch: 22 }, { wch: 16 }];
+    ws['!cols'] = [{ wch: 14 }, { wch: 22 }, { wch: 16 }, { wch: 16 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Sales Upload');
     XLSX.writeFile(wb, 'JMPL_Sales_Upload_Template.xlsx');
@@ -224,9 +229,10 @@ const StoreModule = (() => {
         const dateIdx = header.findIndex(h => h.includes('date'));
         const jmrefIdx = header.findIndex(h => h.includes('jmref'));
         const qtyIdx = header.findIndex(h => h.includes('qty') || h.includes('quantity') || h.includes('sold'));
+        const priceIdx = header.findIndex(h => h.includes('price') || h.includes('rate') || h.includes('sale price') || h.includes('sales price'));
 
-        if (dateIdx < 0 || jmrefIdx < 0 || qtyIdx < 0) {
-          showToast('Column headers must include: Date, JMREF, Sold Quantity', 'error');
+        if (dateIdx < 0 || jmrefIdx < 0 || qtyIdx < 0 || priceIdx < 0) {
+          showToast('Column headers must include: Date, JMREF, Sold Quantity, Sale Price', 'error');
           return;
         }
 
@@ -238,29 +244,42 @@ const StoreModule = (() => {
           if (!r || r.every(c => c === '' || c === null || c === undefined)) continue;
 
           let dateVal = r[dateIdx];
+          let parsedDate = '';
           // Handle Excel date serial numbers
           if (typeof dateVal === 'number') {
-            dateVal = XLSX.SSF.format('yyyy-mm-dd', dateVal);
+            parsedDate = XLSX.SSF.format('yyyy-mm-dd', dateVal);
           } else if (dateVal instanceof Date) {
-            dateVal = dateVal.toISOString().slice(0, 10);
+            parsedDate = dateVal.toISOString().slice(0, 10);
           } else {
-            dateVal = String(dateVal).trim();
+            const str = String(dateVal).trim();
+            // Match DD-MM-YYYY or D-M-YYYY with slashes or dashes
+            const match = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+            if (match) {
+              const d = match[1].padStart(2, '0');
+              const m = match[2].padStart(2, '0');
+              const y = match[3];
+              parsedDate = `${y}-${m}-${d}`;
+            } else {
+              parsedDate = str;
+            }
           }
 
           const jmref = String(r[jmrefIdx] || '').trim();
           const qty   = parseInt(r[qtyIdx]);
+          const price = parseFloat(r[priceIdx]);
           const part  = master.find(m => m.jmrefNo === jmref);
           const available = jmref ? fifoAvailable(jmref) : 0;
 
           // Validate
           let errors = [];
-          if (!dateVal || !/^\d{4}-\d{2}-\d{2}$/.test(dateVal)) errors.push('Invalid date (use YYYY-MM-DD)');
+          if (!parsedDate || !/^\d{4}-\d{2}-\d{2}$/.test(parsedDate)) errors.push('Invalid date (use DD-MM-YYYY)');
           if (!jmref) errors.push('JMREF is empty');
           if (!part) errors.push('JMREF not found in master');
-          if (!qty || qty < 1) errors.push('Qty must be ≥ 1');
+          if (isNaN(qty) || qty < 1) errors.push('Qty must be ≥ 1');
           if (part && qty > available) errors.push('Qty (' + qty + ') exceeds available stock (' + available + ')');
+          if (isNaN(price) || price < 0) errors.push('Sale Price must be a valid number ≥ 0');
 
-          rows.push({ row: i + 1, dateVal, jmref, partNo: part?.partNo || '—', qty, available, errors });
+          rows.push({ row: i + 1, dateVal: parsedDate, jmref, partNo: part?.partNo || '—', qty, price, available, errors });
         }
 
         showPreview(rows);
@@ -280,6 +299,7 @@ const StoreModule = (() => {
     const validRows = rows.filter(r => r.errors.length === 0);
     const errorRows = rows.filter(r => r.errors.length > 0);
     const totalQty  = validRows.reduce((s, r) => s + r.qty, 0);
+    const totalVal  = validRows.reduce((s, r) => s + (r.qty * r.price), 0);
 
     const tableRows = rows.map(r => {
       const hasErr = r.errors.length > 0;
@@ -293,6 +313,7 @@ const StoreModule = (() => {
         <td><span class="badge badge-teal">${r.jmref}</span></td>
         <td>${r.partNo}</td>
         <td class="font-semibold">${formatNum(r.qty)}</td>
+        <td class="font-semibold">${isNaN(r.price) ? '—' : '₹' + formatNum(r.price)}</td>
         <td class="text-muted">${formatNum(r.available)}</td>
         ${statusCell}
       </tr>`;
@@ -305,8 +326,8 @@ const StoreModule = (() => {
           <span class="badge badge-green" style="margin-left:10px;">${validRows.length} valid</span>
           ${errorRows.length ? '<span class="badge badge-red" style="margin-left:6px;">' + errorRows.length + ' errors</span>' : ''}
         </div>
-        <div style="display:flex;gap:10px;align-items:center;">
-          <span class="text-muted text-sm">Total qty to sell: <strong>${formatNum(totalQty)}</strong></span>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+          <span class="text-muted text-sm">Total Qty: <strong>${formatNum(totalQty)}</strong> | Total Value: <strong class="text-success">₹${formatNum(totalVal)}</strong></span>
           ${validRows.length > 0
             ? `<button class="btn btn-primary" onclick="StoreModule.confirmSales()">&#10003; Confirm &amp; Save (${validRows.length} rows)</button>`
             : ''}
@@ -318,7 +339,7 @@ const StoreModule = (() => {
           <thead>
             <tr>
               <th>Row</th><th>Date</th><th>JMREF</th><th>Part No</th>
-              <th>Sold Qty</th><th>Available Stock</th><th>Status</th>
+              <th>Sold Qty</th><th>Sale Price</th><th>Available Stock</th><th>Status</th>
             </tr>
           </thead>
           <tbody>${tableRows}</tbody>
@@ -355,13 +376,14 @@ const StoreModule = (() => {
       return;
     }
 
-    // Save each row as a sale record (FIFO is implicit — availableByJmref subtracts total sales)
+    // Save each row as a sale record
     let saved = 0;
     validRows.forEach(r => {
       DB.Sales.insert({
         jmrefNo: r.jmref,
         partNo:  r.partNo,
         qty:     r.qty,
+        salePrice: r.price,
         saleDate: r.dateVal,
         uploadedViaExcel: true,
         notes: 'Excel bulk upload'
@@ -477,22 +499,36 @@ const StoreModule = (() => {
       if (tv) s = s.filter(r => r.saleDate <= tv);
 
       const total = s.reduce((sum, r) => sum + (r.qty || 0), 0);
+      const totalValue = s.reduce((sum, r) => {
+        const part = master.find(m => m.jmrefNo === r.jmrefNo) || {};
+        const price = r.salePrice !== undefined && r.salePrice !== null ? r.salePrice : (part.salePrice || 0);
+        return sum + (price * r.qty);
+      }, 0);
+
       const tbody = document.getElementById('sales-tbody');
       const totalEl = document.getElementById('sales-total');
+      const totalValEl = document.getElementById('sales-total-value');
       if (!tbody) return;
+      
       tbody.innerHTML = s.map((r, i) => {
         const part = master.find(m => m.jmrefNo === r.jmrefNo) || {};
+        const price = r.salePrice !== undefined && r.salePrice !== null ? r.salePrice : (part.salePrice || 0);
+        const totalVal = price * r.qty;
         return `<tr>
           <td class="text-muted">${i + 1}</td>
           <td><span class="badge badge-teal">${r.jmrefNo || '&#x2014;'}</span></td>
           <td>${part.partNo || '&#x2014;'}</td>
           <td class="font-semibold">${formatNum(r.qty)}</td>
+          <td>₹${formatNum(price)}</td>
+          <td class="font-bold text-success">₹${formatNum(totalVal)}</td>
           <td>${r.saleDate || '&#x2014;'}</td>
           <td class="text-muted text-sm">${r.uploadedViaExcel ? '<span class="badge badge-blue" style="font-size:10px;">Excel</span>' : '&#x2014;'}</td>
           <td class="text-muted text-sm">${r.notes || '&#x2014;'}</td>
         </tr>`;
-      }).join('') || '<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--text-muted);">No sales match the selected filters</td></tr>';
+      }).join('') || '<tr><td colspan="9" style="text-align:center;padding:32px;color:var(--text-muted);">No sales match the selected filters</td></tr>';
+      
       if (totalEl) totalEl.textContent = formatNum(total);
+      if (totalValEl) totalValEl.textContent = '₹' + formatNum(totalValue);
     }
 
     const jmrefOpts = master.map(m => `<option value="${m.jmrefNo}">${m.jmrefNo}</option>`).join('');
@@ -527,13 +563,15 @@ const StoreModule = (() => {
         <div class="table-wrap">
           <table class="data-table">
             <thead>
-              <tr><th>#</th><th>JMREF</th><th>Part No</th><th>Qty Sold</th><th>Sale Date</th><th>Source</th><th>Notes</th></tr>
+              <tr><th>#</th><th>JMREF</th><th>Part No</th><th>Qty Sold</th><th>Sale Price</th><th>Total Value</th><th>Sale Date</th><th>Source</th><th>Notes</th></tr>
             </thead>
             <tbody id="sales-tbody"></tbody>
             <tfoot>
               <tr>
                 <td colspan="3" style="padding:12px 16px;font-weight:700;">Total</td>
-                <td style="padding:12px 16px;font-weight:800;color:var(--accent-green);" id="sales-total">0</td>
+                <td style="padding:12px 16px;font-weight:800;color:var(--accent-teal);" id="sales-total">0</td>
+                <td></td>
+                <td style="padding:12px 16px;font-weight:800;color:var(--accent-green);" id="sales-total-value">₹0</td>
                 <td colspan="3"></td>
               </tr>
             </tfoot>
@@ -565,22 +603,34 @@ const StoreModule = (() => {
     if (tv) s = s.filter(r => r.saleDate <= tv);
 
     const total = s.reduce((sum, r) => sum + (r.qty || 0), 0);
+    const totalValue = s.reduce((sum, r) => {
+      const part = master.find(m => m.jmrefNo === r.jmrefNo) || {};
+      const price = r.salePrice !== undefined && r.salePrice !== null ? r.salePrice : (part.salePrice || 0);
+      return sum + (price * r.qty);
+    }, 0);
+
     const tbody = document.getElementById('sales-tbody');
     const totalEl = document.getElementById('sales-total');
+    const totalValEl = document.getElementById('sales-total-value');
     if (!tbody) return;
     tbody.innerHTML = s.map((r, i) => {
       const part = master.find(m => m.jmrefNo === r.jmrefNo) || {};
+      const price = r.salePrice !== undefined && r.salePrice !== null ? r.salePrice : (part.salePrice || 0);
+      const totalVal = price * r.qty;
       return `<tr>
         <td class="text-muted">${i + 1}</td>
         <td><span class="badge badge-teal">${r.jmrefNo || '&#x2014;'}</span></td>
         <td>${part.partNo || '&#x2014;'}</td>
         <td class="font-semibold">${formatNum(r.qty)}</td>
+        <td>₹${formatNum(price)}</td>
+        <td class="font-bold text-success">₹${formatNum(totalVal)}</td>
         <td>${r.saleDate || '&#x2014;'}</td>
         <td class="text-muted text-sm">${r.uploadedViaExcel ? '<span class="badge badge-blue" style="font-size:10px;">Excel</span>' : '&#x2014;'}</td>
         <td class="text-muted text-sm">${r.notes || '&#x2014;'}</td>
       </tr>`;
-    }).join('') || '<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--text-muted);">No sales match the selected filters</td></tr>';
+    }).join('') || '<tr><td colspan="9" style="text-align:center;padding:32px;color:var(--text-muted);">No sales match the selected filters</td></tr>';
     if (totalEl) totalEl.textContent = formatNum(total);
+    if (totalValEl) totalValEl.textContent = '₹' + formatNum(totalValue);
   }
 
   return {

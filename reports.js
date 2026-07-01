@@ -174,19 +174,59 @@ const ReportsModule = (() => {
     if (!sales.length) return emptyState();
 
     const master = DB.Master.all();
-    const headers = ['#','JMREF No','Part No','Description','Qty Sold','Sale Date','Notes'];
+    const headers = ['#', 'JMREF No', 'Part No', 'Description', 'Qty Sold', 'Sale Price', 'Total Value', 'Sale Date', 'Notes'];
+    
     const dataRows = sales.sort((a,b)=>b.saleDate.localeCompare(a.saleDate)).map((s, i) => {
       const part = master.find(m => m.jmrefNo === s.jmrefNo) || {};
-      return [i+1, s.jmrefNo, part.partNo||'', part.description||'', s.qty, s.saleDate, s.notes||''];
+      const price = s.salePrice !== undefined && s.salePrice !== null ? s.salePrice : (part.salePrice || 0);
+      const totalVal = price * s.qty;
+      return [
+        i+1, 
+        s.jmrefNo, 
+        part.partNo||'', 
+        part.description||'', 
+        s.qty, 
+        price, 
+        totalVal, 
+        s.saleDate, 
+        s.notes||''
+      ];
     });
 
     const totalQty = dataRows.reduce((sum, r) => sum + (r[4]||0), 0);
-    dataRows.push(['','','','TOTAL', totalQty, '', '']);
+    const totalValAll = dataRows.reduce((sum, r) => sum + (r[6]||0), 0);
+    dataRows.push(['', '', '', 'TOTAL', totalQty, '', totalValAll, '', '']);
+
+    const htmlRows = dataRows.map((r, i) => {
+      const isTotal = i === dataRows.length - 1;
+      const rowCls = isTotal ? 'font-bold' : '';
+      if (isTotal) {
+        return `<tr class="${rowCls}">
+          <td></td><td></td><td></td><td>TOTAL</td>
+          <td class="font-bold">${formatNum(r[4])}</td>
+          <td></td>
+          <td class="font-bold text-success">₹${formatNum(r[6])}</td>
+          <td></td><td></td>
+        </tr>`;
+      }
+      return `<tr class="${rowCls}">
+        <td class="text-muted">${r[0]}</td>
+        <td><span class="badge badge-teal">${r[1]}</span></td>
+        <td class="font-semibold text-blue">${r[2]}</td>
+        <td class="text-muted">${r[3]}</td>
+        <td class="font-semibold">${formatNum(r[4])}</td>
+        <td>₹${formatNum(r[5])}</td>
+        <td class="font-bold text-success">₹${formatNum(r[6])}</td>
+        <td>${r[7]}</td>
+        <td class="text-muted text-sm">${r[8]}</td>
+      </tr>`;
+    }).join('');
 
     const html = `<div class="table-wrap"><table class="data-table">
       <thead><tr>${headers.map(th).join('')}</tr></thead>
-      <tbody>${dataRows.map((r,i) => `<tr class="${i===dataRows.length-1?'font-bold':''}">${r.map(v=>td(v)).join('')}</tr>`).join('')}</tbody>
+      <tbody>${htmlRows}</tbody>
     </table></div>`;
+    
     return { html, headers, dataRows };
   }
 
