@@ -16,6 +16,8 @@ const ReportsModule = (() => {
     trimming:'Trimming', visual:'Visual', gauge:'Gauge', quality:'Quality Final', store:'Store'
   };
 
+  let agingSearch = '';
+
   // ── Utility ────────────────────────────────────────────────
   function td(val, cls='') { return `<td class="${cls}">${val ?? ''}</td>`; }
   function th(val) { return `<th>${val}</th>`; }
@@ -504,13 +506,33 @@ const ReportsModule = (() => {
       }
     });
 
-    if (!agingBatches.length) return emptyState('No active batches pending in their stage for more than a week.');
+    const searchHtml = `
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom: 20px; max-width: 280px;" class="no-print">
+        <div class="search-input" style="flex:1; margin:0;">
+          <span class="search-icon">&#128269;</span>
+          <input type="text" id="aging-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${agingSearch}" oninput="ReportsModule.filterAging(this.value)">
+        </div>
+        <button class="btn btn-secondary btn-sm" onclick="Scanner.start('aging-search', (val) => ReportsModule.filterAging(val))" style="padding: 4px 8px; display: flex; align-items: center; justify-content: center; height: 32px;" title="Scan QR Code">📷</button>
+      </div>`;
+
+    if (!agingBatches.length && !agingSearch) {
+      const html = `${searchHtml}${emptyState('No active batches pending in their stage for more than a week.')}`;
+      return { html, headers: [], dataRows: [] };
+    }
 
     agingBatches.sort((a, b) => b.days - a.days);
 
+    let filteredAging = agingBatches;
+    if (agingSearch) {
+      const q = agingSearch.toLowerCase();
+      filteredAging = agingBatches.filter(item => 
+        (item.batch.batchNo || '').toLowerCase().includes(q)
+      );
+    }
+
     const headers = ['#', 'Stage', 'Batch No', 'JMREF No', 'Part No', 'Current Qty', 'Stage Entry Date', 'Days Aging'];
     
-    const dataRows = agingBatches.map((item, i) => {
+    const dataRows = filteredAging.map((item, i) => {
       const p = master.find(m => m.jmrefNo === item.batch.jmrefNo) || {};
       return [
         i + 1,
@@ -524,7 +546,7 @@ const ReportsModule = (() => {
       ];
     });
 
-    const htmlRows = agingBatches.map((item, i) => {
+    const htmlRows = filteredAging.map((item, i) => {
       const p = master.find(m => m.jmrefNo === item.batch.jmrefNo) || {};
       return `
         <tr>
@@ -540,6 +562,7 @@ const ReportsModule = (() => {
     }).join('');
 
     const html = `
+      ${searchHtml}
       <div style="display:flex; gap:16px; margin-bottom: 20px; flex-wrap:wrap;">
         <div class="stat-card red" style="flex:1; min-width: 140px;"><div class="stat-label">Aging Batches (>7 Days)</div><div class="stat-value red">${agingBatches.length}</div></div>
         <div class="stat-card amber" style="flex:1; min-width: 140px;"><div class="stat-label">Total Aging Quantity</div><div class="stat-value amber">${formatNum(agingBatches.reduce((s,i)=>s+i.qty,0))}</div></div>
@@ -559,7 +582,7 @@ const ReportsModule = (() => {
             </tr>
           </thead>
           <tbody>
-            ${htmlRows}
+            ${htmlRows || '<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}
           </tbody>
         </table>
       </div>`;
@@ -687,6 +710,10 @@ const ReportsModule = (() => {
     const report = REPORTS.find(r => r.key === reportKey);
     if (!report) return;
 
+    if (reportKey !== 'aging') {
+      agingSearch = '';
+    }
+
     el.innerHTML = `
       <div class="animate-in">
         <div class="flex items-center justify-between mb-6">
@@ -739,5 +766,15 @@ const ReportsModule = (() => {
     if (reportKey === 'inventory') runReport(reportKey);
   }
 
-  return { render };
+  function filterAging(val) {
+    agingSearch = val;
+    runReport('aging');
+    const inp = document.getElementById('aging-search');
+    if (inp) {
+      inp.focus();
+      inp.setSelectionRange(inp.value.length, inp.value.length);
+    }
+  }
+
+  return { render, filterAging };
 })();

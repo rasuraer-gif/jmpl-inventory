@@ -511,7 +511,7 @@ function renderDashboard() {
       <!-- Top Stats Row 1: Production & Execution -->
       <h3 style="font-size:14px;font-weight:700;margin-bottom:12px;text-transform:uppercase;letter-spacing:0.5px;color:var(--accent-blue);">🏭 Production &amp; Execution</h3>
       <div class="dashboard-stats-grid-6">
-        <div class="stat-card blue">
+        <div class="stat-card blue" style="cursor:pointer;" onclick="App.navigate('report_aging')">
           <div style="font-size:22px;margin-bottom:8px;">🔄</div>
           <div class="stat-label">Active Batches</div>
           <div class="stat-value blue" style="font-size:22px;">${formatNum(active)}</div>

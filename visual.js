@@ -72,9 +72,12 @@ const VisualModule = (() => {
     return `<div class="card">
       <div class="card-header" style="flex-direction:row; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
         <h3>Pending Batches</h3>
-        <div class="search-input" style="max-width: 250px; margin: 0;">
-          <span class="search-icon">&#128269;</span>
-          <input type="text" id="vis-pending-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${pendingSearch}" oninput="VisualModule.filterPending(this.value)">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <div class="search-input" style="max-width: 250px; margin: 0;">
+            <span class="search-icon">&#128269;</span>
+            <input type="text" id="vis-pending-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${pendingSearch}" oninput="VisualModule.filterPending(this.value)">
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="Scanner.start('vis-pending-search', (val) => VisualModule.filterPending(val))" style="padding: 4px 8px; display: flex; align-items: center; justify-content: center; height: 32px;" title="Scan QR Code">📷</button>
         </div>
       </div>
       <div class="table-wrap"><table class="data-table"><thead><tr><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Input Qty</th><th>Received</th><th>Actions</th></tr></thead><tbody>${rows || '<tr><td colspan="6" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody></table></div></div>`;
@@ -92,8 +95,9 @@ const VisualModule = (() => {
 
     if (!recs.length) return `
       <div class="card card-body">
-        <div style="margin-bottom: 12px; max-width: 280px;">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom: 12px; max-width: 280px;">
           <input type="text" id="vis-history-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${historySearch}" oninput="VisualModule.filterHistory(this.value)">
+          <button class="btn btn-secondary btn-sm" onclick="Scanner.start('vis-history-search', (val) => VisualModule.filterHistory(val))" style="padding: 4px 8px; display: flex; align-items: center; justify-content: center; height: 32px;" title="Scan QR Code">📷</button>
         </div>
         <div class="empty-state"><div class="empty-icon">&#128202;</div><p>No inspection history found</p></div>
       </div>`;
@@ -118,9 +122,12 @@ const VisualModule = (() => {
       <div class="card animate-in">
         <div class="card-header" style="flex-direction:row; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
           <h3>Inspection History</h3>
-          <div class="search-input" style="max-width: 250px; margin: 0;">
-            <span class="search-icon">&#128269;</span>
-            <input type="text" id="vis-history-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${historySearch}" oninput="VisualModule.filterHistory(this.value)">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <div class="search-input" style="max-width: 250px; margin: 0;">
+              <span class="search-icon">&#128269;</span>
+              <input type="text" id="vis-history-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${historySearch}" oninput="VisualModule.filterHistory(this.value)">
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="Scanner.start('vis-history-search', (val) => VisualModule.filterHistory(val))" style="padding: 4px 8px; display: flex; align-items: center; justify-content: center; height: 32px;" title="Scan QR Code">📷</button>
           </div>
         </div>
         <div class="table-wrap">

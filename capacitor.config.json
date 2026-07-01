@@ -1,0 +1,6 @@
+{
+  "appId": "com.jmpl.inventory",
+  "appName": "JMPL Inventory",
+  "webDir": "www",
+  "bundledWebRuntime": false
+}

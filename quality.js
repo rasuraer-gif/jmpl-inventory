@@ -76,9 +76,12 @@ const QualityModule = (() => {
       <div class="card animate-in">
         <div class="card-header" style="flex-direction:row; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
           <h3>Pending Quality Final</h3>
-          <div class="search-input" style="max-width: 250px; margin: 0;">
-            <span class="search-icon">&#128269;</span>
-            <input type="text" id="qf-pending-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${pendingSearch}" oninput="QualityModule.filterPending(this.value)">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <div class="search-input" style="max-width: 250px; margin: 0;">
+              <span class="search-icon">&#128269;</span>
+              <input type="text" id="qf-pending-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${pendingSearch}" oninput="QualityModule.filterPending(this.value)">
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="Scanner.start('qf-pending-search', (val) => QualityModule.filterPending(val))" style="padding: 4px 8px; display: flex; align-items: center; justify-content: center; height: 32px;" title="Scan QR Code">📷</button>
           </div>
         </div>
         <div class="table-wrap">
@@ -104,8 +107,9 @@ const QualityModule = (() => {
 
     if (!recs.length) return `
       <div class="card card-body">
-        <div style="margin-bottom: 12px; max-width: 280px;">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom: 12px; max-width: 280px;">
           <input type="text" id="qf-recheck-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${recheckSearch}" oninput="QualityModule.filterRechecks(this.value)">
+          <button class="btn btn-secondary btn-sm" onclick="Scanner.start('qf-recheck-search', (val) => QualityModule.filterRechecks(val))" style="padding: 4px 8px; display: flex; align-items: center; justify-content: center; height: 32px;" title="Scan QR Code">📷</button>
         </div>
         <div class="empty-state"><div class="empty-icon">&#x1F504;</div><p>No recheck records found</p></div>
       </div>`;
@@ -122,9 +126,12 @@ const QualityModule = (() => {
       <div class="card animate-in">
         <div class="card-header" style="flex-direction:row; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
           <h3>Recheck History</h3>
-          <div class="search-input" style="max-width: 250px; margin: 0;">
-            <span class="search-icon">&#128269;</span>
-            <input type="text" id="qf-recheck-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${recheckSearch}" oninput="QualityModule.filterRechecks(this.value)">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <div class="search-input" style="max-width: 250px; margin: 0;">
+              <span class="search-icon">&#128269;</span>
+              <input type="text" id="qf-recheck-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${recheckSearch}" oninput="QualityModule.filterRechecks(this.value)">
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="Scanner.start('qf-recheck-search', (val) => QualityModule.filterRechecks(val))" style="padding: 4px 8px; display: flex; align-items: center; justify-content: center; height: 32px;" title="Scan QR Code">📷</button>
           </div>
         </div>
         <div class="table-wrap">
@@ -148,8 +155,9 @@ const QualityModule = (() => {
 
     if (!batches.length) return `
       <div class="card card-body">
-        <div style="margin-bottom: 12px; max-width: 280px;">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom: 12px; max-width: 280px;">
           <input type="text" id="qf-reject-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${rejectSearch}" oninput="QualityModule.filterRejects(this.value)">
+          <button class="btn btn-secondary btn-sm" onclick="Scanner.start('qf-reject-search', (val) => QualityModule.filterRejects(val))" style="padding: 4px 8px; display: flex; align-items: center; justify-content: center; height: 32px;" title="Scan QR Code">📷</button>
         </div>
         <div class="empty-state"><div class="empty-icon">&#x1F6AB;</div><p>No rejected batches found</p></div>
       </div>`;
@@ -163,9 +171,12 @@ const QualityModule = (() => {
       <div class="card animate-in">
         <div class="card-header" style="flex-direction:row; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
           <h3>Rejected Batches</h3>
-          <div class="search-input" style="max-width: 250px; margin: 0;">
-            <span class="search-icon">&#128269;</span>
-            <input type="text" id="qf-reject-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${rejectSearch}" oninput="QualityModule.filterRejects(this.value)">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <div class="search-input" style="max-width: 250px; margin: 0;">
+              <span class="search-icon">&#128269;</span>
+              <input type="text" id="qf-reject-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${rejectSearch}" oninput="QualityModule.filterRejects(this.value)">
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="Scanner.start('qf-reject-search', (val) => QualityModule.filterRejects(val))" style="padding: 4px 8px; display: flex; align-items: center; justify-content: center; height: 32px;" title="Scan QR Code">📷</button>
           </div>
         </div>
         <div class="table-wrap">
