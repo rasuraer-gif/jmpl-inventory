@@ -10,9 +10,31 @@ const Scanner = (() => {
       return;
     }
 
-    const modal = document.getElementById('scanner-modal-overlay');
+    let modal = document.getElementById('scanner-modal-overlay');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.className = 'modal-overlay hidden';
+      modal.id = 'scanner-modal-overlay';
+      modal.style.zIndex = '2000';
+      modal.innerHTML = `
+        <div class="modal modal-sm" style="max-width: 400px; border-radius: 16px;">
+          <div class="modal-header">
+            <h3>📷 Scan QR Code</h3>
+            <button class="modal-close" onclick="Scanner.stop()">✕</button>
+          </div>
+          <div class="modal-body" style="padding: 16px; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+            <div id="scanner-qr-reader" style="width: 100%; max-width: 320px; border-radius: 12px; overflow: hidden; background: #000; border: 2px solid var(--border);"></div>
+            <p style="font-size: 12.5px; color: var(--text-secondary); margin-top: 14px; text-align: center; line-height: 1.4;">Align the JMPL QR Code sticker inside the camera viewfinder frame to scan.</p>
+          </div>
+          <div class="modal-footer" style="justify-content: center;">
+            <button class="btn btn-secondary" onclick="Scanner.stop()">Cancel / Close</button>
+          </div>
+        </div>`;
+      document.body.appendChild(modal);
+    }
+
     const qrRegion = document.getElementById('scanner-qr-reader');
-    if (!modal || !qrRegion) {
+    if (!qrRegion) {
       showToast('Scanner UI components not found in document.', 'error');
       return;
     }
