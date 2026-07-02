@@ -229,8 +229,15 @@ const StockModule = (() => {
       if (!jmrefVal) return;
 
       // Case-insensitive search
-      const part = master.find(p => p.jmrefNo.trim().toLowerCase() === jmrefVal.toLowerCase());
-      if (!part) return;
+      let part = master.find(p => p.jmrefNo.trim().toLowerCase() === jmrefVal.toLowerCase());
+      if (!part) {
+        part = DB.Master.insert({
+          partNo: jmrefVal,
+          jmrefNo: jmrefVal,
+          description: `Auto-created during Excel Stock Upload`
+        });
+        master.push(part);
+      }
 
       // Extract values for matched stages
       Object.keys(row).forEach(k => {
@@ -421,10 +428,27 @@ const StockModule = (() => {
           notes: `Bulk Excel Adjustment Reconciliation (Was: ${curr}, Shift: ${diff > 0 ? '+' : ''}${diff})`
         });
 
+        // Generate unique batch number: [JMREF No]-REC-[YYMMDD]-[HHMM]
+        const now = new Date();
+        const yy = String(now.getFullYear()).slice(-2);
+        const mm = String(now.getMonth() + 1).padStart(2, '0');
+        const dd = String(now.getDate()).padStart(2, '0');
+        const hh = String(now.getHours()).padStart(2, '0');
+        const min = String(now.getMinutes()).padStart(2, '0');
+        const batchNoBase = `${item.jmrefNo}-REC-${yy}${mm}${dd}-${hh}${min}`;
+
+        let batchNo = batchNoBase;
+        let counter = 1;
+        while (DB.Batches.all().some(b => b.batchNo === batchNo)) {
+          batchNo = `${batchNoBase}-${counter}`;
+          counter++;
+        }
+
         if (item.stage === 'store') {
           // STORE STOCK ADJUSTMENT
           if (diff > 0) {
             const adjBatch = DB.Batches.insert({
+              batchNo,
               partId: item.partId,
               partNo: part.partNo,
               jmrefNo: part.jmrefNo,
@@ -508,6 +532,7 @@ const StockModule = (() => {
               });
             } else {
               DB.Batches.insert({
+                batchNo,
                 partId: item.partId,
                 partNo: part.partNo,
                 jmrefNo: part.jmrefNo,
