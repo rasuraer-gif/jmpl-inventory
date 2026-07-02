@@ -143,7 +143,8 @@ const MonthlyPlanModule = (() => {
   function renderProgressTab(plans) {
     const batches = DB.Batches.all();
 
-    const rows = plans.map((p, idx) => {
+    // Map each plan to include its calculated statistics
+    const plansWithStats = plans.map(p => {
       const part = DB.Master.findByJmref(p.jmrefNo) || {};
       
       // Calculate Produced: active or completed batches created in the selected month
@@ -154,9 +155,28 @@ const MonthlyPlanModule = (() => {
 
       const produced = matchedBatches.reduce((s, b) => s + (b.initialQty || 0), 0);
       const pending = Math.max(0, p.qty - produced);
-      const pct = p.qty > 0 ? ((produced / p.qty) * 100).toFixed(1) : '0.0';
+      const pct = p.qty > 0 ? (produced / p.qty) * 100 : 0;
+      
+      return {
+        plan: p,
+        part,
+        produced,
+        pending,
+        pct
+      };
+    });
 
-      const progressColor = pct >= 100 ? 'var(--accent-green)' : pct >= 50 ? 'var(--accent-blue)' : pct > 0 ? 'var(--accent-amber)' : 'var(--text-muted)';
+    // Sort plans by % Completion from low to high
+    plansWithStats.sort((a, b) => a.pct - b.pct);
+
+    const rows = plansWithStats.map((item, idx) => {
+      const p = item.plan;
+      const part = item.part;
+      const produced = item.produced;
+      const pending = item.pending;
+      const pct = item.pct.toFixed(1);
+
+      const progressColor = item.pct >= 100 ? 'var(--accent-green)' : item.pct >= 50 ? 'var(--accent-blue)' : item.pct > 0 ? 'var(--accent-amber)' : 'var(--text-muted)';
 
       return `
         <tr>
@@ -169,7 +189,7 @@ const MonthlyPlanModule = (() => {
           <td>
             <div style="display:flex; align-items:center; gap:8px;">
               <div style="flex:1; background:var(--bg-input); height:8px; border-radius:4px; overflow:hidden; min-width:80px;">
-                <div style="background:${progressColor}; width:${Math.min(100, pct)}%; height:100%;"></div>
+                <div style="background:${progressColor}; width:${Math.min(100, item.pct)}%; height:100%;"></div>
               </div>
               <span class="font-bold text-sm" style="color:${progressColor}; min-width:45px; text-align:right;">${pct}%</span>
             </div>

@@ -12,10 +12,65 @@ const ProductionScheduleModule = (() => {
     const master = DB.Master.all();
     const plans = DB.MonthlyPlans.byMonth(selectedMonth);
     const schedules = DB.ProductionSchedules.byMonth(selectedMonth);
+    const batches = DB.Batches.all();
+
+    // Filter plans to only show JMREF if % of completion is lesser than 200% (for dropdown)
+    const plansUnder200 = plans.filter(p => {
+      const matchedBatches = batches.filter(b => {
+        const bd = (b.productionDate || b.createdAt || '').slice(0, 7);
+        return b.jmrefNo === p.jmrefNo && bd === selectedMonth;
+      });
+      const produced = matchedBatches.reduce((s, b) => s + (b.initialQty || 0), 0);
+      const pct = p.qty > 0 ? (produced / p.qty) * 100 : 0;
+      return pct < 200;
+    });
+
+    // Filter schedules to only show entries for JMREF if % of completion is lesser than 200% (for entries tab)
+    const schedulesUnder200 = schedules.filter(s => {
+      const p = plans.find(plan => plan.jmrefNo === s.jmrefNo);
+      if (!p) return true; // If no plan target is set for this JMREF, keep it
+      const matchedBatches = batches.filter(b => {
+        const bd = (b.productionDate || b.createdAt || '').slice(0, 7);
+        return b.jmrefNo === p.jmrefNo && bd === selectedMonth;
+      });
+      const produced = matchedBatches.reduce((s, b) => s + (b.initialQty || 0), 0);
+      const pct = p.qty > 0 ? (produced / p.qty) * 100 : 0;
+      return pct < 200;
+    });
+
+    const stageRecords = DB.StageRecords.all();
+    const wipStages = ['production','cryogenic','deflashing','trimming','visual','gauge','quality'];
+
+    // Filter plans specifically for the Summary Tab: ONLY display JMREF where (Monthly Target * 2) >= Total Qty in hand
+    const summaryPlans = plans.filter(p => {
+      const part = master.find(m => m.jmrefNo === p.jmrefNo);
+      if (!part) return false;
+
+      // 1. Store stock
+      const storeQty = DB.StoreInventory.availableByJmref(p.jmrefNo);
+
+      // 2. WIP stock across all WIP stages
+      let wipQty = 0;
+      wipStages.forEach(stage => {
+        const activeBatches = batches.filter(b =>
+          b.partId === part.id && b.currentStage === stage && b.status === 'active'
+        );
+        wipQty += activeBatches.reduce((sum, b) => {
+          const incoming = stageRecords.filter(r => r.batchId === b.id && r.movedTo === stage);
+          if (incoming.length) {
+            return sum + (incoming[incoming.length - 1].outputQty || 0);
+          }
+          return sum + (b.initialQty || 0);
+        }, 0);
+      });
+
+      const totalQtyInHand = storeQty + wipQty;
+      return (p.qty * 2) >= totalQtyInHand;
+    });
 
     const tabContent = 
-      activeTab === 'summary' ? renderSummaryTab(plans, schedules, master) :
-                                renderEntriesTab(schedules, master);
+      activeTab === 'summary' ? renderSummaryTab(summaryPlans, schedules, master) :
+                                renderEntriesTab(schedulesUnder200, master);
 
     el.innerHTML = `
       <div class="animate-in">
@@ -37,7 +92,7 @@ const ProductionScheduleModule = (() => {
 
         <div id="schedule-tab-content">${tabContent}</div>
       </div>
-      ${renderAddModal(plans, master)}`;
+      ${renderAddModal(plansUnder200, master)}`;
   }
 
   function switchTab(tab) {
@@ -129,7 +184,7 @@ const ProductionScheduleModule = (() => {
               </tr>
             </thead>
             <tbody>
-              ${rows || `<tr><td colspan="8" class="text-center text-muted" style="padding:32px;">No monthly plans found for this month. Set plans first under "Monthly Plan".</td></tr>`}
+              ${rows || `<tr><td colspan="8" class="text-center text-muted" style="padding:32px;">No monthly plans found where twice the target is greater than or equal to the total quantity in hand.</td></tr>`}
             </tbody>
           </table>
         </div>
@@ -304,6 +359,24 @@ const ProductionScheduleModule = (() => {
 
     document.getElementById('schedule-edit-id').value = id;
     document.getElementById('schedule-modal-title').textContent = 'Edit Schedule Entry';
+    
+    // Ensure the option exists in the dropdown (in case it was filtered out by the 200% completion limit)
+    const select = document.getElementById('schedule-part-jmref');
+    let optionExists = false;
+    for (let i = 0; i < select.options.length; i++) {
+      if (select.options[i].value === s.jmrefNo) {
+        optionExists = true;
+        break;
+      }
+    }
+    if (!optionExists) {
+      const part = DB.Master.findByJmref(s.jmrefNo) || {};
+      const opt = document.createElement('option');
+      opt.value = s.jmrefNo;
+      opt.textContent = `${part.partNo || s.jmrefNo} — ${s.jmrefNo}`;
+      select.appendChild(opt);
+    }
+
     document.getElementById('schedule-part-jmref').value = s.jmrefNo;
     document.getElementById('schedule-part-jmref').disabled = true;
     
