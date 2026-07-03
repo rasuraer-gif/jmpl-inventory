@@ -4,6 +4,7 @@
 const ProductionModule = (() => {
   let activeTab = 'active';
   let pendingSearch = '';
+  let _activeBatch = null;
 
   function getInputQtyForBatch(batch) {
     return batch.initialQty || 0;
@@ -42,7 +43,9 @@ const ProductionModule = (() => {
 
   function renderStats() {
     const batches = DB.Batches.all();
-    const active = batches.filter(b => b.currentStage === 'production' && b.status === 'active').length;
+    const activeList = batches.filter(b => b.currentStage === 'production' && b.status === 'active');
+    const active = activeList.length;
+    const totalQty = activeList.reduce((sum, b) => sum + (b.initialQty || 0), 0);
     const completed = batches.filter(b => b.status === 'completed').length;
     const thisMonth = new Date().toISOString().slice(0,7);
     const monthBatches = batches.filter(b => (b.createdAt||'').startsWith(thisMonth)).length;
@@ -50,6 +53,7 @@ const ProductionModule = (() => {
     if (!el) return;
     el.innerHTML = `
       <div class="stat-card purple"><div class="stat-label">Active in Production</div><div class="stat-value purple">${active}</div></div>
+      <div class="stat-card amber"><div class="stat-label">Total Active Qty</div><div class="stat-value amber">${formatNum(totalQty)}</div></div>
       <div class="stat-card green"><div class="stat-label">Completed Batches</div><div class="stat-value green">${completed}</div></div>
       <div class="stat-card blue"><div class="stat-label">Created This Month</div><div class="stat-value blue">${monthBatches}</div></div>`;
   }
@@ -253,6 +257,33 @@ const ProductionModule = (() => {
                 <option value="trimming">Trimming</option>
               </select>
             </div>
+            <div id="prod-stock-fields" class="hidden">
+              <hr style="margin: 16px 0; border: 0; border-top: 1px solid var(--border);">
+              <h4 style="margin-bottom:12px; color:var(--primary); font-size:14px;">📦 Stock Upload Sub-Batch Details</h4>
+              <div class="form-row-2">
+                <div class="form-group" style="flex:1;">
+                  <label class="form-label">TR NO <span class="required">*</span></label>
+                  <input type="text" id="prod-trno" class="form-control" placeholder="e.g. TR-01" oninput="ProductionModule.updateDynamicBatchNo()">
+                </div>
+                <div class="form-group" style="flex:1;">
+                  <label class="form-label">Shift <span class="required">*</span></label>
+                  <select id="prod-shift-move" class="form-control" onchange="ProductionModule.updateDynamicBatchNo()">
+                    <option value="day">Day</option>
+                    <option value="night">Night</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-row-2">
+                <div class="form-group" style="flex:1;">
+                  <label class="form-label">Production Date <span class="required">*</span></label>
+                  <input type="date" id="prod-date-move" class="form-control" value="${new Date().toISOString().slice(0,10)}" onchange="ProductionModule.updateDynamicBatchNo()">
+                </div>
+                <div class="form-group" style="flex:1;">
+                  <label class="form-label">Sub-Batch No (Auto)</label>
+                  <input type="text" id="prod-sub-batch-no" class="form-control" readonly style="opacity:0.8; font-weight:bold; color:var(--primary);">
+                </div>
+              </div>
+            </div>
             <div class="form-group"><label class="form-label">Notes</label><textarea id="move-notes" class="form-control" rows="2"></textarea></div>
           </div>
           <div class="modal-footer">
@@ -291,9 +322,37 @@ const ProductionModule = (() => {
     const b = DB.Batches.find(batchId);
     if (!b) return;
     _moveBatchId = batchId;
+    _activeBatch = b;
     _moveInputQty = b.initialQty || 0;
     document.getElementById('move-batch-id').value = batchId;
     
+    const isStock = b.isStockUpload || (b.batchNo && b.batchNo.includes('-REC-'));
+    const stockFields = document.getElementById('prod-stock-fields');
+    if (stockFields) {
+      if (isStock) {
+        stockFields.classList.remove('hidden');
+        document.getElementById('prod-trno').value = '';
+        document.getElementById('prod-shift-move').value = 'day';
+        document.getElementById('prod-date-move').value = new Date().toISOString().slice(0,10);
+        document.getElementById('prod-sub-batch-no').value = '';
+      } else {
+        stockFields.classList.add('hidden');
+      }
+    }
+
+    const lossInput = document.getElementById('move-loss-qty');
+    if (lossInput) {
+      if (isStock) {
+        lossInput.removeAttribute('readonly');
+        lossInput.style.color = 'var(--text)';
+        lossInput.placeholder = 'Enter loss quantity';
+      } else {
+        lossInput.setAttribute('readonly', 'true');
+        lossInput.style.color = 'var(--accent-red)';
+        lossInput.placeholder = '';
+      }
+    }
+
     const lossGroup = document.getElementById('move-loss-qty').parentElement;
     if (!_moveInputQty) {
       document.getElementById('move-batch-info').innerHTML = `<strong>${b.batchNo}</strong> &mdash; ${b.jmrefNo} &mdash; ${b.partNo}<br><span class="text-muted text-sm" style="color:var(--primary); font-weight:600;">Please enter the total quantity produced.</span>`;
@@ -313,14 +372,34 @@ const ProductionModule = (() => {
     document.getElementById('prod-move-modal').classList.remove('hidden');
   }
 
+  function updateDynamicBatchNo() {
+    if (!_activeBatch) return;
+    const trNo = (document.getElementById('prod-trno')?.value || '').trim();
+    const shift = document.getElementById('prod-shift-move')?.value || 'day';
+    const dateVal = document.getElementById('prod-date-move')?.value || '';
+    const dayStr = dateVal.split('-')[2] || '';
+    const shiftCode = shift === 'night' ? 'N' : 'D';
+    const subBatchInput = document.getElementById('prod-sub-batch-no');
+    if (subBatchInput) {
+      if (trNo && dayStr) {
+        subBatchInput.value = `${_activeBatch.jmrefNo}-${trNo}-${dayStr}-${shiftCode}`;
+      } else {
+        subBatchInput.value = '';
+      }
+    }
+  }
+
   function calcLoss() {
     if (!_moveInputQty) {
       document.getElementById('move-loss-qty').value = '0';
       return;
     }
-    const out = parseInt(document.getElementById('move-output-qty').value) || 0;
-    const loss = Math.max(0, _moveInputQty - out);
-    document.getElementById('move-loss-qty').value = loss;
+    const isStock = _activeBatch && (_activeBatch.isStockUpload || (_activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-')));
+    if (!isStock) {
+      const out = parseInt(document.getElementById('move-output-qty').value) || 0;
+      const loss = Math.max(0, _moveInputQty - out);
+      document.getElementById('move-loss-qty').value = loss;
+    }
   }
 
   function moveBatch() {
@@ -335,6 +414,85 @@ const ProductionModule = (() => {
     const lossQty = Math.max(0, inputQty - outputQty);
     const batch = DB.Batches.find(batchId);
     const dateStr = new Date().toISOString().slice(0,10);
+
+    const isStock = _activeBatch && (_activeBatch.isStockUpload || (_activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-')));
+    if (isStock) {
+      const trNo = (document.getElementById('prod-trno')?.value || '').trim();
+      const shift = document.getElementById('prod-shift-move')?.value || 'day';
+      const dateVal = document.getElementById('prod-date-move')?.value || '';
+      const subBatchNo = (document.getElementById('prod-sub-batch-no')?.value || '').trim();
+      const lossQty = parseInt(document.getElementById('move-loss-qty').value) || 0;
+      
+      if (!trNo) { showToast('Please enter a TR No', 'error'); return; }
+      if (!dateVal) { showToast('Please select a production date', 'error'); return; }
+      if (!subBatchNo) { showToast('Please fill all sub-batch fields', 'error'); return; }
+      if (lossQty < 0) { showToast('Loss quantity cannot be negative', 'error'); return; }
+      
+      if (DB.Batches.all().some(b => b.batchNo === subBatchNo)) {
+        showToast('Sub-batch number already exists: ' + subBatchNo, 'error');
+        return;
+      }
+
+      const totalDeducted = outputQty + lossQty;
+      if (totalDeducted > _moveInputQty) {
+        showToast(`Total processed qty (Good: ${outputQty} + Loss: ${lossQty} = ${totalDeducted}) exceeds available input quantity (${_moveInputQty})`, 'error');
+        return;
+      }
+      const remainingQty = Math.max(0, (_activeBatch.initialQty || 0) - totalDeducted);
+      
+      DB.Batches.update(_activeBatch.id, {
+        initialQty: remainingQty,
+        status: remainingQty === 0 ? 'completed' : 'active',
+        completedAt: remainingQty === 0 ? new Date().toISOString() : null
+      });
+
+      const subBatch = DB.Batches.insert({
+        batchNo: subBatchNo,
+        partId: _activeBatch.partId,
+        partNo: _activeBatch.partNo,
+        jmrefNo: _activeBatch.jmrefNo,
+        description: _activeBatch.description,
+        currentStage: destination,
+        status: 'active',
+        initialQty: outputQty,
+        trNo,
+        shift,
+        productionDate: dateVal,
+        createdAt: new Date().toISOString(),
+        notes: 'Sub-batch created from Stock Upload pool batch: ' + _activeBatch.batchNo
+      });
+
+      DB.StageRecords.insert({
+        batchId: subBatch.id,
+        stage: 'production',
+        inputQty: totalDeducted,
+        outputQty: outputQty,
+        lossQty: lossQty,
+        movedTo: destination,
+        movedFrom: 'production',
+        date: dateStr,
+        recordedBy: session?.userId,
+        notes: notes
+      });
+
+      if (lossQty > 0) {
+        DB.LossTracker.insert({
+          batchId: subBatch.id,
+          stage: 'production',
+          lossQty,
+          date: dateStr,
+          jmrefNo: _activeBatch.jmrefNo,
+          partNo: _activeBatch.partNo
+        });
+      }
+
+      document.getElementById('prod-move-modal').classList.add('hidden');
+      showToast('Sub-batch created and moved to ' + destination, 'success');
+      renderStats();
+      renderTab('active');
+      return;
+    }
+
     DB.StageRecords.insert({ batchId, stage:'production', inputQty, outputQty, lossQty, movedTo:destination, movedFrom:'production', date:dateStr, recordedBy:session?.userId, notes });
     if (lossQty > 0) DB.LossTracker.insert({ batchId, stage:'production', lossQty, date:dateStr, jmrefNo:batch.jmrefNo, partNo:batch.partNo });
     DB.Batches.update(batchId, { currentStage: destination, initialQty: inputQty });

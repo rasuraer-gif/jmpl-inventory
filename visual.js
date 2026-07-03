@@ -2,6 +2,7 @@
 // visual.js — Visual Inspection Department Module
 // ============================================================
 const VisualModule = (() => {
+  let _activeBatch = null;
   function getInputQty(batchId) {
     const recs = DB.StageRecords.all().filter(r => r.batchId === batchId && r.movedTo === 'visual');
     if (!recs.length) return (DB.Batches.find(batchId)||{}).initialQty||0;
@@ -20,11 +21,13 @@ const VisualModule = (() => {
     const thisMonth = new Date().toISOString().slice(0,7);
     const monthLoss = DB.LossTracker.byStage('visual').filter(l=>(l.date||'').startsWith(thisMonth)).reduce((s,l)=>s+(l.lossQty||0),0);
     const inspectors = DB.Inspectors.active();
+    const totalQty = batches.reduce((sum, b) => sum + getInputQty(b.id), 0);
     el.innerHTML = `
       <div class="animate-in">
         <div class="mb-6"><h2 class="font-bold" style="font-size:20px;">Visual Inspection</h2><p class="text-sm text-muted mt-1">Inspect batches and record visual defects</p></div>
-        <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));max-width:700px;margin-bottom:24px;">
+        <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));max-width:720px;margin-bottom:24px;">
           <div class="stat-card green"><div class="stat-label">Pending Batches</div><div class="stat-value green">${batches.length}</div></div>
+          <div class="stat-card amber"><div class="stat-label">Total WIP Qty</div><div class="stat-value amber">${formatNum(totalQty)}</div></div>
           <div class="stat-card red"><div class="stat-label">Loss This Month</div><div class="stat-value red">${formatNum(monthLoss)}</div></div>
           <div class="stat-card blue"><div class="stat-label">Total Inspected</div><div class="stat-value blue">${history.length}</div></div>
           <div class="stat-card purple"><div class="stat-label">Inspectors Active</div><div class="stat-value purple">${inspectors.length}</div></div>
@@ -218,6 +221,33 @@ const VisualModule = (() => {
               <option value="quality">Quality Final</option>
             </select>
           </div>
+          <div id="vis-stock-fields" class="hidden">
+            <hr style="margin: 16px 0; border: 0; border-top: 1px solid var(--border);">
+            <h4 style="margin-bottom:12px; color:var(--primary); font-size:14px;">📦 Stock Upload Sub-Batch Details</h4>
+            <div class="form-row-2">
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">TR NO <span class="required">*</span></label>
+                <input type="text" id="vis-trno" class="form-control" placeholder="e.g. TR-01" oninput="VisualModule.updateDynamicBatchNo()">
+              </div>
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Shift <span class="required">*</span></label>
+                <select id="vis-shift-move" class="form-control" onchange="VisualModule.updateDynamicBatchNo()">
+                  <option value="day">Day</option>
+                  <option value="night">Night</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row-2">
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Production Date <span class="required">*</span></label>
+                <input type="date" id="vis-date-move" class="form-control" value="${new Date().toISOString().slice(0,10)}" onchange="VisualModule.updateDynamicBatchNo()">
+              </div>
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Sub-Batch No (Auto)</label>
+                <input type="text" id="vis-sub-batch-no" class="form-control" readonly style="opacity:0.8; font-weight:bold; color:var(--primary);">
+              </div>
+            </div>
+          </div>
           <div class="form-group"><label class="form-label">Notes</label><textarea id="vis-notes" class="form-control" rows="2"></textarea></div>
         </div>
         <div class="modal-footer">
@@ -247,8 +277,37 @@ const VisualModule = (() => {
   function openProcess(batchId, inputQty) {
     _visInputQty = inputQty;
     const b = DB.Batches.find(batchId)||{};
+    _activeBatch = b;
     document.getElementById('vis-batch-id').value = batchId;
     document.getElementById('vis-input-qty').value = inputQty;
+    
+    const isStock = b.isStockUpload || (b.batchNo && b.batchNo.includes('-REC-'));
+    const stockFields = document.getElementById('vis-stock-fields');
+    if (stockFields) {
+      if (isStock) {
+        stockFields.classList.remove('hidden');
+        document.getElementById('vis-trno').value = '';
+        document.getElementById('vis-shift-move').value = 'day';
+        document.getElementById('vis-date-move').value = new Date().toISOString().slice(0,10);
+        document.getElementById('vis-sub-batch-no').value = '';
+      } else {
+        stockFields.classList.add('hidden');
+      }
+    }
+
+    const lossInput = document.getElementById('vis-loss-qty');
+    if (lossInput) {
+      if (isStock) {
+        lossInput.removeAttribute('readonly');
+        lossInput.style.color = 'var(--text)';
+        lossInput.placeholder = 'Enter loss quantity';
+      } else {
+        lossInput.setAttribute('readonly', 'true');
+        lossInput.style.color = 'var(--accent-red)';
+        lossInput.placeholder = '';
+      }
+    }
+
     document.getElementById('vis-batch-info').innerHTML = `<strong>${b.batchNo}</strong> — ${b.jmrefNo}<br><span class="text-muted text-sm">Input Qty: <strong>${formatNum(inputQty)}</strong></span>${b.recheckCount?` <span class="badge badge-amber">Recheck #${b.recheckIteration}</span>`:''}`;
     document.getElementById('vis-inspector').value = '';
     document.getElementById('vis-inspector-search').value = '';
@@ -257,15 +316,36 @@ const VisualModule = (() => {
     document.getElementById('vis-notes').value = '';
     document.getElementById('vis-process-modal').classList.remove('hidden');
   }
+
+  function updateDynamicBatchNo() {
+    if (!_activeBatch) return;
+    const trNo = (document.getElementById('vis-trno')?.value || '').trim();
+    const shift = document.getElementById('vis-shift-move')?.value || 'day';
+    const dateVal = document.getElementById('vis-date-move')?.value || '';
+    const dayStr = dateVal.split('-')[2] || '';
+    const shiftCode = shift === 'night' ? 'N' : 'D';
+    const subBatchInput = document.getElementById('vis-sub-batch-no');
+    if (subBatchInput) {
+      if (trNo && dayStr) {
+        subBatchInput.value = `${_activeBatch.jmrefNo}-${trNo}-${dayStr}-${shiftCode}`;
+      } else {
+        subBatchInput.value = '';
+      }
+    }
+  }
   function calcLoss() {
-    const out = parseInt(document.getElementById('vis-output-qty').value)||0;
-    document.getElementById('vis-loss-qty').value = Math.max(0, _visInputQty - out);
+    const isStock = _activeBatch && (_activeBatch.isStockUpload || (_activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-')));
+    if (!isStock) {
+      const out = parseInt(document.getElementById('vis-output-qty').value)||0;
+      document.getElementById('vis-loss-qty').value = Math.max(0, _visInputQty - out);
+    }
   }
   function process() {
     const batchId = document.getElementById('vis-batch-id').value;
     const inspectorName = document.getElementById('vis-inspector').value.trim();
     const outputQty = parseInt(document.getElementById('vis-output-qty').value);
     const destination = document.getElementById('vis-destination').value;
+    const notes = document.getElementById('vis-notes').value.trim();
     if (!inspectorName) { showToast('Inspector name is required', 'error'); return; }
     if (isNaN(outputQty) || outputQty < 0) { showToast('Enter a valid output quantity', 'error'); return; }
     if (outputQty > _visInputQty) { showToast('Output cannot exceed input quantity', 'error'); return; }
@@ -273,7 +353,89 @@ const VisualModule = (() => {
     const session = Auth.getSession();
     const batch = DB.Batches.find(batchId);
     const dateStr = new Date().toISOString().slice(0,10);
-    DB.StageRecords.insert({ batchId, stage:'visual', inputQty:_visInputQty, outputQty, lossQty, inspectorName, movedTo:destination, movedFrom:'visual', date:dateStr, recordedBy:session?.userId, notes:document.getElementById('vis-notes').value, iterationNo:batch?.recheckIteration||null });
+
+    const isStock = _activeBatch && (_activeBatch.isStockUpload || (_activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-')));
+    if (isStock) {
+      const trNo = (document.getElementById('vis-trno')?.value || '').trim();
+      const shift = document.getElementById('vis-shift-move')?.value || 'day';
+      const dateVal = document.getElementById('vis-date-move')?.value || '';
+      const subBatchNo = (document.getElementById('vis-sub-batch-no')?.value || '').trim();
+      const lossQty = parseInt(document.getElementById('vis-loss-qty').value) || 0;
+      
+      if (!trNo) { showToast('Please enter a TR No', 'error'); return; }
+      if (!dateVal) { showToast('Please select a production date', 'error'); return; }
+      if (!subBatchNo) { showToast('Please fill all sub-batch fields', 'error'); return; }
+      if (lossQty < 0) { showToast('Loss quantity cannot be negative', 'error'); return; }
+
+      if (DB.Batches.all().some(b => b.batchNo === subBatchNo)) {
+        showToast('Sub-batch number already exists: ' + subBatchNo, 'error');
+        return;
+      }
+
+      const totalDeducted = outputQty + lossQty;
+      if (totalDeducted > _visInputQty) {
+        showToast(`Total processed qty (Good: ${outputQty} + Loss: ${lossQty} = ${totalDeducted}) exceeds available input quantity (${_visInputQty})`, 'error');
+        return;
+      }
+
+      const remainingQty = Math.max(0, (_activeBatch.initialQty || 0) - totalDeducted);
+
+      DB.Batches.update(_activeBatch.id, {
+        initialQty: remainingQty,
+        status: remainingQty === 0 ? 'completed' : 'active',
+        completedAt: remainingQty === 0 ? new Date().toISOString() : null
+      });
+
+      const subBatch = DB.Batches.insert({
+        batchNo: subBatchNo,
+        partId: _activeBatch.partId,
+        partNo: _activeBatch.partNo,
+        jmrefNo: _activeBatch.jmrefNo,
+        description: _activeBatch.description,
+        currentStage: destination,
+        status: 'active',
+        initialQty: outputQty,
+        trNo,
+        shift,
+        productionDate: dateVal,
+        createdAt: new Date().toISOString(),
+        notes: 'Sub-batch created from Stock Upload pool batch: ' + _activeBatch.batchNo
+      });
+
+      DB.StageRecords.insert({
+        batchId: subBatch.id,
+        stage: 'visual',
+        inputQty: totalDeducted,
+        outputQty: outputQty,
+        lossQty: lossQty,
+        inspectorName,
+        movedTo: destination,
+        movedFrom: 'visual',
+        date: dateStr,
+        recordedBy: session?.userId,
+        notes: notes,
+        iterationNo: batch?.recheckIteration||null
+      });
+
+      if (lossQty > 0) {
+        DB.LossTracker.insert({
+          batchId: subBatch.id,
+          stage: 'visual',
+          lossQty,
+          date: dateStr,
+          jmrefNo: _activeBatch.jmrefNo,
+          partNo: _activeBatch.partNo,
+          iterationNo: batch?.recheckIteration||null
+        });
+      }
+
+      document.getElementById('vis-process-modal').classList.add('hidden');
+      showToast('Sub-batch created and moved to ' + (destination === 'gauge' ? 'Gauge Inspection' : 'Quality Final'), 'success');
+      render();
+      return;
+    }
+
+    DB.StageRecords.insert({ batchId, stage:'visual', inputQty:_visInputQty, outputQty, lossQty, inspectorName, movedTo:destination, movedFrom:'visual', date:dateStr, recordedBy:session?.userId, notes:notes, iterationNo:batch?.recheckIteration||null });
     if (lossQty > 0) DB.LossTracker.insert({ batchId, stage:'visual', lossQty, date:dateStr, jmrefNo:batch?.jmrefNo, partNo:batch?.partNo, iterationNo:batch?.recheckIteration||null });
     DB.Batches.update(batchId, { currentStage:destination });
     document.getElementById('vis-process-modal').classList.add('hidden');
@@ -318,5 +480,5 @@ const VisualModule = (() => {
     }
   }
 
-  return { render, openProcess, calcLoss, process, openReject, rejectBatch, showInspectorDropdown, filterInspectors, selectInspector, filterHistory, filterPending };
+  return { render, openProcess, calcLoss, process, openReject, rejectBatch, showInspectorDropdown, filterInspectors, selectInspector, filterHistory, filterPending, updateDynamicBatchNo };
 })();

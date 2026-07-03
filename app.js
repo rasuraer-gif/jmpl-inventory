@@ -56,6 +56,7 @@ const NAV = [
   { id:'cryogenic',  label:'Cryogenic',           icon:'❄️', module:'cryogenic', section:'dept', perm:'cryogenic' },
   { id:'deflashing', label:'Flash Removal',       icon:'🔧', module:'deflashing',section:'dept', perm:'deflashing' },
   { id:'trimming',   label:'Trimming',            icon:'✂️', module:'trimming',  section:'dept', perm:'trimming' },
+  { id:'post-curing', label:'Post Curing',          icon:'🔥', module:'post-curing',section:'dept', perm:'post-curing' },
   { id:'visual',     label:'Visual Inspection',   icon:'👁️', module:'visual',    section:'dept', perm:'visual' },
   { id:'gauge',      label:'Gauge Inspection',    icon:'📏', module:'gauge',     section:'dept', perm:'gauge' },
   { id:'quality',    label:'Quality Final',       icon:'⭐', module:'quality',   section:'dept', perm:'quality' },
@@ -73,6 +74,7 @@ const NAV = [
   { id:'rpt-cryogenic', label:'Cryogenic Loss',    icon:'❄️', module:'report_cryogenic', section:'tools', parent:'reports', perm:'report_cryogenic' },
   { id:'rpt-deflashing',label:'Flash Removal Loss',icon:'🔧', module:'report_deflashing',section:'tools', parent:'reports', perm:'report_deflashing' },
   { id:'rpt-trimming',  label:'Trimming Loss',     icon:'✂️', module:'report_trimming',  section:'tools', parent:'reports', perm:'report_trimming' },
+  { id:'rpt-post-curing', label:'Post Curing Loss', icon:'🔥', module:'report_post_curing', section:'tools', parent:'reports', perm:'report_post_curing' },
   { id:'rpt-visual',    label:'Visual Inspection', icon:'👁️', module:'report_visual',    section:'tools', parent:'reports', perm:'report_visual' },
   { id:'rpt-gauge',     label:'Gauge Inspection',  icon:'📏', module:'report_gauge',     section:'tools', parent:'reports', perm:'report_gauge' },
   { id:'rpt-rejected',  label:'Rejected Batches',  icon:'🚫', module:'report_rejected',  section:'tools', parent:'reports', perm:'report_rejected' },
@@ -99,6 +101,7 @@ const App = (() => {
     cryogenic:  () => CryogenicModule?.render(),
     deflashing: () => DeflashingModule?.render(),
     trimming:   () => TrimmingModule?.render(),
+    'post-curing': () => PostCuringModule?.render(),
     visual:     () => VisualModule?.render(),
     gauge:      () => GaugeModule?.render(),
     quality:    () => QualityModule?.render(),
@@ -116,6 +119,7 @@ const App = (() => {
     report_cryogenic:  () => ReportsModule?.render('cryogenic'),
     report_deflashing: () => ReportsModule?.render('deflashing'),
     report_trimming:   () => ReportsModule?.render('trimming'),
+    report_post_curing: () => ReportsModule?.render('post-curing'),
     report_visual:     () => ReportsModule?.render('visual'),
     report_gauge:      () => ReportsModule?.render('gauge'),
     report_rejected:   () => ReportsModule?.render('rejected'),
@@ -128,6 +132,7 @@ const App = (() => {
     dashboard:'Dashboard', master:'Inventory Master', production:'Production',
     cryogenic:'Cryogenic', deflashing:'Flash Removal', trimming:'Trimming',
     visual:'Visual Inspection', gauge:'Gauge Inspection', quality:'Quality Final',
+    'post-curing':'Post Curing',
     store:'Store & Sales', stock:'Stock Upload', reports:'Reports', admin:'Admin Panel',
     'ai-agent':'AI Assistant',
     'monthly-plan':'Monthly Plan',
@@ -139,6 +144,7 @@ const App = (() => {
     report_cryogenic:'Cryogenic Loss Report',
     report_deflashing:'Flash Removal Loss Report',
     report_trimming:'Trimming Loss Report',
+    report_post_curing:'Post Curing Loss Report',
     report_visual:'Visual Inspection Report',
     report_gauge:'Gauge Inspection Report',
     report_rejected:'Rejected Batch Report',
@@ -425,7 +431,7 @@ function renderDashboard() {
 
   // Critical replenishments (stock < 30% of target level)
   let criticalCount = 0;
-  const STAGES = ['production', 'cryogenic', 'deflashing', 'trimming', 'visual', 'gauge', 'quality'];
+  const STAGES = ['production', 'cryogenic', 'deflashing', 'trimming', 'post-curing', 'visual', 'gauge', 'quality'];
   
   function getStageLossRate(partId, stage) {
     const stageRecords = DB.StageRecords.all().filter(r => {
@@ -483,8 +489,8 @@ function renderDashboard() {
   });
 
   // Stage pipeline
-  const STAGE_ICONS = { production:'🏭', cryogenic:'❄️', deflashing:'🔧', trimming:'✂️', visual:'👁️', gauge:'📏', quality:'⭐', store:'🏪' };
-  const STAGE_NAMES = { production:'Production', cryogenic:'Cryogenic', deflashing:'DE Flashing', trimming:'Trimming', visual:'Visual', gauge:'Gauge', quality:'QC Final', store:'Store' };
+  const STAGE_ICONS = { production:'🏭', cryogenic:'❄️', deflashing:'🔧', trimming:'✂️', 'post-curing':'🔥', visual:'👁️', gauge:'📏', quality:'⭐', store:'🏪' };
+  const STAGE_NAMES = { production:'Production', cryogenic:'Cryogenic', deflashing:'DE Flashing', trimming:'Trimming', 'post-curing':'Post Curing', visual:'Visual', gauge:'Gauge', quality:'QC Final', store:'Store' };
 
   const pipelineHtml = STAGES.map(stage => {
     const count = batches.filter(b => b.currentStage === stage && b.status === 'active').length;

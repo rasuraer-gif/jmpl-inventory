@@ -4,10 +4,11 @@
 const CryogenicModule = (() => {
   let historySearch = '';
   let pendingSearch = '';
+  let _activeBatch = null;
 
   function getInputQty(batchId) {
     const recs = DB.StageRecords.all().filter(r => r.batchId === batchId && r.movedTo === 'cryogenic');
-    if (!recs.length) return 0;
+    if (!recs.length) return (DB.Batches.find(batchId)||{}).initialQty||0;
     const lastRec = recs[recs.length - 1];
     return lastRec.isRecheck ? lastRec.recheckQty : lastRec.outputQty;
   }
@@ -18,11 +19,13 @@ const CryogenicModule = (() => {
     const history = DB.StageRecords.byStage('cryogenic');
     const thisMonth = new Date().toISOString().slice(0,7);
     const monthLoss = DB.LossTracker.byStage('cryogenic').filter(l=>(l.date||'').startsWith(thisMonth)).reduce((s,l)=>s+(l.lossQty||0),0);
+    const totalQty = batches.reduce((sum, b) => sum + getInputQty(b.id), 0);
     el.innerHTML = `
       <div class="animate-in">
-        <div class="mb-6"><h2 class="font-bold" style="font-size:20px;">Cryogenic</h2><p class="text-sm text-muted mt-1">Process and move batches from Cryogenic to Trimming</p></div>
-        <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));max-width:520px;margin-bottom:24px;">
+        <div class="mb-6"><h2 class="font-bold" style="font-size:20px;">Cryogenic</h2><p class="text-sm text-muted mt-1">Process and move batches from Cryogenic</p></div>
+        <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));max-width:720px;margin-bottom:24px;">
           <div class="stat-card blue"><div class="stat-label">Pending Batches</div><div class="stat-value blue">${batches.length}</div></div>
+          <div class="stat-card amber"><div class="stat-label">Total WIP Qty</div><div class="stat-value amber">${formatNum(totalQty)}</div></div>
           <div class="stat-card red"><div class="stat-label">Loss This Month</div><div class="stat-value red">${formatNum(monthLoss)}</div></div>
           <div class="stat-card teal"><div class="stat-label">Processed (Total)</div><div class="stat-value teal">${history.length}</div></div>
         </div>
@@ -139,19 +142,51 @@ const CryogenicModule = (() => {
   function processModal() {
     return `<div class="modal-overlay hidden" id="cryo-process-modal">
       <div class="modal modal-sm">
-        <div class="modal-header"><h3>Process &amp; Move to Trimming</h3><button class="modal-close" onclick="document.getElementById('cryo-process-modal').classList.add('hidden')">&#x2715;</button></div>
+        <div class="modal-header"><h3>Process &amp; Move Batch</h3><button class="modal-close" onclick="document.getElementById('cryo-process-modal').classList.add('hidden')">&#x2715;</button></div>
         <div class="modal-body">
           <input type="hidden" id="cryo-batch-id">
           <input type="hidden" id="cryo-input-qty">
           <div id="cryo-batch-info" style="padding:12px;background:var(--bg-input);border-radius:8px;margin-bottom:16px;"></div>
           <div class="form-group"><label class="form-label">Output Quantity <span class="required">*</span></label><input type="number" id="cryo-output-qty" class="form-control" min="0" oninput="CryogenicModule.calcLoss()"></div>
           <div class="form-group"><label class="form-label">Loss Quantity (Auto)</label><input type="text" id="cryo-loss-qty" class="form-control" readonly style="color:var(--accent-red);font-weight:700;"></div>
-          <div class="form-group"><label class="form-label">Destination</label><input type="text" class="form-control" value="Trimming" readonly style="opacity:0.6;"></div>
+          <div class="form-group"><label class="form-label">Destination <span class="required">*</span></label>
+            <select id="cryo-destination" class="form-control">
+              <option value="trimming">Trimming</option>
+              <option value="post-curing">Post Curing</option>
+            </select>
+          </div>
+          <div id="cryo-stock-fields" class="hidden">
+            <hr style="margin: 16px 0; border: 0; border-top: 1px solid var(--border);">
+            <h4 style="margin-bottom:12px; color:var(--primary); font-size:14px;">📦 Stock Upload Sub-Batch Details</h4>
+            <div class="form-row-2">
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">TR NO <span class="required">*</span></label>
+                <input type="text" id="cryo-trno" class="form-control" placeholder="e.g. TR-01" oninput="CryogenicModule.updateDynamicBatchNo()">
+              </div>
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Shift <span class="required">*</span></label>
+                <select id="cryo-shift-move" class="form-control" onchange="CryogenicModule.updateDynamicBatchNo()">
+                  <option value="day">Day</option>
+                  <option value="night">Night</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row-2">
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Production Date <span class="required">*</span></label>
+                <input type="date" id="cryo-date-move" class="form-control" value="${new Date().toISOString().slice(0,10)}" onchange="CryogenicModule.updateDynamicBatchNo()">
+              </div>
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Sub-Batch No (Auto)</label>
+                <input type="text" id="cryo-sub-batch-no" class="form-control" readonly style="opacity:0.8; font-weight:bold; color:var(--primary);">
+              </div>
+            </div>
+          </div>
           <div class="form-group"><label class="form-label">Notes</label><textarea id="cryo-notes" class="form-control" rows="2"></textarea></div>
         </div>
         <div class="modal-footer">
           <button class="btn btn-secondary" onclick="document.getElementById('cryo-process-modal').classList.add('hidden')">Cancel</button>
-          <button class="btn btn-primary" onclick="CryogenicModule.process()">Move to Trimming</button>
+          <button class="btn btn-primary" onclick="CryogenicModule.process()">Move Batch</button>
         </div>
       </div>
     </div>`;
@@ -176,32 +211,163 @@ const CryogenicModule = (() => {
   function openProcess(batchId, inputQty) {
     _cryoInputQty = inputQty;
     const b = DB.Batches.find(batchId)||{};
+    _activeBatch = b;
     document.getElementById('cryo-batch-id').value = batchId;
     document.getElementById('cryo-input-qty').value = inputQty;
+    
+    const isStock = b.isStockUpload || (b.batchNo && b.batchNo.includes('-REC-'));
+    const stockFields = document.getElementById('cryo-stock-fields');
+    if (stockFields) {
+      if (isStock) {
+        stockFields.classList.remove('hidden');
+        document.getElementById('cryo-trno').value = '';
+        document.getElementById('cryo-shift-move').value = 'day';
+        document.getElementById('cryo-date-move').value = new Date().toISOString().slice(0,10);
+        document.getElementById('cryo-sub-batch-no').value = '';
+      } else {
+        stockFields.classList.add('hidden');
+      }
+    }
+
+    const lossInput = document.getElementById('cryo-loss-qty');
+    if (lossInput) {
+      if (isStock) {
+        lossInput.removeAttribute('readonly');
+        lossInput.style.color = 'var(--text)';
+        lossInput.placeholder = 'Enter loss quantity';
+      } else {
+        lossInput.setAttribute('readonly', 'true');
+        lossInput.style.color = 'var(--accent-red)';
+        lossInput.placeholder = '';
+      }
+    }
+
     document.getElementById('cryo-batch-info').innerHTML = `<strong>${b.batchNo}</strong> — ${b.jmrefNo}<br><span class="text-muted text-sm">Input Qty: <strong>${formatNum(inputQty)}</strong></span>`;
     document.getElementById('cryo-output-qty').value = '';
     document.getElementById('cryo-loss-qty').value = '';
     document.getElementById('cryo-notes').value = '';
+    document.getElementById('cryo-destination').value = 'trimming';
     document.getElementById('cryo-process-modal').classList.remove('hidden');
   }
+
+  function updateDynamicBatchNo() {
+    if (!_activeBatch) return;
+    const trNo = (document.getElementById('cryo-trno')?.value || '').trim();
+    const shift = document.getElementById('cryo-shift-move')?.value || 'day';
+    const dateVal = document.getElementById('cryo-date-move')?.value || '';
+    const dayStr = dateVal.split('-')[2] || '';
+    const shiftCode = shift === 'night' ? 'N' : 'D';
+    const subBatchInput = document.getElementById('cryo-sub-batch-no');
+    if (subBatchInput) {
+      if (trNo && dayStr) {
+        subBatchInput.value = `${_activeBatch.jmrefNo}-${trNo}-${dayStr}-${shiftCode}`;
+      } else {
+        subBatchInput.value = '';
+      }
+    }
+  }
   function calcLoss() {
-    const out = parseInt(document.getElementById('cryo-output-qty').value)||0;
-    document.getElementById('cryo-loss-qty').value = Math.max(0, _cryoInputQty - out);
+    const isStock = _activeBatch && (_activeBatch.isStockUpload || (_activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-')));
+    if (!isStock) {
+      const out = parseInt(document.getElementById('cryo-output-qty').value)||0;
+      document.getElementById('cryo-loss-qty').value = Math.max(0, _cryoInputQty - out);
+    }
   }
   function process() {
     const batchId = document.getElementById('cryo-batch-id').value;
     const outputQty = parseInt(document.getElementById('cryo-output-qty').value);
+    const destination = document.getElementById('cryo-destination').value;
+    const notes = document.getElementById('cryo-notes').value.trim();
+    const session = Auth.getSession();
     if (isNaN(outputQty) || outputQty < 0) { showToast('Enter a valid output quantity', 'error'); return; }
     if (outputQty > _cryoInputQty) { showToast('Output cannot exceed input quantity', 'error'); return; }
     const lossQty = Math.max(0, _cryoInputQty - outputQty);
-    const session = Auth.getSession();
     const batch = DB.Batches.find(batchId);
     const dateStr = new Date().toISOString().slice(0,10);
-    DB.StageRecords.insert({ batchId, stage:'cryogenic', inputQty:_cryoInputQty, outputQty, lossQty, movedTo:'trimming', movedFrom:'cryogenic', date:dateStr, recordedBy:session?.userId, notes:document.getElementById('cryo-notes').value });
+
+    const isStock = _activeBatch && (_activeBatch.isStockUpload || (_activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-')));
+    if (isStock) {
+      const trNo = (document.getElementById('cryo-trno')?.value || '').trim();
+      const shift = document.getElementById('cryo-shift-move')?.value || 'day';
+      const dateVal = document.getElementById('cryo-date-move')?.value || '';
+      const subBatchNo = (document.getElementById('cryo-sub-batch-no')?.value || '').trim();
+      const lossQty = parseInt(document.getElementById('cryo-loss-qty').value) || 0;
+      
+      if (!trNo) { showToast('Please enter a TR No', 'error'); return; }
+      if (!dateVal) { showToast('Please select a production date', 'error'); return; }
+      if (!subBatchNo) { showToast('Please fill all sub-batch fields', 'error'); return; }
+      if (lossQty < 0) { showToast('Loss quantity cannot be negative', 'error'); return; }
+
+      if (DB.Batches.all().some(b => b.batchNo === subBatchNo)) {
+        showToast('Sub-batch number already exists: ' + subBatchNo, 'error');
+        return;
+      }
+
+      const totalDeducted = outputQty + lossQty;
+      if (totalDeducted > _cryoInputQty) {
+        showToast(`Total processed qty (Good: ${outputQty} + Loss: ${lossQty} = ${totalDeducted}) exceeds available input quantity (${_cryoInputQty})`, 'error');
+        return;
+      }
+
+      const remainingQty = Math.max(0, (_activeBatch.initialQty || 0) - totalDeducted);
+
+      DB.Batches.update(_activeBatch.id, {
+        initialQty: remainingQty,
+        status: remainingQty === 0 ? 'completed' : 'active',
+        completedAt: remainingQty === 0 ? new Date().toISOString() : null
+      });
+
+      const subBatch = DB.Batches.insert({
+        batchNo: subBatchNo,
+        partId: _activeBatch.partId,
+        partNo: _activeBatch.partNo,
+        jmrefNo: _activeBatch.jmrefNo,
+        description: _activeBatch.description,
+        currentStage: destination,
+        status: 'active',
+        initialQty: outputQty,
+        trNo,
+        shift,
+        productionDate: dateVal,
+        createdAt: new Date().toISOString(),
+        notes: 'Sub-batch created from Stock Upload pool batch: ' + _activeBatch.batchNo
+      });
+
+      DB.StageRecords.insert({
+        batchId: subBatch.id,
+        stage: 'cryogenic',
+        inputQty: totalDeducted,
+        outputQty: outputQty,
+        lossQty: lossQty,
+        movedTo: destination,
+        movedFrom: 'cryogenic',
+        date: dateStr,
+        recordedBy: session?.userId,
+        notes: notes
+      });
+
+      if (lossQty > 0) {
+        DB.LossTracker.insert({
+          batchId: subBatch.id,
+          stage: 'cryogenic',
+          lossQty,
+          date: dateStr,
+          jmrefNo: _activeBatch.jmrefNo,
+          partNo: _activeBatch.partNo
+        });
+      }
+
+      document.getElementById('cryo-process-modal').classList.add('hidden');
+      showToast('Sub-batch created and moved to ' + (STAGE_LABELS[destination] || destination), 'success');
+      render();
+      return;
+    }
+
+    DB.StageRecords.insert({ batchId, stage:'cryogenic', inputQty:_cryoInputQty, outputQty, lossQty, movedTo:destination, movedFrom:'cryogenic', date:dateStr, recordedBy:session?.userId, notes:notes });
     if (lossQty > 0) DB.LossTracker.insert({ batchId, stage:'cryogenic', lossQty, date:dateStr, jmrefNo:batch?.jmrefNo, partNo:batch?.partNo });
-    DB.Batches.update(batchId, { currentStage:'trimming' });
+    DB.Batches.update(batchId, { currentStage:destination });
     document.getElementById('cryo-process-modal').classList.add('hidden');
-    showToast('Batch moved to Trimming', 'success');
+    showToast('Batch moved to ' + (STAGE_LABELS[destination] || destination), 'success');
     render();
   }
   function openReject(batchId) {
@@ -236,5 +402,5 @@ const CryogenicModule = (() => {
     }
   }
 
-  return { render, openProcess, calcLoss, process, openReject, rejectBatch, filterHistory, filterPending };
+  return { render, openProcess, calcLoss, process, openReject, rejectBatch, filterHistory, filterPending, updateDynamicBatchNo };
 })();

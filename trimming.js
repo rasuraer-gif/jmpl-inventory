@@ -2,6 +2,7 @@
 // trimming.js — Trimming Department Module
 // ============================================================
 const TrimmingModule = (() => {
+  let _activeBatch = null;
   let historySearch = '';
   let pendingSearch = '';
 
@@ -18,11 +19,13 @@ const TrimmingModule = (() => {
     const history = DB.StageRecords.byStage('trimming');
     const thisMonth = new Date().toISOString().slice(0,7);
     const monthLoss = DB.LossTracker.byStage('trimming').filter(l=>(l.date||'').startsWith(thisMonth)).reduce((s,l)=>s+(l.lossQty||0),0);
+    const totalQty = batches.reduce((sum, b) => sum + getInputQty(b.id), 0);
     el.innerHTML = `
       <div class="animate-in">
-        <div class="mb-6"><h2 class="font-bold" style="font-size:20px;">Trimming</h2><p class="text-sm text-muted mt-1">Process batches through Trimming with vendor assignment</p></div>
-        <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));max-width:520px;margin-bottom:24px;">
+        <div class="mb-6"><h2 class="font-bold" style="font-size:20px;">Trimming</h2><p class="text-sm text-muted mt-1">Process batches through Trimming</p></div>
+        <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));max-width:700px;margin-bottom:24px;">
           <div class="stat-card teal"><div class="stat-label">Pending Batches</div><div class="stat-value teal">${batches.length}</div></div>
+          <div class="stat-card amber"><div class="stat-label">Total WIP Qty</div><div class="stat-value amber">${formatNum(totalQty)}</div></div>
           <div class="stat-card red"><div class="stat-label">Loss This Month</div><div class="stat-value red">${formatNum(monthLoss)}</div></div>
           <div class="stat-card blue"><div class="stat-label">Total Processed</div><div class="stat-value blue">${history.length}</div></div>
         </div>
@@ -154,7 +157,39 @@ const TrimmingModule = (() => {
           </div>
           <div class="form-group"><label class="form-label">Output Quantity <span class="required">*</span></label><input type="number" id="trim-output-qty" class="form-control" min="0" oninput="TrimmingModule.calcLoss()"></div>
           <div class="form-group"><label class="form-label">Loss Quantity (Auto)</label><input type="text" id="trim-loss-qty" class="form-control" readonly style="color:var(--accent-red);font-weight:700;"></div>
-          <div class="form-group"><label class="form-label">Destination</label><input type="text" class="form-control" value="Visual Inspection" readonly style="opacity:0.6;"></div>
+          <div class="form-group"><label class="form-label">Destination <span class="required">*</span></label>
+            <select id="trim-destination" class="form-control">
+              <option value="visual">Visual Inspection</option>
+              <option value="post-curing">Post Curing</option>
+            </select>
+          </div>
+          <div id="trim-stock-fields" class="hidden">
+            <hr style="margin: 16px 0; border: 0; border-top: 1px solid var(--border);">
+            <h4 style="margin-bottom:12px; color:var(--primary); font-size:14px;">📦 Stock Upload Sub-Batch Details</h4>
+            <div class="form-row-2">
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">TR NO <span class="required">*</span></label>
+                <input type="text" id="trim-trno" class="form-control" placeholder="e.g. TR-01" oninput="TrimmingModule.updateDynamicBatchNo()">
+              </div>
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Shift <span class="required">*</span></label>
+                <select id="trim-shift-move" class="form-control" onchange="TrimmingModule.updateDynamicBatchNo()">
+                  <option value="day">Day</option>
+                  <option value="night">Night</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row-2">
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Production Date <span class="required">*</span></label>
+                <input type="date" id="trim-date-move" class="form-control" value="${new Date().toISOString().slice(0,10)}" onchange="TrimmingModule.updateDynamicBatchNo()">
+              </div>
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Sub-Batch No (Auto)</label>
+                <input type="text" id="trim-sub-batch-no" class="form-control" readonly style="opacity:0.8; font-weight:bold; color:var(--primary);">
+              </div>
+            </div>
+          </div>
           <div class="form-group"><label class="form-label">Notes</label><textarea id="trim-notes" class="form-control" rows="2"></textarea></div>
         </div>
         <div class="modal-footer">
@@ -184,23 +219,75 @@ const TrimmingModule = (() => {
   function openProcess(batchId, inputQty) {
     _trimInputQty = inputQty;
     const b = DB.Batches.find(batchId)||{};
+    _activeBatch = b;
     document.getElementById('trim-batch-id').value = batchId;
     document.getElementById('trim-input-qty').value = inputQty;
+    
+    const isStock = b.isStockUpload || (b.batchNo && b.batchNo.includes('-REC-'));
+    const stockFields = document.getElementById('trim-stock-fields');
+    if (stockFields) {
+      if (isStock) {
+        stockFields.classList.remove('hidden');
+        document.getElementById('trim-trno').value = '';
+        document.getElementById('trim-shift-move').value = 'day';
+        document.getElementById('trim-date-move').value = new Date().toISOString().slice(0,10);
+        document.getElementById('trim-sub-batch-no').value = '';
+      } else {
+        stockFields.classList.add('hidden');
+      }
+    }
+
+    const lossInput = document.getElementById('trim-loss-qty');
+    if (lossInput) {
+      if (isStock) {
+        lossInput.removeAttribute('readonly');
+        lossInput.style.color = 'var(--text)';
+        lossInput.placeholder = 'Enter loss quantity';
+      } else {
+        lossInput.setAttribute('readonly', 'true');
+        lossInput.style.color = 'var(--accent-red)';
+        lossInput.placeholder = '';
+      }
+    }
+
     document.getElementById('trim-batch-info').innerHTML = `<strong>${b.batchNo}</strong> — ${b.jmrefNo}<br><span class="text-muted text-sm">Input Qty: <strong>${formatNum(inputQty)}</strong></span>${b.recheckCount?` <span class="badge badge-amber">Recheck #${b.recheckIteration}</span>`:''}`;
     document.getElementById('trim-vendor').value = '';
     document.getElementById('trim-output-qty').value = '';
     document.getElementById('trim-loss-qty').value = '';
     document.getElementById('trim-notes').value = '';
+    document.getElementById('trim-destination').value = 'visual';
     document.getElementById('trim-process-modal').classList.remove('hidden');
   }
+
+  function updateDynamicBatchNo() {
+    if (!_activeBatch) return;
+    const trNo = (document.getElementById('trim-trno')?.value || '').trim();
+    const shift = document.getElementById('trim-shift-move')?.value || 'day';
+    const dateVal = document.getElementById('trim-date-move')?.value || '';
+    const dayStr = dateVal.split('-')[2] || '';
+    const shiftCode = shift === 'night' ? 'N' : 'D';
+    const subBatchInput = document.getElementById('trim-sub-batch-no');
+    if (subBatchInput) {
+      if (trNo && dayStr) {
+        subBatchInput.value = `${_activeBatch.jmrefNo}-${trNo}-${dayStr}-${shiftCode}`;
+      } else {
+        subBatchInput.value = '';
+      }
+    }
+  }
   function calcLoss() {
-    const out = parseInt(document.getElementById('trim-output-qty').value)||0;
-    document.getElementById('trim-loss-qty').value = Math.max(0, _trimInputQty - out);
+    const isStock = _activeBatch && (_activeBatch.isStockUpload || (_activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-')));
+    if (!isStock) {
+      const out = parseInt(document.getElementById('trim-output-qty').value)||0;
+      document.getElementById('trim-loss-qty').value = Math.max(0, _trimInputQty - out);
+    }
   }
   function process() {
     const batchId = document.getElementById('trim-batch-id').value;
     const vendorId = document.getElementById('trim-vendor').value;
     const outputQty = parseInt(document.getElementById('trim-output-qty').value);
+    const destination = document.getElementById('trim-destination').value;
+    const notes = document.getElementById('trim-notes').value.trim();
     if (!vendorId) { showToast('Please select a vendor', 'error'); return; }
     if (isNaN(outputQty) || outputQty < 0) { showToast('Enter a valid output quantity', 'error'); return; }
     if (outputQty > _trimInputQty) { showToast('Output cannot exceed input quantity', 'error'); return; }
@@ -208,11 +295,93 @@ const TrimmingModule = (() => {
     const session = Auth.getSession();
     const batch = DB.Batches.find(batchId);
     const dateStr = new Date().toISOString().slice(0,10);
-    DB.StageRecords.insert({ batchId, stage:'trimming', inputQty:_trimInputQty, outputQty, lossQty, vendorId, movedTo:'visual', movedFrom:'trimming', date:dateStr, recordedBy:session?.userId, notes:document.getElementById('trim-notes').value, iterationNo: batch?.recheckIteration||null });
+
+    const isStock = _activeBatch && (_activeBatch.isStockUpload || (_activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-')));
+    if (isStock) {
+      const trNo = (document.getElementById('trim-trno')?.value || '').trim();
+      const shift = document.getElementById('trim-shift-move')?.value || 'day';
+      const dateVal = document.getElementById('trim-date-move')?.value || '';
+      const subBatchNo = (document.getElementById('trim-sub-batch-no')?.value || '').trim();
+      const lossQty = parseInt(document.getElementById('trim-loss-qty').value) || 0;
+      
+      if (!trNo) { showToast('Please enter a TR No', 'error'); return; }
+      if (!dateVal) { showToast('Please select a production date', 'error'); return; }
+      if (!subBatchNo) { showToast('Please fill all sub-batch fields', 'error'); return; }
+      if (lossQty < 0) { showToast('Loss quantity cannot be negative', 'error'); return; }
+
+      if (DB.Batches.all().some(b => b.batchNo === subBatchNo)) {
+        showToast('Sub-batch number already exists: ' + subBatchNo, 'error');
+        return;
+      }
+
+      const totalDeducted = outputQty + lossQty;
+      if (totalDeducted > _trimInputQty) {
+        showToast(`Total processed qty (Good: ${outputQty} + Loss: ${lossQty} = ${totalDeducted}) exceeds available input quantity (${_trimInputQty})`, 'error');
+        return;
+      }
+
+      const remainingQty = Math.max(0, (_activeBatch.initialQty || 0) - totalDeducted);
+
+      DB.Batches.update(_activeBatch.id, {
+        initialQty: remainingQty,
+        status: remainingQty === 0 ? 'completed' : 'active',
+        completedAt: remainingQty === 0 ? new Date().toISOString() : null
+      });
+
+      const subBatch = DB.Batches.insert({
+        batchNo: subBatchNo,
+        partId: _activeBatch.partId,
+        partNo: _activeBatch.partNo,
+        jmrefNo: _activeBatch.jmrefNo,
+        description: _activeBatch.description,
+        currentStage: destination,
+        status: 'active',
+        initialQty: outputQty,
+        trNo,
+        shift,
+        productionDate: dateVal,
+        createdAt: new Date().toISOString(),
+        notes: 'Sub-batch created from Stock Upload pool batch: ' + _activeBatch.batchNo
+      });
+
+      DB.StageRecords.insert({
+        batchId: subBatch.id,
+        stage: 'trimming',
+        inputQty: totalDeducted,
+        outputQty: outputQty,
+        lossQty: lossQty,
+        vendorId,
+        movedTo: destination,
+        movedFrom: 'trimming',
+        date: dateStr,
+        recordedBy: session?.userId,
+        notes: notes,
+        iterationNo: batch?.recheckIteration||null
+      });
+
+      if (lossQty > 0) {
+        DB.LossTracker.insert({
+          batchId: subBatch.id,
+          stage: 'trimming',
+          lossQty,
+          date: dateStr,
+          jmrefNo: _activeBatch.jmrefNo,
+          partNo: _activeBatch.partNo,
+          iterationNo: batch?.recheckIteration||null
+        });
+      }
+
+      document.getElementById('trim-process-modal').classList.add('hidden');
+      showToast('Sub-batch created and moved to ' + (STAGE_LABELS[destination] || destination), 'success');
+      render();
+      return;
+    }
+
+    DB.StageRecords.insert({ batchId, stage:'trimming', inputQty:_trimInputQty, outputQty, lossQty, vendorId, movedTo:destination, movedFrom:'trimming', date:dateStr, recordedBy:session?.userId, notes:notes, iterationNo: batch?.recheckIteration||null });
     if (lossQty > 0) DB.LossTracker.insert({ batchId, stage:'trimming', lossQty, date:dateStr, jmrefNo:batch?.jmrefNo, partNo:batch?.partNo, iterationNo:batch?.recheckIteration||null });
-    DB.Batches.update(batchId, { currentStage:'visual' });
+    DB.Batches.update(batchId, { currentStage:destination });
     document.getElementById('trim-process-modal').classList.add('hidden');
-    showToast('Batch moved to Visual Inspection', 'success');
+    showToast('Batch moved to ' + (STAGE_LABELS[destination] || destination), 'success');
     render();
   }
   function openReject(batchId) {
@@ -246,5 +415,5 @@ const TrimmingModule = (() => {
     }
   }
 
-  return { render, openProcess, calcLoss, process, openReject, rejectBatch, filterHistory, filterPending };
+  return { render, openProcess, calcLoss, process, openReject, rejectBatch, filterHistory, filterPending, updateDynamicBatchNo };
 })();

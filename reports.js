@@ -13,7 +13,7 @@ const ReportsModule = (() => {
 
   const STAGE_LABELS = {
     production:'Production', cryogenic:'Cryogenic', deflashing:'Manual DE Flashing',
-    trimming:'Trimming', visual:'Visual', gauge:'Gauge', quality:'Quality Final', store:'Store'
+    trimming:'Trimming', 'post-curing':'Post Curing', visual:'Visual', gauge:'Gauge', quality:'Quality Final', store:'Store'
   };
 
   let agingSearch = '';
@@ -78,7 +78,7 @@ const ReportsModule = (() => {
     const master = DB.Master.all();
     const batches = DB.Batches.all();
     const stageRecords = DB.StageRecords.all();
-    const stages = ['production','cryogenic','deflashing','trimming','visual','gauge','quality','store'];
+    const stages = ['production','cryogenic','deflashing','trimming','post-curing','visual','gauge','quality','store'];
 
     let parts = master.filter(p => {
       if (jmref  && !p.jmrefNo.toLowerCase().includes(jmref.toLowerCase()))  return false;
@@ -631,6 +631,7 @@ const ReportsModule = (() => {
       cryogenic: [jmrefFilter, dateRange].join(''),
       deflashing:[jmrefFilter, dateRange].join(''),
       trimming:  [jmrefFilter, dateRange].join(''),
+      'post-curing':[jmrefFilter, dateRange].join(''),
       visual:    [jmrefFilter, dateRange].join(''),
       gauge:     [jmrefFilter, dateRange].join(''),
       rejected:  '',
@@ -662,6 +663,7 @@ const ReportsModule = (() => {
       case 'cryogenic':  result = renderStageLoss('cryogenic', filters); break;
       case 'deflashing': result = renderStageLoss('deflashing', filters); break;
       case 'trimming':   result = renderStageLoss('trimming', filters); break;
+      case 'post-curing':result = renderStageLoss('post-curing', filters); break;
       case 'visual':     result = renderStageLoss('visual', filters, ['Inspector']); break;
       case 'gauge':      result = renderStageLoss('gauge', filters); break;
       case 'rejected':   result = renderRejected(); break;
@@ -693,6 +695,7 @@ const ReportsModule = (() => {
     { key:'cryogenic',  label:'❄️ Cryogenic Loss Report',      desc:'Loss during cryogenic processing' },
     { key:'deflashing', label:'🔧 DE Flashing Loss Report',    desc:'Loss during manual DE flashing' },
     { key:'trimming',   label:'✂️ Trimming Loss Report',       desc:'Loss during trimming process' },
+    { key:'post-curing',label:'🔥 Post Curing Loss Report',     desc:'Loss during post curing process' },
     { key:'visual',     label:'👁️ Visual Inspection Report',   desc:'Inspector-wise loss and inspection records' },
     { key:'gauge',      label:'📏 Gauge Inspection Report',    desc:'Loss during gauge inspection' },
     { key:'rejected',   label:'🚫 Rejected Batch Report',      desc:'All batches rejected due to quality issues' },

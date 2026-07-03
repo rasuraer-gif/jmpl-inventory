@@ -10,7 +10,7 @@ const QualityModule = (() => {
 
   function getInputQty(batchId) {
     const recs = DB.StageRecords.all().filter(r => r.batchId === batchId && r.movedTo === 'quality');
-    if (!recs.length) return 0;
+    if (!recs.length) return (DB.Batches.find(batchId)||{}).initialQty||0;
     const lastRec = recs[recs.length - 1];
     return lastRec.isRecheck ? lastRec.recheckQty : lastRec.outputQty;
   }
@@ -23,11 +23,13 @@ const QualityModule = (() => {
     const allRechecks = DB.RecheckTracker.all();
     const thisMonth = new Date().toISOString().slice(0,7);
     const passedThisMonth = DB.Batches.byStatus('completed').filter(b=>(b.completedAt||'').startsWith(thisMonth)).length;
+    const totalQty = batches.reduce((sum, b) => sum + getInputQty(b.id), 0);
     el.innerHTML = `
       <div class="animate-in">
         <div class="mb-6"><h2 class="font-bold" style="font-size:20px;">Quality Final</h2><p class="text-sm text-muted mt-1">Final quality check — Pass to Store, Reject, or Send for Recheck</p></div>
-        <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));max-width:720px;margin-bottom:24px;">
+        <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));max-width:760px;margin-bottom:24px;">
           <div class="stat-card red"><div class="stat-label">Pending</div><div class="stat-value red">${batches.length}</div></div>
+          <div class="stat-card teal"><div class="stat-label">Pending Qty</div><div class="stat-value teal">${formatNum(totalQty)}</div></div>
           <div class="stat-card green"><div class="stat-label">Passed This Month</div><div class="stat-value green">${passedThisMonth}</div></div>
           <div class="stat-card amber"><div class="stat-label">Total Rejected</div><div class="stat-value amber">${allRejected.length}</div></div>
           <div class="stat-card blue"><div class="stat-label">Rechecks Issued</div><div class="stat-value blue">${allRechecks.length}</div></div>

@@ -317,7 +317,7 @@ const DB = (() => {
         username: 'admin',
         password: 'admin123',
         role: 'admin',
-        permissions: ['admin','master','production','cryogenic','deflashing','trimming','visual','gauge','quality','store','stock','report_inventory','report_sales','report_production','report_cryogenic','report_deflashing','report_trimming','report_visual','report_gauge','report_rejected','report_recheck'],
+        permissions: ['admin','master','production','cryogenic','deflashing','trimming','post-curing','visual','gauge','quality','store','stock','report_inventory','report_sales','report_production','report_cryogenic','report_deflashing','report_trimming','report_post_curing','report_visual','report_gauge','report_rejected','report_recheck'],
         active: true
       });
     }
