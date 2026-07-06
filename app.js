@@ -53,7 +53,7 @@ function printBarcode(batchId) {
   printWindow.document.write(`
     <html>
     <head>
-      <title>Print Label - \${batch.batchNo}</title>
+      <title>Print Label - ${batch.batchNo}</title>
       <style>
         @page {
           size: 4in 6in;
@@ -138,21 +138,21 @@ function printBarcode(batchId) {
       <div class="label-container">
         <div class="company-title">JANANI MOULDINGS PVT. LTD.</div>
         <div class="qr-wrapper">
-          <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=\${encodeURIComponent(batch.batchNo)}" style="width: 200px; height: 200px; display: block;" onload="triggerPrint()" />
+          <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(batch.batchNo)}" style="width: 200px; height: 200px; display: block;" onload="triggerPrint()" />
         </div>
-        <div class="batch-no-display">\${batch.batchNo}</div>
+        <div class="batch-no-display">${batch.batchNo}</div>
         <div class="details">
           <div class="detail-row">
             <span class="label">JMREF:</span>
-            <span class="value">\${batch.jmrefNo}</span>
+            <span class="value">${batch.jmrefNo}</span>
           </div>
           <div class="detail-row">
             <span class="label">Part No:</span>
-            <span class="value">\${batch.partNo || '—'}</span>
+            <span class="value">${batch.partNo || '—'}</span>
           </div>
           <div class="detail-row">
             <span class="label">Prod Date:</span>
-            <span class="value">\${formattedDate}</span>
+            <span class="value">${formattedDate}</span>
           </div>
         </div>
       </div>
