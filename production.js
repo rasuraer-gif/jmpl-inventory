@@ -120,7 +120,9 @@ const ProductionModule = (() => {
   }
 
   function createBatchTab() {
-    const todayStr = new Date().toISOString().slice(0,10);
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    const yesterdayStr = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
     const subs   = DB.Subcontractors.active();
     const ops    = DB.Operators.active();
     const subOpts  = subs.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
@@ -164,7 +166,7 @@ const ProductionModule = (() => {
             </div>
             <div class="form-group" style="flex:1;">
               <label class="form-label">Production Date <span class="required">*</span></label>
-              <input type="date" id="prod-date" class="form-control" value="${todayStr}" onchange="ProductionModule.updateDynamicBatchNo()">
+              <input type="date" id="prod-date" class="form-control" value="${yesterdayStr}" onchange="ProductionModule.updateDynamicBatchNo()">
             </div>
           </div>
 
@@ -621,7 +623,10 @@ const ProductionModule = (() => {
     if (type !== 'subcontractor' && !opId) { showToast('Please select an operator', 'error'); return; }
     
     const lifts = parseInt(document.getElementById('prod-lifts')?.value) || 0;
-    const prodDate = document.getElementById('prod-date')?.value || new Date().toISOString().slice(0,10);
+    const dYesterday = new Date();
+    dYesterday.setDate(dYesterday.getDate() - 1);
+    const yesterdayStr = dYesterday.getFullYear() + '-' + String(dYesterday.getMonth() + 1).padStart(2, '0') + '-' + String(dYesterday.getDate()).padStart(2, '0');
+    const prodDate = document.getElementById('prod-date')?.value || yesterdayStr;
     const subId = type === 'subcontractor' ? document.getElementById('prod-sub')?.value : null;
     if (type === 'subcontractor' && !subId) { showToast('Please select a subcontractor', 'error'); return; }
     
@@ -714,141 +719,7 @@ const ProductionModule = (() => {
   }
 
   function printBarcode(batchId) {
-    const batch = DB.Batches.find(batchId);
-    if (!batch) { showToast('Batch not found', 'error'); return; }
-
-    const printWindow = window.open('', '_blank', 'width=600,height=800');
-    if (!printWindow) {
-      showToast('Popup blocked! Please allow popups for printing.', 'warning');
-      return;
-    }
-
-    const formattedDate = batch.productionDate ? formatDate(batch.productionDate) : formatDate(batch.createdAt);
-
-    printWindow.document.write(`
-      <html>
-      <head>
-        <title>Print Label - ${batch.batchNo}</title>
-        <style>
-          @page {
-            size: 4in 6in;
-            margin: 0;
-          }
-          body {
-            margin: 0;
-            padding: 0;
-            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            height: 100vh;
-            width: 100vw;
-            background: #fff;
-            color: #000;
-            box-sizing: border-box;
-          }
-          .label-container {
-            width: 3.8in;
-            height: 5.8in;
-            border: 3px solid #000;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: space-between;
-            box-sizing: border-box;
-            padding: 16px;
-          }
-          .company-title {
-            font-size: 20px;
-            font-weight: 900;
-            letter-spacing: 0.5px;
-            border-bottom: 3px solid #000;
-            padding-bottom: 6px;
-            width: 100%;
-            text-align: center;
-            text-transform: uppercase;
-          }
-          .qr-wrapper {
-            margin: 12px 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-          }
-          .batch-no-display {
-            font-size: 28px;
-            font-weight: 800;
-            letter-spacing: 0.5px;
-            margin-bottom: 12px;
-            border: 3px solid #000;
-            padding: 8px 16px;
-            border-radius: 4px;
-            background: #f3f4f6;
-            text-align: center;
-          }
-          .details {
-            width: 100%;
-            border-top: 3px solid #000;
-            padding-top: 12px;
-            font-size: 18px;
-          }
-          .detail-row {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 8px;
-            line-height: 1.3;
-          }
-          .label {
-            font-weight: 800;
-            text-transform: uppercase;
-            font-size: 18px;
-          }
-          .value {
-            font-weight: 800;
-            font-size: 20px;
-            white-space: nowrap;
-          }
-        </style>
-      </head>
-      <body>
-        <div class="label-container">
-          <div class="company-title">JANANI MOULDINGS PVT. LTD.</div>
-          <div class="qr-wrapper">
-            <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(batch.batchNo)}" style="width: 200px; height: 200px; display: block;" onload="triggerPrint()" />
-          </div>
-          <div class="batch-no-display">${batch.batchNo}</div>
-          <div class="details">
-            <div class="detail-row">
-              <span class="label">JMREF:</span>
-              <span class="value">${batch.jmrefNo}</span>
-            </div>
-            <div class="detail-row">
-              <span class="label">Part No:</span>
-              <span class="value">${batch.partNo || '—'}</span>
-            </div>
-            <div class="detail-row">
-              <span class="label">Prod Date:</span>
-              <span class="value">${formattedDate}</span>
-            </div>
-          </div>
-        </div>
-        <script>
-          let printed = false;
-          function triggerPrint() {
-            if (printed) return;
-            printed = true;
-            setTimeout(function() {
-              window.print();
-              window.close();
-            }, 300);
-          }
-          window.onload = function() {
-            setTimeout(triggerPrint, 1000); // fallback in case image load event doesn't fire
-          };
-        </script>
-      </body>
-      </html>
-    `);
-    printWindow.document.close();
+    window.printBarcode(batchId);
   }
 
   function filterPending(val) {

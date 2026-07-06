@@ -147,7 +147,7 @@ const TrimmingModule = (() => {
     const vendorOpts = vendors.map(v=>`<option value="${v.id}">${v.name}</option>`).join('');
     return `<div class="modal-overlay hidden" id="trim-process-modal">
       <div class="modal modal-sm">
-        <div class="modal-header"><h3>Process &amp; Move to Visual</h3><button class="modal-close" onclick="document.getElementById('trim-process-modal').classList.add('hidden')">&#x2715;</button></div>
+        <div class="modal-header"><h3>Process &amp; Move</h3><button class="modal-close" onclick="document.getElementById('trim-process-modal').classList.add('hidden')">&#x2715;</button></div>
         <div class="modal-body">
           <input type="hidden" id="trim-batch-id">
           <input type="hidden" id="trim-input-qty">
@@ -159,7 +159,7 @@ const TrimmingModule = (() => {
           <div class="form-group"><label class="form-label">Loss Quantity (Auto)</label><input type="text" id="trim-loss-qty" class="form-control" readonly style="color:var(--accent-red);font-weight:700;"></div>
           <div class="form-group"><label class="form-label">Destination <span class="required">*</span></label>
             <select id="trim-destination" class="form-control">
-              <option value="visual">Visual Inspection</option>
+              <option value="waiting-visual">Waiting for Visual inspection</option>
               <option value="post-curing">Post Curing</option>
             </select>
           </div>

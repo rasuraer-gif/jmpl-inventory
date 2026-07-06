@@ -38,6 +38,145 @@ function formatNum(n) { return n == null ? '0' : Number(n).toLocaleString('en-IN
 function today() { return new Date().toISOString().slice(0,10); }
 function nowISO() { return new Date().toISOString(); }
 
+function printBarcode(batchId) {
+  const batch = DB.Batches.find(batchId);
+  if (!batch) { showToast('Batch not found', 'error'); return; }
+
+  const printWindow = window.open('', '_blank', 'width=600,height=800');
+  if (!printWindow) {
+    showToast('Popup blocked! Please allow popups for printing.', 'warning');
+    return;
+  }
+
+  const formattedDate = batch.productionDate ? formatDate(batch.productionDate) : formatDate(batch.createdAt);
+
+  printWindow.document.write(`
+    <html>
+    <head>
+      <title>Print Label - \${batch.batchNo}</title>
+      <style>
+        @page {
+          size: 4in 6in;
+          margin: 0;
+        }
+        body {
+          margin: 0;
+          padding: 0;
+          font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          height: 100vh;
+          width: 100vw;
+          background: #fff;
+          color: #000;
+          box-sizing: border-box;
+        }
+        .label-container {
+          width: 3.8in;
+          height: 5.8in;
+          border: 3px solid #000;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: space-between;
+          box-sizing: border-box;
+          padding: 16px;
+        }
+        .company-title {
+          font-size: 20px;
+          font-weight: 900;
+          letter-spacing: 0.5px;
+          border-bottom: 3px solid #000;
+          padding-bottom: 6px;
+          width: 100%;
+          text-align: center;
+          text-transform: uppercase;
+        }
+        .qr-wrapper {
+          margin: 12px 0;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .batch-no-display {
+          font-size: 28px;
+          font-weight: 800;
+          letter-spacing: 0.5px;
+          margin-bottom: 12px;
+          border: 3px solid #000;
+          padding: 8px 16px;
+          border-radius: 4px;
+          background: #f3f4f6;
+          text-align: center;
+        }
+        .details {
+          width: 100%;
+          border-top: 3px solid #000;
+          padding-top: 12px;
+          font-size: 18px;
+        }
+        .detail-row {
+          display: flex;
+          justify-content: space-between;
+          margin-bottom: 8px;
+          line-height: 1.3;
+        }
+        .label {
+          font-weight: 800;
+          text-transform: uppercase;
+          font-size: 18px;
+        }
+        .value {
+          font-weight: 800;
+          font-size: 20px;
+          white-space: nowrap;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="label-container">
+        <div class="company-title">JANANI MOULDINGS PVT. LTD.</div>
+        <div class="qr-wrapper">
+          <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=\${encodeURIComponent(batch.batchNo)}" style="width: 200px; height: 200px; display: block;" onload="triggerPrint()" />
+        </div>
+        <div class="batch-no-display">\${batch.batchNo}</div>
+        <div class="details">
+          <div class="detail-row">
+            <span class="label">JMREF:</span>
+            <span class="value">\${batch.jmrefNo}</span>
+          </div>
+          <div class="detail-row">
+            <span class="label">Part No:</span>
+            <span class="value">\${batch.partNo || '—'}</span>
+          </div>
+          <div class="detail-row">
+            <span class="label">Prod Date:</span>
+            <span class="value">\${formattedDate}</span>
+          </div>
+        </div>
+      </div>
+      <script>
+        let printed = false;
+        function triggerPrint() {
+          if (printed) return;
+          printed = true;
+          setTimeout(function() {
+            window.print();
+            window.close();
+          }, 300);
+        }
+        window.onload = function() {
+          setTimeout(triggerPrint, 1000); // fallback in case image load event doesn't fire
+        };
+      </script>
+    </body>
+    </html>
+  `);
+  printWindow.document.close();
+}
+window.printBarcode = printBarcode;
+
 // Close modal on overlay click
 document.addEventListener('click', e => {
   if (e.target.classList.contains('modal-overlay')) closeAllModals();
@@ -57,6 +196,7 @@ const NAV = [
   { id:'deflashing', label:'Flash Removal',       icon:'🔧', module:'deflashing',section:'dept', perm:'deflashing' },
   { id:'trimming',   label:'Trimming',            icon:'✂️', module:'trimming',  section:'dept', perm:'trimming' },
   { id:'post-curing', label:'Post Curing',          icon:'🔥', module:'post-curing',section:'dept', perm:'post-curing' },
+  { id:'waiting-visual', label:'Waiting for Visual inspection', icon:'⏳', module:'waiting-visual',section:'dept', perm:'waiting-visual' },
   { id:'visual',     label:'Visual Inspection',   icon:'👁️', module:'visual',    section:'dept', perm:'visual' },
   { id:'gauge',      label:'Gauge Inspection',    icon:'📏', module:'gauge',     section:'dept', perm:'gauge' },
   { id:'quality',    label:'Quality Final',       icon:'⭐', module:'quality',   section:'dept', perm:'quality' },
@@ -75,6 +215,7 @@ const NAV = [
   { id:'rpt-deflashing',label:'Flash Removal Loss',icon:'🔧', module:'report_deflashing',section:'tools', parent:'reports', perm:'report_deflashing' },
   { id:'rpt-trimming',  label:'Trimming Loss',     icon:'✂️', module:'report_trimming',  section:'tools', parent:'reports', perm:'report_trimming' },
   { id:'rpt-post-curing', label:'Post Curing Loss', icon:'🔥', module:'report_post_curing', section:'tools', parent:'reports', perm:'report_post_curing' },
+  { id:'rpt-waiting-visual', label:'Waiting for Visual Report', icon:'⏳', module:'report_waiting_visual', section:'tools', parent:'reports', perm:'report_waiting_visual' },
   { id:'rpt-visual',    label:'Visual Inspection', icon:'👁️', module:'report_visual',    section:'tools', parent:'reports', perm:'report_visual' },
   { id:'rpt-gauge',     label:'Gauge Inspection',  icon:'📏', module:'report_gauge',     section:'tools', parent:'reports', perm:'report_gauge' },
   { id:'rpt-rejected',  label:'Rejected Batches',  icon:'🚫', module:'report_rejected',  section:'tools', parent:'reports', perm:'report_rejected' },
@@ -82,6 +223,7 @@ const NAV = [
   { id:'rpt-slob',      label:'SLOB Report',       icon:'📉', module:'report_slob',      section:'tools', parent:'reports', perm:'report_inventory' },
   { id:'rpt-aging',     label:'Aging WIP Report',  icon:'⏳', module:'report_aging',     section:'tools', parent:'reports', perm:'report_inventory' },
 
+  { id:'print-batch',  label:'Print Label',        icon:'🖨️', module:'print-batch',  section:'tools' },
   { id:'ai-agent',   label:'AI Assistant',        icon:'🤖', module:'ai-agent',  section:'tools' },
   // Admin
   { id:'admin',      label:'Admin Panel',         icon:'⚙️', module:'admin',     section:'admin', adminOnly:true },
@@ -102,6 +244,7 @@ const App = (() => {
     deflashing: () => DeflashingModule?.render(),
     trimming:   () => TrimmingModule?.render(),
     'post-curing': () => PostCuringModule?.render(),
+    'waiting-visual': () => WaitingVisualModule?.render(),
     visual:     () => VisualModule?.render(),
     gauge:      () => GaugeModule?.render(),
     quality:    () => QualityModule?.render(),
@@ -120,12 +263,14 @@ const App = (() => {
     report_deflashing: () => ReportsModule?.render('deflashing'),
     report_trimming:   () => ReportsModule?.render('trimming'),
     report_post_curing: () => ReportsModule?.render('post-curing'),
+    report_waiting_visual: () => ReportsModule?.render('waiting-visual'),
     report_visual:     () => ReportsModule?.render('visual'),
     report_gauge:      () => ReportsModule?.render('gauge'),
     report_rejected:   () => ReportsModule?.render('rejected'),
     report_recheck:    () => ReportsModule?.render('recheck'),
     report_slob:       () => ReportsModule?.render('slob'),
     report_aging:      () => ReportsModule?.render('aging'),
+    'print-batch':     () => PrintBatchModule?.render(),
   };
 
   const PAGE_TITLES = {
@@ -133,7 +278,9 @@ const App = (() => {
     cryogenic:'Cryogenic', deflashing:'Flash Removal', trimming:'Trimming',
     visual:'Visual Inspection', gauge:'Gauge Inspection', quality:'Quality Final',
     'post-curing':'Post Curing',
+    'waiting-visual':'Waiting for Visual inspection',
     store:'Store & Sales', stock:'Stock Upload', reports:'Reports', admin:'Admin Panel',
+    'print-batch':'Print Label',
     'ai-agent':'AI Assistant',
     'monthly-plan':'Monthly Plan',
     'prod-sched':'Production Schedule',
@@ -145,6 +292,7 @@ const App = (() => {
     report_deflashing:'Flash Removal Loss Report',
     report_trimming:'Trimming Loss Report',
     report_post_curing:'Post Curing Loss Report',
+    report_waiting_visual:'Waiting for Visual Report',
     report_visual:'Visual Inspection Report',
     report_gauge:'Gauge Inspection Report',
     report_rejected:'Rejected Batch Report',
@@ -431,7 +579,7 @@ function renderDashboard() {
 
   // Critical replenishments (stock < 30% of target level)
   let criticalCount = 0;
-  const STAGES = ['production', 'cryogenic', 'deflashing', 'trimming', 'post-curing', 'visual', 'gauge', 'quality'];
+  const STAGES = ['production', 'cryogenic', 'deflashing', 'trimming', 'post-curing', 'waiting-visual', 'visual', 'gauge', 'quality'];
   
   function getStageLossRate(partId, stage) {
     const stageRecords = DB.StageRecords.all().filter(r => {
@@ -489,8 +637,8 @@ function renderDashboard() {
   });
 
   // Stage pipeline
-  const STAGE_ICONS = { production:'🏭', cryogenic:'❄️', deflashing:'🔧', trimming:'✂️', 'post-curing':'🔥', visual:'👁️', gauge:'📏', quality:'⭐', store:'🏪' };
-  const STAGE_NAMES = { production:'Production', cryogenic:'Cryogenic', deflashing:'DE Flashing', trimming:'Trimming', 'post-curing':'Post Curing', visual:'Visual', gauge:'Gauge', quality:'QC Final', store:'Store' };
+  const STAGE_ICONS = { production:'🏭', cryogenic:'❄️', deflashing:'🔧', trimming:'✂️', 'post-curing':'🔥', 'waiting-visual':'⏳', visual:'👁️', gauge:'📏', quality:'⭐', store:'🏪' };
+  const STAGE_NAMES = { production:'Production', cryogenic:'Cryogenic', deflashing:'DE Flashing', trimming:'Trimming', 'post-curing':'Post Curing', 'waiting-visual':'Waiting for Visual', visual:'Visual', gauge:'Gauge', quality:'QC Final', store:'Store' };
 
   const pipelineHtml = STAGES.map(stage => {
     const count = batches.filter(b => b.currentStage === stage && b.status === 'active').length;

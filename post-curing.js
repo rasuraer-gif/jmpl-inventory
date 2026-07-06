@@ -168,7 +168,7 @@ const PostCuringModule = (() => {
           <div id="pc-batch-info" style="padding:12px;background:var(--bg-input);border-radius:8px;margin-bottom:16px;"></div>
           <div class="form-group"><label class="form-label">Output Quantity <span class="required">*</span></label><input type="number" id="pc-output-qty" class="form-control" min="0" oninput="PostCuringModule.calcLoss()"></div>
           <div class="form-group"><label class="form-label">Loss Quantity (Auto)</label><input type="text" id="pc-loss-qty" class="form-control" readonly style="color:var(--accent-red);font-weight:700;"></div>
-          <div class="form-group"><label class="form-label">Destination</label><input type="text" class="form-control" value="Visual Inspection" readonly style="opacity:0.6;"></div>
+          <div class="form-group"><label class="form-label">Destination</label><input type="text" class="form-control" value="Waiting for Visual inspection" readonly style="opacity:0.6;"></div>
           
           <div id="pc-stock-fields" class="hidden">
             <hr style="margin: 16px 0; border: 0; border-top: 1px solid var(--border);">
@@ -340,7 +340,7 @@ const PostCuringModule = (() => {
         partNo: _activeBatch.partNo,
         jmrefNo: _activeBatch.jmrefNo,
         description: _activeBatch.description,
-        currentStage: 'visual',
+        currentStage: 'waiting-visual',
         status: 'active',
         initialQty: outputQty,
         trNo,
@@ -356,7 +356,7 @@ const PostCuringModule = (() => {
         inputQty: totalDeducted,
         outputQty: outputQty,
         lossQty: lossQty,
-        movedTo: 'visual',
+        movedTo: 'waiting-visual',
         movedFrom: 'post-curing',
         date: dateStr,
         recordedBy: session?.userId,
@@ -375,16 +375,16 @@ const PostCuringModule = (() => {
       }
 
       document.getElementById('pc-process-modal').classList.add('hidden');
-      showToast('Sub-batch created and moved to Visual Inspection', 'success');
+      showToast('Sub-batch created and moved to Waiting for Visual inspection', 'success');
       render();
       return;
     }
 
-    DB.StageRecords.insert({ batchId, stage:'post-curing', inputQty:_pcInputQty, outputQty, lossQty, movedTo:'visual', movedFrom:'post-curing', date:dateStr, recordedBy:session&&session.userId, notes:notes });
+    DB.StageRecords.insert({ batchId, stage:'post-curing', inputQty:_pcInputQty, outputQty, lossQty, movedTo:'waiting-visual', movedFrom:'post-curing', date:dateStr, recordedBy:session&&session.userId, notes:notes });
     if (lossQty > 0) DB.LossTracker.insert({ batchId, stage:'post-curing', lossQty, date:dateStr, jmrefNo:batch&&batch.jmrefNo, partNo:batch&&batch.partNo });
-    DB.Batches.update(batchId, { currentStage:'visual' });
+    DB.Batches.update(batchId, { currentStage:'waiting-visual' });
     document.getElementById('pc-process-modal').classList.add('hidden');
-    showToast('Batch moved to Visual Inspection', 'success');
+    showToast('Batch moved to Waiting for Visual inspection', 'success');
     render();
   }
 

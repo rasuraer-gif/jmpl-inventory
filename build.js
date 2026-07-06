@@ -23,6 +23,8 @@ const filesToCopy = [
   'deflashing.js',
   'trimming.js',
   'post-curing.js',
+  'waiting-visual.js',
+  'print-batch.js',
   'visual.js',
   'gauge.js',
   'quality.js',

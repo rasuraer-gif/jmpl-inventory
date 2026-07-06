@@ -147,6 +147,7 @@ const DB = (() => {
 
       // 4. Prompt for migration if local data exists but Cloud DB is empty
       await checkAndMigrate();
+      runVisualMigration();
 
     } catch (e) {
       console.error("Failed to initialize Firebase database:", e);
@@ -199,6 +200,54 @@ const DB = (() => {
           if (typeof showToast === 'function') showToast("Cloud migration failed: " + err.message, "error");
         }
       }
+    }
+  }
+
+  function runVisualMigration() {
+    let migratedBatchesCount = 0;
+    let migratedRecordsCount = 0;
+
+    cache.batches.forEach(b => {
+      if (b.currentStage === 'visual' && b.status === 'active') {
+        b.currentStage = 'waiting-visual';
+        b.updatedAt = new Date().toISOString();
+        migratedBatchesCount++;
+
+        // Update in Firestore
+        if (db) {
+          const docData = { ...b };
+          delete docData.id;
+          db.collection('batches').doc(b.id).set(docData).catch(err => {
+            console.error(`Migration set error on batch ${b.id}:`, err);
+          });
+        }
+
+        // Find last stage record for this batch where movedTo was 'visual'
+        const records = cache.stageRecords.filter(r => r.batchId === b.id && r.movedTo === 'visual');
+        if (records.length > 0) {
+          records.sort((a, b) => (a.createdAt || a.date || '').localeCompare(b.createdAt || b.date || ''));
+          const lastRec = records[records.length - 1];
+          lastRec.movedTo = 'waiting-visual';
+          lastRec.updatedAt = new Date().toISOString();
+          migratedRecordsCount++;
+
+          if (db) {
+            const docData = { ...lastRec };
+            delete docData.id;
+            db.collection('stageRecords').doc(lastRec.id).set(docData).catch(err => {
+              console.error(`Migration set error on stageRecord ${lastRec.id}:`, err);
+            });
+          }
+        }
+      }
+    });
+
+    if (migratedBatchesCount > 0) {
+      localStorage.setItem(PREFIX + 'batches', JSON.stringify(cache.batches));
+      if (migratedRecordsCount > 0) {
+        localStorage.setItem(PREFIX + 'stageRecords', JSON.stringify(cache.stageRecords));
+      }
+      console.log(`[Migration] Successfully moved ${migratedBatchesCount} batches and ${migratedRecordsCount} stage records to "waiting-visual".`);
     }
   }
 
@@ -317,7 +366,7 @@ const DB = (() => {
         username: 'admin',
         password: 'admin123',
         role: 'admin',
-        permissions: ['admin','master','production','cryogenic','deflashing','trimming','post-curing','visual','gauge','quality','store','stock','report_inventory','report_sales','report_production','report_cryogenic','report_deflashing','report_trimming','report_post_curing','report_visual','report_gauge','report_rejected','report_recheck'],
+        permissions: ['admin','master','production','cryogenic','deflashing','trimming','post-curing','waiting-visual','visual','gauge','quality','store','stock','report_inventory','report_sales','report_production','report_cryogenic','report_deflashing','report_trimming','report_post_curing','report_waiting_visual','report_visual','report_gauge','report_rejected','report_recheck'],
         active: true
       });
     }

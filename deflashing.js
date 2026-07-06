@@ -175,7 +175,7 @@ const DeflashingModule = (() => {
           <div class="form-group"><label class="form-label">Destination <span class="required">*</span></label>
             <select id="de-destination" class="form-control">
               <option value="trimming">Trimming</option>
-              <option value="visual">Visual Inspection</option>
+              <option value="waiting-visual">Waiting for Visual inspection</option>
             </select>
           </div>
           <div id="de-stock-fields" class="hidden">

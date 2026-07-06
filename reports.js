@@ -8,12 +8,12 @@ const ReportsModule = (() => {
 
   const MODULES = [
     'inventory','sales','production','cryogenic','deflashing',
-    'trimming','visual','gauge','rejected','recheck','slob','aging'
+    'trimming','waiting-visual','visual','gauge','rejected','recheck','slob','aging'
   ];
 
   const STAGE_LABELS = {
     production:'Production', cryogenic:'Cryogenic', deflashing:'Manual DE Flashing',
-    trimming:'Trimming', 'post-curing':'Post Curing', visual:'Visual', gauge:'Gauge', quality:'Quality Final', store:'Store'
+    trimming:'Trimming', 'post-curing':'Post Curing', 'waiting-visual':'Waiting for Visual', visual:'Visual', gauge:'Gauge', quality:'Quality Final', store:'Store'
   };
 
   let agingSearch = '';
@@ -78,7 +78,7 @@ const ReportsModule = (() => {
     const master = DB.Master.all();
     const batches = DB.Batches.all();
     const stageRecords = DB.StageRecords.all();
-    const stages = ['production','cryogenic','deflashing','trimming','post-curing','visual','gauge','quality','store'];
+    const stages = ['production','cryogenic','deflashing','trimming','post-curing','waiting-visual','visual','gauge','quality','store'];
 
     let parts = master.filter(p => {
       if (jmref  && !p.jmrefNo.toLowerCase().includes(jmref.toLowerCase()))  return false;
@@ -259,6 +259,110 @@ const ReportsModule = (() => {
       <thead><tr>${headers.map(th).join('')}</tr></thead>
       <tbody>${dataRows.map(r=>`<tr>${r.map(v=>td(v)).join('')}</tr>`).join('')}</tbody>
     </table></div>`;
+    return { html, headers, dataRows };
+  }
+
+  function renderWaitingVisualReport(filters) {
+    const { from, to, jmref } = filters;
+    const batches = DB.Batches.all();
+    const stageRecords = DB.StageRecords.all();
+    
+    // Find all batches currently in waiting-visual OR that historically have a stage record for it.
+    const targetBatchIds = new Set(
+      batches.filter(b => b.currentStage === 'waiting-visual').map(b => b.id)
+    );
+    stageRecords.filter(r => r.stage === 'waiting-visual').forEach(r => targetBatchIds.add(r.batchId));
+    
+    let filtered = Array.from(targetBatchIds).map(id => DB.Batches.find(id)).filter(Boolean);
+    
+    if (jmref) {
+      const q = jmref.toLowerCase();
+      filtered = filtered.filter(b => 
+        (b.batchNo || '').toLowerCase().includes(q) || 
+        (b.jmrefNo || '').toLowerCase().includes(q) ||
+        (b.partNo || '').toLowerCase().includes(q)
+      );
+    }
+    
+    // Filter by date range (using stage entry date or batch creation date)
+    filtered = filtered.filter(b => {
+      const recs = stageRecords.filter(r => r.batchId === b.id && r.movedTo === 'waiting-visual');
+      const dateStr = recs.length ? (recs[recs.length - 1].date || recs[recs.length - 1].createdAt || '') : (b.createdAt || '');
+      const d = dateStr.slice(0, 10);
+      if (from && d < from) return false;
+      if (to && d > to) return false;
+      return true;
+    });
+    
+    if (!filtered.length) return emptyState();
+    
+    const headers = ['#', 'Batch No', 'JMREF No', 'Part No', 'Allocated Qty', 'Rack No', 'Location', 'Box No', 'Additional Details', 'Stage Entry Date', 'Current Stage'];
+    
+    const dataRows = filtered.map((b, i) => {
+      const recs = stageRecords.filter(r => r.batchId === b.id && r.movedTo === 'waiting-visual');
+      const qty = recs.length ? (recs[recs.length - 1].outputQty || 0) : (b.initialQty || 0);
+      const dateStr = recs.length ? (recs[recs.length - 1].date || recs[recs.length - 1].createdAt || '') : (b.createdAt || '');
+      
+      return [
+        i + 1,
+        b.batchNo || '',
+        b.jmrefNo || '',
+        b.partNo || '',
+        qty,
+        b.rackNo || '—',
+        b.rackLocation || '—',
+        b.boxNo || '—',
+        b.rackNotes || '—',
+        dateStr.slice(0, 10),
+        STAGE_LABELS[b.currentStage] || b.currentStage
+      ];
+    });
+    
+    const htmlRows = filtered.map((b, i) => {
+      const recs = stageRecords.filter(r => r.batchId === b.id && r.movedTo === 'waiting-visual');
+      const qty = recs.length ? (recs[recs.length - 1].outputQty || 0) : (b.initialQty || 0);
+      const dateStr = recs.length ? (recs[recs.length - 1].date || recs[recs.length - 1].createdAt || '') : (b.createdAt || '');
+      
+      return `
+        <tr>
+          <td>${i + 1}</td>
+          <td class="font-semibold text-blue">${b.batchNo}</td>
+          <td><span class="badge badge-teal">${b.jmrefNo}</span></td>
+          <td class="font-semibold">${b.partNo}</td>
+          <td class="font-bold">${formatNum(qty)}</td>
+          <td><span class="badge badge-blue">${b.rackNo || '—'}</span></td>
+          <td><strong>${b.rackLocation || '—'}</strong></td>
+          <td>${b.boxNo || '—'}</td>
+          <td class="text-sm text-muted">${b.rackNotes || '—'}</td>
+          <td>${formatDate(dateStr.slice(0,10))}</td>
+          <td><span class="stage-chip ${b.currentStage}">${STAGE_LABELS[b.currentStage] || b.currentStage}</span></td>
+        </tr>`;
+    }).join('');
+    
+    const html = `
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Batch No</th>
+              <th>JMREF No</th>
+              <th>Part No</th>
+              <th>Allocated Qty</th>
+              <th>Rack No</th>
+              <th>Location</th>
+              <th>Box No</th>
+              <th>Additional Details</th>
+              <th>Stage Entry Date</th>
+              <th>Current Stage</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${htmlRows}
+          </tbody>
+        </table>
+      </div>`;
+      
     return { html, headers, dataRows };
   }
 
@@ -632,6 +736,7 @@ const ReportsModule = (() => {
       deflashing:[jmrefFilter, dateRange].join(''),
       trimming:  [jmrefFilter, dateRange].join(''),
       'post-curing':[jmrefFilter, dateRange].join(''),
+      'waiting-visual':[jmrefFilter, dateRange].join(''),
       visual:    [jmrefFilter, dateRange].join(''),
       gauge:     [jmrefFilter, dateRange].join(''),
       rejected:  '',
@@ -664,6 +769,7 @@ const ReportsModule = (() => {
       case 'deflashing': result = renderStageLoss('deflashing', filters); break;
       case 'trimming':   result = renderStageLoss('trimming', filters); break;
       case 'post-curing':result = renderStageLoss('post-curing', filters); break;
+      case 'waiting-visual':result = renderWaitingVisualReport(filters); break;
       case 'visual':     result = renderStageLoss('visual', filters, ['Inspector']); break;
       case 'gauge':      result = renderStageLoss('gauge', filters); break;
       case 'rejected':   result = renderRejected(); break;
@@ -696,6 +802,7 @@ const ReportsModule = (() => {
     { key:'deflashing', label:'🔧 DE Flashing Loss Report',    desc:'Loss during manual DE flashing' },
     { key:'trimming',   label:'✂️ Trimming Loss Report',       desc:'Loss during trimming process' },
     { key:'post-curing',label:'🔥 Post Curing Loss Report',     desc:'Loss during post curing process' },
+    { key:'waiting-visual',label:'⏳ Waiting for Visual Report', desc:'Rack allocation and location details' },
     { key:'visual',     label:'👁️ Visual Inspection Report',   desc:'Inspector-wise loss and inspection records' },
     { key:'gauge',      label:'📏 Gauge Inspection Report',    desc:'Loss during gauge inspection' },
     { key:'rejected',   label:'🚫 Rejected Batch Report',      desc:'All batches rejected due to quality issues' },
