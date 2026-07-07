@@ -207,20 +207,6 @@ const GaugeModule = (() => {
       }
     }
 
-    const isStock = b.isStockUpload || (b.batchNo && b.batchNo.includes('-REC-'));
-    const stockFields = document.getElementById('gauge-stock-fields');
-    if (stockFields) {
-      if (isStock) {
-        stockFields.classList.remove('hidden');
-        document.getElementById('gauge-trno').value = '';
-        document.getElementById('gauge-shift-move').value = 'day';
-        document.getElementById('gauge-date-move').value = new Date().toISOString().slice(0,10);
-        document.getElementById('gauge-sub-batch-no').value = '';
-      } else {
-        stockFields.classList.add('hidden');
-      }
-    }
-
     const lossInput = document.getElementById('gauge-loss-qty');
     if (lossInput) {
       if (isStock) {

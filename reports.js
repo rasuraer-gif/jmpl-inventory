@@ -694,6 +694,136 @@ const ReportsModule = (() => {
     return { html, headers, dataRows };
   }
 
+  function renderPendingBatches(filters) {
+    const { pendingStage, pendingTimeframe } = filters;
+    const batches = DB.Batches.all().filter(b => b.status === 'active');
+    const stageRecs = DB.StageRecords.all();
+    const master = DB.Master.all();
+    const today = new Date();
+    today.setHours(0,0,0,0);
+
+    const dataRows = [];
+    const headers = ['#', 'Batch No', 'JMREF No', 'Part No', 'Current Stage', 'Current Qty', 'Date Received', 'Days Pending'];
+
+    batches.forEach(b => {
+      if (pendingStage && b.currentStage !== pendingStage) return;
+
+      let entryDateStr = '';
+      const recs = stageRecs.filter(r => r.batchId === b.id && r.movedTo === b.currentStage)
+                            .sort((a, b) => (a.createdAt || a.date || '').localeCompare(b.createdAt || b.date || ''));
+
+      if (recs.length > 0) {
+        entryDateStr = recs[recs.length - 1].date || recs[recs.length - 1].createdAt || '';
+      } else {
+        entryDateStr = b.productionDate || b.createdAt || '';
+      }
+
+      if (!entryDateStr) return;
+
+      const entryDate = new Date(entryDateStr.slice(0, 10));
+      entryDate.setHours(0,0,0,0);
+      const diffTime = today - entryDate;
+      const days = Math.max(0, Math.round(diffTime / (1000 * 60 * 60 * 24)));
+
+      if (pendingTimeframe) {
+        if (pendingTimeframe === '1w' && days > 7) return;
+        if (pendingTimeframe === '2w' && days > 14) return;
+        if (pendingTimeframe === '3w' && days > 21) return;
+        if (pendingTimeframe === '1m' && days > 30) return;
+        if (pendingTimeframe === '2m' && days > 60) return;
+
+        if (pendingTimeframe === '1w_plus' && days < 7) return;
+        if (pendingTimeframe === '2w_plus' && days < 14) return;
+        if (pendingTimeframe === '3w_plus' && days < 21) return;
+        if (pendingTimeframe === '1m_plus' && days < 30) return;
+        if (pendingTimeframe === '2m_plus' && days < 60) return;
+      }
+
+      let qty = b.initialQty || 0;
+      if (b.currentStage !== 'production') {
+        const incoming = stageRecs.filter(r => r.batchId === b.id && r.movedTo === b.currentStage);
+        if (incoming.length > 0) {
+          const lastRec = incoming[incoming.length - 1];
+          qty = lastRec.isRecheck ? lastRec.recheckQty : lastRec.outputQty;
+        }
+      }
+
+      const p = master.find(m => m.jmrefNo === b.jmrefNo) || {};
+      dataRows.push({
+        batchNo: b.batchNo,
+        jmrefNo: b.jmrefNo,
+        partNo: p.partNo || b.partNo || '—',
+        currentStage: STAGE_LABELS[b.currentStage] || b.currentStage,
+        qty: qty,
+        dateReceived: entryDateStr.slice(0, 10),
+        daysPending: days
+      });
+    });
+
+    dataRows.sort((a, b) => b.daysPending - a.daysPending);
+
+    const rows = dataRows.map((r, i) => {
+      return [
+        i + 1,
+        r.batchNo,
+        r.jmrefNo,
+        r.partNo,
+        r.currentStage,
+        r.qty,
+        r.dateReceived,
+        r.daysPending
+      ];
+    });
+
+    const htmlRows = rows.map(r => {
+      const days = r[7];
+      let daysStyle = '';
+      if (days >= 60) daysStyle = 'style="color:var(--accent-red); font-weight:bold;"';
+      else if (days >= 30) daysStyle = 'style="color:var(--accent-amber); font-weight:bold;"';
+      else if (days >= 14) daysStyle = 'style="color:var(--accent-blue); font-weight:semibold;"';
+      else daysStyle = 'class="text-muted"';
+
+      return `
+        <tr>
+          <td>${r[0]}</td>
+          <td class="font-semibold text-blue">${r[1]}</td>
+          <td><span class="badge badge-teal">${r[2]}</span></td>
+          <td>${r[3]}</td>
+          <td><span class="badge badge-blue">${r[4]}</span></td>
+          <td class="font-semibold">${formatNum(r[5])}</td>
+          <td>${formatDate(r[6])}</td>
+          <td ${daysStyle}>${days} days</td>
+        </tr>`;
+    }).join('');
+
+    const html = `
+      <div style="display:flex; gap:16px; margin-bottom: 20px; flex-wrap:wrap;">
+        <div class="stat-card blue" style="flex:1; min-width: 140px;"><div class="stat-label">Pending Batches</div><div class="stat-value blue">${dataRows.length}</div></div>
+        <div class="stat-card amber" style="flex:1; min-width: 140px;"><div class="stat-label">Total Pending Quantity</div><div class="stat-value amber">${formatNum(dataRows.reduce((s,r)=>s+r.qty,0))}</div></div>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Batch No</th>
+              <th>JMREF No</th>
+              <th>Part No</th>
+              <th>Current Stage</th>
+              <th>Current Qty</th>
+              <th>Date Received</th>
+              <th>Days Pending</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${htmlRows || '<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-muted);">No pending batches found matching the filters</td></tr>'}
+          </tbody>
+        </table>
+      </div>`;
+
+    return { html, headers, dataRows: rows };
+  }
+
   // ── Build Filter UI ────────────────────────────────────────
   function buildFilters(report) {
     const masterList = DB.Master.all();
@@ -728,6 +858,42 @@ const ReportsModule = (() => {
         </select>
       </div>`;
 
+    const pendingStageFilter = `
+      <div class="form-group mb-0">
+        <label class="form-label">Stage</label>
+        <select class="form-control" id="rpt-pending-stage">
+          <option value="">All Stages</option>
+          <option value="production">Production</option>
+          <option value="cryogenic">Cryogenic</option>
+          <option value="deflashing">Manual DE Flashing</option>
+          <option value="trimming">Trimming</option>
+          <option value="post-curing">Post Curing</option>
+          <option value="waiting-visual">Waiting for Visual</option>
+          <option value="visual">Visual</option>
+          <option value="gauge">Gauge</option>
+          <option value="quality">Quality Final</option>
+          <option value="store">Store</option>
+        </select>
+      </div>`;
+
+    const pendingTimeframeFilter = `
+      <div class="form-group mb-0">
+        <label class="form-label">Timeframe (from Date Received)</label>
+        <select class="form-control" id="rpt-pending-timeframe">
+          <option value="">All Pending</option>
+          <option value="1w">Pending from last 1 week (<= 7 days)</option>
+          <option value="2w">Pending from last 2 weeks (<= 14 days)</option>
+          <option value="3w">Pending from last 3 weeks (<= 21 days)</option>
+          <option value="1m">Pending from last 1 month (<= 30 days)</option>
+          <option value="2m">Pending from last 2 months (<= 60 days)</option>
+          <option value="1w_plus">Pending for 1 week or more (>= 7 days)</option>
+          <option value="2w_plus">Pending for 2 weeks or more (>= 14 days)</option>
+          <option value="3w_plus">Pending for 3 weeks or more (>= 21 days)</option>
+          <option value="1m_plus">Pending for 1 month or more (>= 30 days)</option>
+          <option value="2m_plus">Pending for 2 months or more (>= 60 days)</option>
+        </select>
+      </div>`;
+
     const filterMap = {
       inventory: [jmrefFilter, partNoFilter].join(''),
       sales:     [jmrefFilter, dateRange].join(''),
@@ -741,6 +907,7 @@ const ReportsModule = (() => {
       gauge:     [jmrefFilter, dateRange].join(''),
       rejected:  '',
       recheck:   [opFilter, dateRange].join(''),
+      'pending-batches': [pendingStageFilter, pendingTimeframeFilter].join(''),
     };
     return filterMap[report] || '';
   }
@@ -753,6 +920,8 @@ const ReportsModule = (() => {
       jmref: g('rpt-jmref') || g('rpt-partno'),
       partNo: g('rpt-partno'),
       operatorId: g('rpt-operator'),
+      pendingStage: g('rpt-pending-stage'),
+      pendingTimeframe: g('rpt-pending-timeframe'),
     };
   }
 
@@ -776,6 +945,7 @@ const ReportsModule = (() => {
       case 'recheck':    result = renderRecheck(filters); break;
       case 'slob':       result = renderSlob(filters); break;
       case 'aging':      result = renderAging(filters); break;
+      case 'pending-batches': result = renderPendingBatches(filters); break;
       default: result = emptyState('Unknown report');
     }
 
@@ -809,6 +979,7 @@ const ReportsModule = (() => {
     { key:'recheck',    label:'🔄 Quality Final Recheck',      desc:'Date-wise and operator-wise recheck tracking' },
     { key:'slob',       label:'📉 SLOB Report',                desc:'Slow-moving and Obsolete inventory aging analysis' },
     { key:'aging',      label:'⏳ Aging WIP Report (> 1 Week)', desc:'Active batches sitting in the same stage for more than 7 days' },
+    { key:'pending-batches', label:'⏳ Pending Batch Report',  desc:'Pending batches filtered by stage and timeframe from date Received' },
   ];
 
   // ── Render ────────────────────────────────────────────────
@@ -874,6 +1045,7 @@ const ReportsModule = (() => {
     if (!buildFilters(reportKey)) runReport(reportKey);
     // Auto-run inventory report immediately (no date filters needed)
     if (reportKey === 'inventory') runReport(reportKey);
+    if (reportKey === 'pending-batches') runReport(reportKey);
   }
 
   function filterAging(val) {
