@@ -410,12 +410,31 @@ const ReportsModule = (() => {
   function renderRejected() {
     const rejections = DB.RejectionTracker.all();
     if (!rejections.length) return emptyState('No rejected batches found.');
-    const headers = ['#','Batch No','JMREF','Part No','Stage','Qty','Reason','Rejected By','Date'];
+    const headers = ['#','Batch No','JMREF','Part No','Stage','Qty','Reason','Rejected By','Date & Time'];
     const users = DB.Users.all();
     const dataRows = rejections.map((r, i) => {
       const batch = DB.Batches.find(r.batchId) || {};
       const user = users.find(u => u.id === r.rejectedBy) || {};
-      return [i+1, batch.batchNo||'', batch.jmrefNo||'', batch.partNo||'', STAGE_LABELS[r.stage]||r.stage, r.qty||'', r.reason||'', user.name||'-', (r.date||'').slice(0,10)];
+      let dateTimeStr = '—';
+      if (r.date) {
+        try {
+          const d = new Date(r.date);
+          if (isNaN(d.getTime())) {
+            dateTimeStr = r.date;
+          } else {
+            if (r.date.length > 10) {
+              const datePart = d.toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' });
+              const timePart = d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+              dateTimeStr = `${datePart} ${timePart}`;
+            } else {
+              dateTimeStr = d.toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' });
+            }
+          }
+        } catch {
+          dateTimeStr = r.date;
+        }
+      }
+      return [i+1, batch.batchNo||'', batch.jmrefNo||'', batch.partNo||'', STAGE_LABELS[r.stage]||r.stage, r.qty||'', r.reason||'', user.name||'-', dateTimeStr];
     });
     const html = `<div class="table-wrap"><table class="data-table">
       <thead><tr>${headers.map(th).join('')}</tr></thead>

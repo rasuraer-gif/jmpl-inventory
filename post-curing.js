@@ -437,7 +437,7 @@ const PostCuringModule = (() => {
     const batchId = document.getElementById('pc-reject-id').value;
     const reason = document.getElementById('pc-reject-reason').value.trim();
     const session = Auth.getSession();
-    DB.RejectionTracker.insert({ batchId, stage:'post-curing', qty:getInputQty(batchId), date:new Date().toISOString().slice(0,10), reason, rejectedBy:session&&session.userId });
+    DB.RejectionTracker.insert({ batchId, stage:'post-curing', qty:getInputQty(batchId), date:new Date().toISOString(), reason, rejectedBy:session&&session.userId });
     DB.Batches.update(batchId, { status:'rejected' });
     document.getElementById('pc-reject-modal').classList.add('hidden');
     showToast('Batch rejected', 'success');

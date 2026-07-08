@@ -573,7 +573,7 @@ const ProductionModule = (() => {
     const reason = document.getElementById('reject-reason').value.trim();
     const session = Auth.getSession();
     const batch = DB.Batches.find(batchId);
-    DB.RejectionTracker.insert({ batchId, stage:'production', qty: batch?.initialQty||0, date: new Date().toISOString().slice(0,10), reason, rejectedBy: session?.userId });
+    DB.RejectionTracker.insert({ batchId, stage:'production', qty: batch?.initialQty||0, date: new Date().toISOString(), reason, rejectedBy: session?.userId });
     DB.Batches.update(batchId, { status:'rejected' });
     document.getElementById('prod-reject-modal').classList.add('hidden');
     showToast('Batch rejected and recorded', 'success');

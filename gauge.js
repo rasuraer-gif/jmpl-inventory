@@ -394,7 +394,7 @@ const GaugeModule = (() => {
     const batchId = document.getElementById('gauge-reject-id').value;
     const reason = document.getElementById('gauge-reject-reason').value.trim();
     const session = Auth.getSession();
-    DB.RejectionTracker.insert({ batchId, stage:'gauge', qty:getInputQty(batchId), date:new Date().toISOString().slice(0,10), reason, rejectedBy:session&&session.userId });
+    DB.RejectionTracker.insert({ batchId, stage:'gauge', qty:getInputQty(batchId), date:new Date().toISOString(), reason, rejectedBy:session&&session.userId });
     DB.Batches.update(batchId, { status:'rejected' });
     document.getElementById('gauge-reject-modal').classList.add('hidden');
     showToast('Batch rejected', 'success');

@@ -433,7 +433,7 @@ const TrimmingModule = (() => {
     const batchId = document.getElementById('trim-reject-id').value;
     const reason = document.getElementById('trim-reject-reason').value.trim();
     const session = Auth.getSession();
-    DB.RejectionTracker.insert({ batchId, stage:'trimming', qty:getInputQty(batchId), date:new Date().toISOString().slice(0,10), reason, rejectedBy:session?.userId });
+    DB.RejectionTracker.insert({ batchId, stage:'trimming', qty:getInputQty(batchId), date:new Date().toISOString(), reason, rejectedBy:session?.userId });
     DB.Batches.update(batchId, { status:'rejected' });
     document.getElementById('trim-reject-modal').classList.add('hidden');
     showToast('Batch rejected', 'success');

@@ -444,7 +444,7 @@ const DeflashingModule = (() => {
     const batchId = document.getElementById('de-reject-id').value;
     const reason = document.getElementById('de-reject-reason').value.trim();
     const session = Auth.getSession();
-    DB.RejectionTracker.insert({ batchId, stage:'deflashing', qty:getInputQty(batchId), date:new Date().toISOString().slice(0,10), reason, rejectedBy:session?.userId });
+    DB.RejectionTracker.insert({ batchId, stage:'deflashing', qty:getInputQty(batchId), date:new Date().toISOString(), reason, rejectedBy:session?.userId });
     DB.Batches.update(batchId, { status:'rejected' });
     document.getElementById('de-reject-modal').classList.add('hidden');
     showToast('Batch rejected', 'success');

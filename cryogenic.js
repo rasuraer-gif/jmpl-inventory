@@ -419,7 +419,7 @@ const CryogenicModule = (() => {
     const reason = document.getElementById('cryo-reject-reason').value.trim();
     const session = Auth.getSession();
     const batch = DB.Batches.find(batchId);
-    DB.RejectionTracker.insert({ batchId, stage:'cryogenic', qty:getInputQty(batchId), date:new Date().toISOString().slice(0,10), reason, rejectedBy:session?.userId });
+    DB.RejectionTracker.insert({ batchId, stage:'cryogenic', qty:getInputQty(batchId), date:new Date().toISOString(), reason, rejectedBy:session?.userId });
     DB.Batches.update(batchId, { status:'rejected' });
     document.getElementById('cryo-reject-modal').classList.add('hidden');
     showToast('Batch rejected', 'success');
