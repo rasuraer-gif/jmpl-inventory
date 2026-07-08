@@ -248,11 +248,11 @@ const ReportsModule = (() => {
     if (!records.length) return emptyState();
 
     const operators = DB.Operators.all();
-    const headers = ['#','Batch No','JMREF','Operator','No. of Lifts','Date'];
+    const headers = ['#','Batch No','JMREF','Operator','Press No','No. of Lifts','Date'];
     const dataRows = records.map((r, i) => {
       const batch = DB.Batches.find(r.batchId) || {};
       const op = operators.find(o => o.id === r.operatorId) || {};
-      return [i+1, batch.batchNo||'', batch.jmrefNo||'', op.name||r.operatorName||'-', r.noOfLifts||0, (r.date||'').slice(0,10)];
+      return [i+1, batch.batchNo||'', batch.jmrefNo||'', op.name||r.operatorName||'-', r.pressNo||batch.pressNo||'-', r.noOfLifts||0, (r.date||'').slice(0,10)];
     });
 
     const html = `<div class="table-wrap"><table class="data-table">

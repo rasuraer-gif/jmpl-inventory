@@ -150,6 +150,7 @@ const GaugeModule = (() => {
           <div id="gauge-stock-fields" class="hidden">
             <hr style="margin: 16px 0; border: 0; border-top: 1px solid var(--border);">
             <h4 style="margin-bottom:12px; color:var(--primary); font-size:14px;">📦 Stock Upload Sub-Batch Details</h4>
+            
             <div class="form-row-2">
               <div class="form-group" style="flex:1;">
                 <label class="form-label">TR NO <span class="required">*</span></label>
@@ -158,20 +159,34 @@ const GaugeModule = (() => {
               <div class="form-group" style="flex:1;">
                 <label class="form-label">Shift <span class="required">*</span></label>
                 <select id="gauge-shift-move" class="form-control" onchange="GaugeModule.updateDynamicBatchNo()">
-                  <option value="day">Day</option>
-                  <option value="night">Night</option>
+                  <option value="day">Day (D)</option>
+                  <option value="night">Night (N)</option>
                 </select>
               </div>
             </div>
+
             <div class="form-row-2">
               <div class="form-group" style="flex:1;">
                 <label class="form-label">Production Date <span class="required">*</span></label>
-                <input type="date" id="gauge-date-move" class="form-control" value="${new Date().toISOString().slice(0,10)}" onchange="GaugeModule.updateDynamicBatchNo()">
+                <input type="date" id="gauge-date-move" class="form-control" onchange="GaugeModule.updateDynamicBatchNo()">
               </div>
               <div class="form-group" style="flex:1;">
-                <label class="form-label">Sub-Batch No (Auto)</label>
-                <input type="text" id="gauge-sub-batch-no" class="form-control" readonly style="opacity:0.8; font-weight:bold; color:var(--primary);">
+                <label class="form-label">Press No <span class="required">*</span></label>
+                <input type="text" id="gauge-press-move" class="form-control" placeholder="e.g. PR-01" oninput="GaugeModule.updateDynamicBatchNo()">
               </div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Production Type <span class="required">*</span></label>
+              <div class="flex gap-3 mt-2">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="radio" name="gauge-type-move" id="gauge-type-move-inhouse" value="inhouse" checked onchange="GaugeModule.updateDynamicBatchNo()"> <span>In-House (I)</span></label>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="radio" name="gauge-type-move" id="gauge-type-move-subcontractor" value="subcontractor" onchange="GaugeModule.updateDynamicBatchNo()"> <span>Subcontractor (S)</span></label>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Sub-Batch No (Auto)</label>
+              <input type="text" id="gauge-sub-batch-no" class="form-control" readonly style="opacity:0.8; font-weight:bold; color:var(--primary);">
             </div>
           </div>
           <div class="form-group"><label class="form-label">Notes</label><textarea id="gauge-notes" class="form-control" rows="2"></textarea></div>
@@ -201,6 +216,8 @@ const GaugeModule = (() => {
         document.getElementById('gauge-trno').value = '';
         document.getElementById('gauge-shift-move').value = 'day';
         document.getElementById('gauge-date-move').value = new Date().toISOString().slice(0,10);
+        document.getElementById('gauge-press-move').value = '';
+        document.getElementById('gauge-type-move-inhouse').checked = true;
         document.getElementById('gauge-sub-batch-no').value = '';
       } else {
         stockFields.classList.add('hidden');
@@ -232,12 +249,20 @@ const GaugeModule = (() => {
     const trNo = (document.getElementById('gauge-trno')?.value || '').trim();
     const shift = document.getElementById('gauge-shift-move')?.value || 'day';
     const dateVal = document.getElementById('gauge-date-move')?.value || '';
-    const dayStr = dateVal.split('-')[2] || '';
+    const pressNo = (document.getElementById('gauge-press-move')?.value || '').trim();
+    const typeVal = document.querySelector('[name=gauge-type-move]:checked')?.value || 'inhouse';
+    
+    let dayStr = '';
+    if (dateVal) {
+      dayStr = dateVal.split('-')[2] || '';
+    }
+    
     const shiftCode = shift === 'night' ? 'N' : 'D';
+    const typeCode = typeVal === 'subcontractor' ? 'S' : 'I';
     const subBatchInput = document.getElementById('gauge-sub-batch-no');
     if (subBatchInput) {
-      if (trNo && dayStr) {
-        subBatchInput.value = `${_activeBatch.jmrefNo}-${trNo}-${dayStr}-${shiftCode}`;
+      if (trNo && dayStr && pressNo) {
+        subBatchInput.value = `${_activeBatch.jmrefNo}-${trNo}-${dayStr}-${shiftCode}-${typeCode}-${pressNo}`;
       } else {
         subBatchInput.value = '';
       }
@@ -266,11 +291,14 @@ const GaugeModule = (() => {
       const trNo = (document.getElementById('gauge-trno')?.value || '').trim();
       const shift = document.getElementById('gauge-shift-move')?.value || 'day';
       const dateVal = document.getElementById('gauge-date-move')?.value || '';
+      const pressNo = (document.getElementById('gauge-press-move')?.value || '').trim();
+      const typeVal = document.querySelector('[name=gauge-type-move]:checked')?.value || 'inhouse';
       const subBatchNo = (document.getElementById('gauge-sub-batch-no')?.value || '').trim();
       const lossQty = parseInt(document.getElementById('gauge-loss-qty').value) || 0;
       
       if (!trNo) { showToast('Please enter a TR No', 'error'); return; }
       if (!dateVal) { showToast('Please select a production date', 'error'); return; }
+      if (!pressNo) { showToast('Please enter a Press No', 'error'); return; }
       if (!subBatchNo) { showToast('Please fill all sub-batch fields', 'error'); return; }
       if (lossQty < 0) { showToast('Loss quantity cannot be negative', 'error'); return; }
 
@@ -304,10 +332,19 @@ const GaugeModule = (() => {
         initialQty: outputQty,
         trNo,
         shift,
+        productionType: typeVal,
+        pressNo,
         productionDate: dateVal,
         createdAt: new Date().toISOString(),
         notes: 'Sub-batch created from Stock Upload pool batch: ' + _activeBatch.batchNo
       });
+
+      setTimeout(() => {
+        const confirmPrint = confirm(`Would you like to print the label for the new sub-batch: ${subBatchNo}?`);
+        if (confirmPrint) {
+          window.printBarcode(subBatch.id);
+        }
+      }, 500);
 
       DB.StageRecords.insert({
         batchId: subBatch.id,

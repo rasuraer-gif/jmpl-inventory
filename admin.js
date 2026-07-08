@@ -2,7 +2,7 @@
 // admin.js — Admin Panel Module
 // ============================================================
 const AdminModule = (() => {
-  const PERMS = ['master','production','cryogenic','deflashing','trimming','post-curing','waiting-visual','visual','gauge','quality','store','stock','monthly-plan','prod-sched','replenishment','report_inventory','report_sales','report_production','report_cryogenic','report_deflashing','report_trimming','report_post_curing','report_waiting_visual','report_visual','report_gauge','report_rejected','report_recheck'];
+  const PERMS = ['master','production','cryogenic','deflashing','trimming','post-curing','waiting-visual','visual','gauge','quality','store','stock','monthly-plan','prod-sched','replenishment','report_inventory','report_sales','report_production','report_cryogenic','report_deflashing','report_trimming','report_post_curing','report_waiting_visual','report_visual','report_gauge','report_rejected','report_recheck','ai-agent'];
   const PERM_LABELS = {
     master: 'Inventory Master',
     production: 'Production',
@@ -30,7 +30,8 @@ const AdminModule = (() => {
     report_visual: 'Report: Visual Insp',
     report_gauge: 'Report: Gauge Insp',
     report_rejected: 'Report: Rejected Batches',
-    report_recheck: 'Report: QF Recheck'
+    report_recheck: 'Report: QF Recheck',
+    'ai-agent': 'AI Assistant'
   };
   let activeTab = 'users';
 

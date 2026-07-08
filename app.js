@@ -189,7 +189,7 @@ document.addEventListener('keydown', e => {
 // ── Navigation Config ──────────────────────────────────────
 const NAV = [
   { id:'dashboard',  label:'Dashboard',           icon:'🏠', module:'dashboard', section:'main' },
-  { id:'master',     label:'Inventory Master',    icon:'📋', module:'master',    section:'main' },
+  { id:'master',     label:'Inventory Master',    icon:'📋', module:'master',    section:'main', perm:'master' },
   // Departments
   { id:'production', label:'Production',          icon:'🏭', module:'production',section:'dept', perm:'production' },
   { id:'cryogenic',  label:'Cryogenic',           icon:'❄️', module:'cryogenic', section:'dept', perm:'cryogenic' },
@@ -225,7 +225,7 @@ const NAV = [
   { id:'rpt-pending-batches', label:'Pending Batches', icon:'⏳', module:'report_pending_batches', section:'tools', parent:'reports', perm:'report_inventory' },
 
   { id:'print-batch',  label:'Print Label',        icon:'🖨️', module:'print-batch',  section:'tools' },
-  { id:'ai-agent',   label:'AI Assistant',        icon:'🤖', module:'ai-agent',  section:'tools' },
+  { id:'ai-agent',   label:'AI Assistant',        icon:'🤖', module:'ai-agent',  section:'tools', perm:'ai-agent' },
   // Admin
   { id:'admin',      label:'Admin Panel',         icon:'⚙️', module:'admin',     section:'admin', adminOnly:true },
 ];
@@ -387,7 +387,42 @@ const App = (() => {
     localStorage.setItem('jmpl_reports_expanded', reportsExpanded);
   }
 
-  return { navigate, init, toggleReportsMenu, get current() { return currentModule; } };
+  function openChangePasswordModal() {
+    document.getElementById('change-pwd-current').value = '';
+    document.getElementById('change-pwd-new').value = '';
+    document.getElementById('change-pwd-confirm').value = '';
+    document.getElementById('change-pwd-modal').classList.remove('hidden');
+  }
+
+  function changePassword() {
+    const session = Auth.getSession();
+    if (!session) return;
+    const user = DB.Users.find(session.userId);
+    if (!user) return;
+    
+    const currentPwd = document.getElementById('change-pwd-current').value;
+    const newPwd = document.getElementById('change-pwd-new').value;
+    const confirmPwd = document.getElementById('change-pwd-confirm').value;
+    
+    if (user.password !== currentPwd) {
+      showToast('Current password is incorrect', 'error');
+      return;
+    }
+    if (!newPwd) {
+      showToast('New password cannot be empty', 'error');
+      return;
+    }
+    if (newPwd !== confirmPwd) {
+      showToast('New passwords do not match', 'error');
+      return;
+    }
+    
+    DB.Users.update(user.id, { password: newPwd });
+    showToast('Password updated successfully', 'success');
+    document.getElementById('change-pwd-modal').classList.add('hidden');
+  }
+
+  return { navigate, init, toggleReportsMenu, openChangePasswordModal, changePassword, get current() { return currentModule; } };
 })();
 
 // ── Login Page ─────────────────────────────────────────────
@@ -506,7 +541,10 @@ function showAppShell(session) {
               <p>${session.role === 'admin' ? '🔑 Administrator' : '👤 Operator'}</p>
             </div>
           </div>
-          <button class="btn btn-ghost w-full btn-sm" onclick="Auth.logout()">🚪 Sign Out</button>
+          <div class="flex flex-col gap-2 mt-3 w-full">
+            <button class="btn btn-ghost w-full btn-sm" style="text-align: left; padding: 6px 12px; font-size: 13px;" onclick="App.openChangePasswordModal()">🔑 Change Password</button>
+            <button class="btn btn-ghost w-full btn-sm" style="text-align: left; padding: 6px 12px; font-size: 13px; color: var(--accent-red);" onclick="Auth.logout()">🚪 Sign Out</button>
+          </div>
         </div>
       </nav>
 
@@ -520,6 +558,34 @@ function showAppShell(session) {
         <div id="content" style="padding:28px;"></div>
       </main>
     </div>
+
+    <div class="modal-overlay hidden" id="change-pwd-modal">
+      <div class="modal modal-sm">
+        <div class="modal-header">
+          <h3>🔑 Change Password</h3>
+          <button class="modal-close" onclick="document.getElementById('change-pwd-modal').classList.add('hidden')">&#x2715;</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label class="form-label">Current Password <span class="required">*</span></label>
+            <input type="password" id="change-pwd-current" class="form-control" placeholder="Current password">
+          </div>
+          <div class="form-group">
+            <label class="form-label">New Password <span class="required">*</span></label>
+            <input type="password" id="change-pwd-new" class="form-control" placeholder="New password">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Confirm New Password <span class="required">*</span></label>
+            <input type="password" id="change-pwd-confirm" class="form-control" placeholder="Confirm new password">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="document.getElementById('change-pwd-modal').classList.add('hidden')">Cancel</button>
+          <button class="btn btn-primary" onclick="App.changePassword()">Update Password</button>
+        </div>
+      </div>
+    </div>
+    
     <div id="toast-container"></div>`;
 
   // Register mobile sidebar toggling

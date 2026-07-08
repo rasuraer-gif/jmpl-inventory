@@ -131,21 +131,26 @@ const ProductionModule = (() => {
       <div class="card animate-in">
         <div class="card-header"><h3>Create New Batch</h3></div>
         <div class="card-body">
-          <!-- Field Order: Part No, TR No, Shift, Operator, Lift -->
+          <!-- Field Order: Part No, JMREF No, TR No, Shift, Operator, Press No, Lifts, Date -->
           <div class="form-row">
             <div class="form-group" style="position:relative; flex:1;">
+              <label class="form-label">JMREF No <span class="required">*</span></label>
+              <input type="text" id="prod-jmref" class="form-control" placeholder="Search JMREF No..." onfocus="ProductionModule.showJmrefDropdown()" oninput="ProductionModule.filterJmrefs(this.value)" autocomplete="off">
+              <div id="prod-jmref-dropdown" class="hidden" style="position:absolute; top:100%; left:0; right:0; z-index:1000; max-height:220px; overflow-y:auto; background:var(--card-bg); border:1px solid var(--border); border-radius:8px; box-shadow:0 10px 15px -3px rgba(0,0,0,0.3); margin-top:4px; padding: 4px;"></div>
+            </div>
+            <div class="form-group" style="position:relative; flex:1;">
               <label class="form-label">Part No <span class="required">*</span></label>
-              <input type="text" id="prod-part-search" class="form-control" placeholder="Search Part No or JMREF..." onfocus="ProductionModule.showPartDropdown()" oninput="ProductionModule.filterParts(this.value)" autocomplete="off">
+              <input type="text" id="prod-part-search" class="form-control" placeholder="Search Part No..." onfocus="ProductionModule.showPartDropdown()" oninput="ProductionModule.filterParts(this.value)" autocomplete="off">
               <input type="hidden" id="prod-part-id">
               <div id="prod-part-dropdown" class="hidden" style="position:absolute; top:100%; left:0; right:0; z-index:1000; max-height:220px; overflow-y:auto; background:var(--card-bg); border:1px solid var(--border); border-radius:8px; box-shadow:0 10px 15px -3px rgba(0,0,0,0.3); margin-top:4px; padding: 4px;"></div>
-            </div>
-            <div class="form-group" style="flex:1;">
-              <label class="form-label">TR No <span class="required">*</span></label>
-              <input type="text" id="prod-trno" class="form-control" placeholder="Enter TR No" oninput="ProductionModule.updateDynamicBatchNo()">
             </div>
           </div>
 
           <div class="form-row">
+            <div class="form-group" style="flex:1;">
+              <label class="form-label">TR No <span class="required">*</span></label>
+              <input type="text" id="prod-trno" class="form-control" placeholder="Enter TR No" oninput="ProductionModule.updateDynamicBatchNo()">
+            </div>
             <div class="form-group" style="flex:1;">
               <label class="form-label">Shift <span class="required">*</span></label>
               <select id="prod-shift" class="form-control" onchange="ProductionModule.updateDynamicBatchNo()">
@@ -153,9 +158,16 @@ const ProductionModule = (() => {
                 <option value="night">Night (N)</option>
               </select>
             </div>
+          </div>
+
+          <div class="form-row">
              <div class="form-group" style="flex:1;" id="prod-op-group">
               <label class="form-label">Operator <span class="required">*</span></label>
               <select id="prod-op" class="form-control"><option value="">Select operator...</option>${opOpts}</select>
+            </div>
+            <div class="form-group" style="flex:1;">
+              <label class="form-label">Press No <span class="required">*</span></label>
+              <input type="text" id="prod-press-no" class="form-control" placeholder="Enter Press No" oninput="ProductionModule.updateDynamicBatchNo()">
             </div>
           </div>
 
@@ -172,15 +184,15 @@ const ProductionModule = (() => {
 
           <div class="form-row">
             <div class="form-group" style="flex:1;">
-              <label class="form-label">Batch No (Auto-Generated)</label>
-              <input type="text" id="prod-batch-no" class="form-control" readonly style="opacity:0.8; font-weight:bold; color:var(--primary);" placeholder="Select Part and enter TR No">
-            </div>
-            <div class="form-group" style="flex:1;">
               <label class="form-label">Production Type <span class="required">*</span></label>
               <div class="flex gap-3 mt-2">
                 <label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="radio" name="prod-type" value="inhouse" checked onchange="ProductionModule.onTypeChange()"> <span>In-House</span></label>
                 <label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="radio" name="prod-type" value="subcontractor" onchange="ProductionModule.onTypeChange()"> <span>Subcontractor</span></label>
               </div>
+            </div>
+            <div class="form-group" style="flex:1;">
+              <label class="form-label">Description</label>
+              <input type="text" id="prod-desc" class="form-control" readonly style="opacity:0.6;" placeholder="Auto-filled">
             </div>
           </div>
 
@@ -190,8 +202,13 @@ const ProductionModule = (() => {
           </div>
 
           <div class="form-row">
-            <div class="form-group" style="flex:1;"><label class="form-label">JMREF No</label><input type="text" id="prod-jmref" class="form-control" readonly style="opacity:0.6;" placeholder="Auto-filled"></div>
-            <div class="form-group" style="flex:1;"><label class="form-label">Description</label><input type="text" id="prod-desc" class="form-control" readonly style="opacity:0.6;" placeholder="Auto-filled"></div>
+            <div class="form-group" style="flex:1;">
+              <label class="form-label">Batch No (Auto-Generated)</label>
+              <input type="text" id="prod-batch-no" class="form-control" readonly style="opacity:0.8; font-weight:bold; color:var(--primary);" placeholder="Select Part, TR No, Press No">
+            </div>
+            <div class="form-group" style="flex:1;">
+              <!-- Placeholder to align layout -->
+            </div>
           </div>
 
           <div class="form-group"><label class="form-label">Notes</label><textarea id="prod-notes" class="form-control" rows="2" placeholder="Optional notes"></textarea></div>
@@ -262,28 +279,43 @@ const ProductionModule = (() => {
             <div id="prod-stock-fields" class="hidden">
               <hr style="margin: 16px 0; border: 0; border-top: 1px solid var(--border);">
               <h4 style="margin-bottom:12px; color:var(--primary); font-size:14px;">📦 Stock Upload Sub-Batch Details</h4>
+              
               <div class="form-row-2">
                 <div class="form-group" style="flex:1;">
                   <label class="form-label">TR NO <span class="required">*</span></label>
-                  <input type="text" id="prod-trno" class="form-control" placeholder="e.g. TR-01" oninput="ProductionModule.updateDynamicBatchNo()">
+                  <input type="text" id="move-trno" class="form-control" placeholder="e.g. TR-01" oninput="ProductionModule.updateMoveDynamicBatchNo()">
                 </div>
                 <div class="form-group" style="flex:1;">
                   <label class="form-label">Shift <span class="required">*</span></label>
-                  <select id="prod-shift-move" class="form-control" onchange="ProductionModule.updateDynamicBatchNo()">
-                    <option value="day">Day</option>
-                    <option value="night">Night</option>
+                  <select id="move-shift-move" class="form-control" onchange="ProductionModule.updateMoveDynamicBatchNo()">
+                    <option value="day">Day (D)</option>
+                    <option value="night">Night (N)</option>
                   </select>
                 </div>
               </div>
+
               <div class="form-row-2">
                 <div class="form-group" style="flex:1;">
                   <label class="form-label">Production Date <span class="required">*</span></label>
-                  <input type="date" id="prod-date-move" class="form-control" value="${new Date().toISOString().slice(0,10)}" onchange="ProductionModule.updateDynamicBatchNo()">
+                  <input type="date" id="move-date-move" class="form-control" onchange="ProductionModule.updateMoveDynamicBatchNo()">
                 </div>
                 <div class="form-group" style="flex:1;">
-                  <label class="form-label">Sub-Batch No (Auto)</label>
-                  <input type="text" id="prod-sub-batch-no" class="form-control" readonly style="opacity:0.8; font-weight:bold; color:var(--primary);">
+                  <label class="form-label">Press No <span class="required">*</span></label>
+                  <input type="text" id="move-press-move" class="form-control" placeholder="e.g. PR-01" oninput="ProductionModule.updateMoveDynamicBatchNo()">
                 </div>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Production Type <span class="required">*</span></label>
+                <div class="flex gap-3 mt-2">
+                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="radio" name="move-type-move" id="move-type-move-inhouse" value="inhouse" checked onchange="ProductionModule.updateMoveDynamicBatchNo()"> <span>In-House (I)</span></label>
+                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="radio" name="move-type-move" id="move-type-move-subcontractor" value="subcontractor" onchange="ProductionModule.updateMoveDynamicBatchNo()"> <span>Subcontractor (S)</span></label>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Sub-Batch No (Auto)</label>
+                <input type="text" id="move-sub-batch-no" class="form-control" readonly style="opacity:0.8; font-weight:bold; color:var(--primary);">
               </div>
             </div>
             <div class="form-group"><label class="form-label">Notes</label><textarea id="move-notes" class="form-control" rows="2"></textarea></div>
@@ -333,10 +365,12 @@ const ProductionModule = (() => {
     if (stockFields) {
       if (isStock) {
         stockFields.classList.remove('hidden');
-        document.getElementById('prod-trno').value = '';
-        document.getElementById('prod-shift-move').value = 'day';
-        document.getElementById('prod-date-move').value = new Date().toISOString().slice(0,10);
-        document.getElementById('prod-sub-batch-no').value = '';
+        document.getElementById('move-trno').value = '';
+        document.getElementById('move-shift-move').value = 'day';
+        document.getElementById('move-date-move').value = new Date().toISOString().slice(0,10);
+        document.getElementById('move-press-move').value = '';
+        document.getElementById('move-type-move-inhouse').checked = true;
+        document.getElementById('move-sub-batch-no').value = '';
       } else {
         stockFields.classList.add('hidden');
       }
@@ -374,17 +408,25 @@ const ProductionModule = (() => {
     document.getElementById('prod-move-modal').classList.remove('hidden');
   }
 
-  function updateDynamicBatchNo() {
+  function updateMoveDynamicBatchNo() {
     if (!_activeBatch) return;
-    const trNo = (document.getElementById('prod-trno')?.value || '').trim();
-    const shift = document.getElementById('prod-shift-move')?.value || 'day';
-    const dateVal = document.getElementById('prod-date-move')?.value || '';
-    const dayStr = dateVal.split('-')[2] || '';
+    const trNo = (document.getElementById('move-trno')?.value || '').trim();
+    const shift = document.getElementById('move-shift-move')?.value || 'day';
+    const dateVal = document.getElementById('move-date-move')?.value || '';
+    const pressNo = (document.getElementById('move-press-move')?.value || '').trim();
+    const typeVal = document.querySelector('[name=move-type-move]:checked')?.value || 'inhouse';
+    
+    let dayStr = '';
+    if (dateVal) {
+      dayStr = dateVal.split('-')[2] || '';
+    }
+    
     const shiftCode = shift === 'night' ? 'N' : 'D';
-    const subBatchInput = document.getElementById('prod-sub-batch-no');
+    const typeCode = typeVal === 'subcontractor' ? 'S' : 'I';
+    const subBatchInput = document.getElementById('move-sub-batch-no');
     if (subBatchInput) {
-      if (trNo && dayStr) {
-        subBatchInput.value = `${_activeBatch.jmrefNo}-${trNo}-${dayStr}-${shiftCode}`;
+      if (trNo && dayStr && pressNo) {
+        subBatchInput.value = `${_activeBatch.jmrefNo}-${trNo}-${dayStr}-${shiftCode}-${typeCode}-${pressNo}`;
       } else {
         subBatchInput.value = '';
       }
@@ -419,14 +461,17 @@ const ProductionModule = (() => {
 
     const isStock = _activeBatch && (_activeBatch.isStockUpload || (_activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-')));
     if (isStock) {
-      const trNo = (document.getElementById('prod-trno')?.value || '').trim();
-      const shift = document.getElementById('prod-shift-move')?.value || 'day';
-      const dateVal = document.getElementById('prod-date-move')?.value || '';
-      const subBatchNo = (document.getElementById('prod-sub-batch-no')?.value || '').trim();
+      const trNo = (document.getElementById('move-trno')?.value || '').trim();
+      const shift = document.getElementById('move-shift-move')?.value || 'day';
+      const dateVal = document.getElementById('move-date-move')?.value || '';
+      const pressNo = (document.getElementById('move-press-move')?.value || '').trim();
+      const typeVal = document.querySelector('[name=move-type-move]:checked')?.value || 'inhouse';
+      const subBatchNo = (document.getElementById('move-sub-batch-no')?.value || '').trim();
       const lossQty = parseInt(document.getElementById('move-loss-qty').value) || 0;
       
       if (!trNo) { showToast('Please enter a TR No', 'error'); return; }
       if (!dateVal) { showToast('Please select a production date', 'error'); return; }
+      if (!pressNo) { showToast('Please enter a Press No', 'error'); return; }
       if (!subBatchNo) { showToast('Please fill all sub-batch fields', 'error'); return; }
       if (lossQty < 0) { showToast('Loss quantity cannot be negative', 'error'); return; }
       
@@ -459,10 +504,20 @@ const ProductionModule = (() => {
         initialQty: outputQty,
         trNo,
         shift,
+        productionType: typeVal,
+        pressNo,
         productionDate: dateVal,
         createdAt: new Date().toISOString(),
         notes: 'Sub-batch created from Stock Upload pool batch: ' + _activeBatch.batchNo
       });
+
+      // Trigger barcode print label for the sub-batch
+      setTimeout(() => {
+        const confirmPrint = confirm(`Would you like to print the label for the new sub-batch: ${subBatchNo}?`);
+        if (confirmPrint) {
+          window.printBarcode(subBatch.id);
+        }
+      }, 500);
 
       DB.StageRecords.insert({
         batchId: subBatch.id,
@@ -572,8 +627,50 @@ const ProductionModule = (() => {
     
     const list = document.getElementById('prod-part-dropdown');
     if (list) list.classList.add('hidden');
+
+    const jmrefList = document.getElementById('prod-jmref-dropdown');
+    if (jmrefList) jmrefList.classList.add('hidden');
     
     updateDynamicBatchNo();
+  }
+
+  function showJmrefDropdown() {
+    const list = document.getElementById('prod-jmref-dropdown');
+    if (!list) return;
+    list.classList.remove('hidden');
+    filterJmrefs(document.getElementById('prod-jmref').value || '');
+  }
+
+  function filterJmrefs(query) {
+    const list = document.getElementById('prod-jmref-dropdown');
+    if (!list) return;
+    const parts = DB.Master.all();
+    const q = query.toLowerCase();
+    
+    const filtered = parts.filter(p => 
+      p.jmrefNo.toLowerCase().includes(q) ||
+      p.partNo.toLowerCase().includes(q) || 
+      (p.description || '').toLowerCase().includes(q)
+    );
+    
+    if (filtered.length === 0) {
+      list.innerHTML = `<div style="padding:10px; color:var(--text-muted); font-size:12.5px; text-align:center;">No parts found.</div>`;
+      return;
+    }
+    
+    list.innerHTML = filtered.map(p => `
+      <div class="dropdown-item" 
+           style="padding:8px 12px; cursor:pointer; border-radius:4px; transition:background 0.2s; font-size:13px; color:var(--text-main); display:flex; justify-content:space-between; align-items:center;"
+           onclick="ProductionModule.selectPart('${p.id}', '${p.partNo}', '${p.jmrefNo}', '${p.description.replace(/'/g, "\\'")}')"
+           onmouseover="this.style.background='rgba(99,102,241,0.15)'"
+           onmouseout="this.style.background='transparent'">
+        <div>
+          <span style="font-weight:600; color:var(--primary);">${p.jmrefNo}</span>
+          <span class="badge badge-blue" style="margin-left:8px; font-size:10px;">${p.partNo}</span>
+        </div>
+        <div style="font-size:11.5px; color:var(--text-muted); max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${p.description}</div>
+      </div>
+    `).join('');
   }
 
   function updateDynamicBatchNo() {
@@ -581,6 +678,8 @@ const ProductionModule = (() => {
     const trNo = document.getElementById('prod-trno')?.value.trim() || '';
     const dateVal = document.getElementById('prod-date')?.value || '';
     const shiftVal = document.getElementById('prod-shift')?.value || 'day';
+    const typeVal = document.querySelector('[name=prod-type]:checked')?.value || 'inhouse';
+    const pressNo = document.getElementById('prod-press-no')?.value.trim() || '';
     
     let dayStr = '';
     if (dateVal) {
@@ -588,11 +687,12 @@ const ProductionModule = (() => {
     }
     
     const shiftCode = shiftVal === 'night' ? 'N' : 'D';
+    const typeCode = typeVal === 'subcontractor' ? 'S' : 'I';
     
     const batchNoInput = document.getElementById('prod-batch-no');
     if (batchNoInput) {
-      if (jmrefNo && trNo && dayStr) {
-        batchNoInput.value = `${jmrefNo}-${trNo}-${dayStr}-${shiftCode}`;
+      if (jmrefNo && trNo && dayStr && pressNo) {
+        batchNoInput.value = `${jmrefNo}-${trNo}-${dayStr}-${shiftCode}-${typeCode}-${pressNo}`;
       } else {
         batchNoInput.value = '';
       }
@@ -606,6 +706,8 @@ const ProductionModule = (() => {
 
     const opGroup = document.getElementById('prod-op-group');
     if (opGroup) opGroup.classList.toggle('hidden', type === 'subcontractor');
+
+    updateDynamicBatchNo();
   }
 
   function createBatch() {
@@ -615,6 +717,9 @@ const ProductionModule = (() => {
     
     const trNo = document.getElementById('prod-trno')?.value.trim();
     if (!trNo) { showToast('Please enter a TR No', 'error'); return; }
+
+    const pressNo = document.getElementById('prod-press-no')?.value.trim();
+    if (!pressNo) { showToast('Please enter a Press No', 'error'); return; }
     
     const shift = document.getElementById('prod-shift')?.value || 'day';
     
@@ -654,6 +759,7 @@ const ProductionModule = (() => {
       initialQty: 0,
       shift,
       trNo,
+      pressNo,
       productionDate: prodDate,
       recheckCount:0 
     });
@@ -665,6 +771,7 @@ const ProductionModule = (() => {
       date: prodDate, 
       shift,
       trNo,
+      pressNo,
       createdBy: session?.userId 
     });
     
@@ -694,6 +801,10 @@ const ProductionModule = (() => {
     const list = document.getElementById('prod-part-dropdown');
     if (list && !e.target.closest('#prod-part-search') && !e.target.closest('#prod-part-dropdown')) {
       list.classList.add('hidden');
+    }
+    const jmrefList = document.getElementById('prod-jmref-dropdown');
+    if (jmrefList && !e.target.closest('#prod-jmref') && !e.target.closest('#prod-jmref-dropdown')) {
+      jmrefList.classList.add('hidden');
     }
   });
 
@@ -735,5 +846,5 @@ const ProductionModule = (() => {
     }
   }
 
-  return { render, openMove, calcLoss, moveBatch, openReject, rejectBatch, onTypeChange, createBatch, resetForm, showPartDropdown, filterParts, selectPart, updateDynamicBatchNo, printBarcode, filterPending };
+  return { render, openMove, calcLoss, moveBatch, openReject, rejectBatch, onTypeChange, createBatch, resetForm, showPartDropdown, filterParts, selectPart, updateDynamicBatchNo, updateMoveDynamicBatchNo, printBarcode, filterPending, showJmrefDropdown, filterJmrefs };
 })();
