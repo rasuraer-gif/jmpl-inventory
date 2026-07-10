@@ -305,11 +305,10 @@ const CryogenicModule = (() => {
     const notes = document.getElementById('cryo-notes').value.trim();
     const session = Auth.getSession();
     if (isNaN(outputQty) || outputQty < 0) { showToast('Enter a valid output quantity', 'error'); return; }
-    if (outputQty > _cryoInputQty) { showToast('Output cannot exceed input quantity', 'error'); return; }
-    const lossQty = Math.max(0, _cryoInputQty - outputQty);
-    const batch = DB.Batches.find(batchId);
-    const dateStr = new Date().toISOString().slice(0,10);
-
+    
+    let inputQty = _cryoInputQty;
+    let lossQty = 0;
+    
     const isStock = _activeBatch && (_activeBatch.isStockUpload || (_activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-')));
     if (isStock) {
       const trNo = (document.getElementById('cryo-trno')?.value || '').trim();
@@ -318,23 +317,33 @@ const CryogenicModule = (() => {
       const pressNo = (document.getElementById('cryo-press-move')?.value || '').trim();
       const typeVal = document.querySelector('[name=cryo-type-move]:checked')?.value || 'inhouse';
       const subBatchNo = (document.getElementById('cryo-sub-batch-no')?.value || '').trim();
-      const lossQty = parseInt(document.getElementById('cryo-loss-qty').value) || 0;
+      const sLossQty = parseInt(document.getElementById('cryo-loss-qty').value) || 0;
       
       if (!trNo) { showToast('Please enter a TR No', 'error'); return; }
       if (!dateVal) { showToast('Please select a production date', 'error'); return; }
       if (!pressNo) { showToast('Please enter a Press No', 'error'); return; }
       if (!subBatchNo) { showToast('Please fill all sub-batch fields', 'error'); return; }
-      if (lossQty < 0) { showToast('Loss quantity cannot be negative', 'error'); return; }
+      if (sLossQty < 0) { showToast('Loss quantity cannot be negative', 'error'); return; }
 
       if (DB.Batches.all().some(b => b.batchNo === subBatchNo)) {
         showToast('Sub-batch number already exists: ' + subBatchNo, 'error');
         return;
       }
 
+      if (outputQty > inputQty) {
+        inputQty = outputQty;
+        lossQty = 0;
+        DB.Batches.update(_activeBatch.id, { initialQty: outputQty });
+        _activeBatch.initialQty = outputQty;
+      } else {
+        lossQty = sLossQty;
+      }
+
       const totalDeducted = outputQty + lossQty;
-      if (totalDeducted > _cryoInputQty) {
-        showToast(`Total processed qty (Good: ${outputQty} + Loss: ${lossQty} = ${totalDeducted}) exceeds available input quantity (${_cryoInputQty})`, 'error');
-        return;
+      if (totalDeducted > inputQty) {
+        inputQty = totalDeducted;
+        DB.Batches.update(_activeBatch.id, { initialQty: totalDeducted });
+        _activeBatch.initialQty = totalDeducted;
       }
 
       const remainingQty = Math.max(0, (_activeBatch.initialQty || 0) - totalDeducted);
@@ -345,6 +354,7 @@ const CryogenicModule = (() => {
         completedAt: remainingQty === 0 ? new Date().toISOString() : null
       });
 
+      const dateStr = new Date().toISOString().slice(0,10);
       const subBatch = DB.Batches.insert({
         batchNo: subBatchNo,
         partId: _activeBatch.partId,
@@ -400,7 +410,29 @@ const CryogenicModule = (() => {
       return;
     }
 
-    DB.StageRecords.insert({ batchId, stage:'cryogenic', inputQty:_cryoInputQty, outputQty, lossQty, movedTo:destination, movedFrom:'cryogenic', date:dateStr, recordedBy:session?.userId, notes:notes });
+    if (outputQty > inputQty) {
+      inputQty = outputQty;
+      lossQty = 0;
+      
+      const recs = DB.StageRecords.all().filter(r => r.batchId === batchId && r.movedTo === 'cryogenic');
+      if (recs.length) {
+        const lastRec = recs[recs.length - 1];
+        if (lastRec.isRecheck) {
+          DB.StageRecords.update(lastRec.id, { recheckQty: inputQty });
+        } else {
+          DB.StageRecords.update(lastRec.id, { outputQty: inputQty });
+        }
+      } else {
+        DB.Batches.update(batchId, { initialQty: inputQty });
+      }
+    } else {
+      lossQty = Math.max(0, inputQty - outputQty);
+    }
+
+    const batch = DB.Batches.find(batchId);
+    const dateStr = new Date().toISOString().slice(0,10);
+
+    DB.StageRecords.insert({ batchId, stage:'cryogenic', inputQty, outputQty, lossQty, movedTo:destination, movedFrom:'cryogenic', date:dateStr, recordedBy:session?.userId, notes:notes });
     if (lossQty > 0) DB.LossTracker.insert({ batchId, stage:'cryogenic', lossQty, date:dateStr, jmrefNo:batch?.jmrefNo, partNo:batch?.partNo });
     DB.Batches.update(batchId, { currentStage:destination });
     document.getElementById('cryo-process-modal').classList.add('hidden');
