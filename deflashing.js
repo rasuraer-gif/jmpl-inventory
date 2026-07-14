@@ -167,16 +167,23 @@ const DeflashingModule = (() => {
           <input type="hidden" id="de-batch-id">
           <input type="hidden" id="de-input-qty">
           <div id="de-batch-info" style="padding:12px;background:var(--bg-input);border-radius:8px;margin-bottom:16px;"></div>
-          <div class="form-group"><label class="form-label">Vendor <span class="required">*</span></label>
-            <select id="de-vendor" class="form-control"><option value="">Select vendor...</option>${vendorOpts}</select>
+          <div class="form-row-2">
+            <div class="form-group"><label class="form-label">Output Quantity <span class="required">*</span></label><input type="number" id="de-output-qty" class="form-control" min="0" oninput="DeflashingModule.calcLoss()"></div>
+            <div class="form-group"><label class="form-label">Loss Quantity (Auto)</label><input type="text" id="de-loss-qty" class="form-control" readonly style="color:var(--accent-red);font-weight:700;"></div>
           </div>
-          <div class="form-group"><label class="form-label">Output Quantity <span class="required">*</span></label><input type="number" id="de-output-qty" class="form-control" min="0" oninput="DeflashingModule.calcLoss()"></div>
-          <div class="form-group"><label class="form-label">Loss Quantity (Auto)</label><input type="text" id="de-loss-qty" class="form-control" readonly style="color:var(--accent-red);font-weight:700;"></div>
-          <div class="form-group"><label class="form-label">Destination <span class="required">*</span></label>
-            <select id="de-destination" class="form-control">
-              <option value="trimming">Trimming</option>
-              <option value="waiting-visual">Waiting for Visual inspection</option>
-            </select>
+          <div class="form-row-2">
+            <div class="form-group" style="flex:1;">
+              <label class="form-label">Destination <span class="required">*</span></label>
+              <select id="de-destination" class="form-control" onchange="DeflashingModule.onDestinationChange()">
+                <option value="trimming">Trimming</option>
+                <option value="cryogenic">Cryogenic</option>
+                <option value="waiting-visual">Waiting for Visual inspection</option>
+              </select>
+            </div>
+            <div class="form-group hidden" id="de-vendor-group" style="flex:1;">
+              <label class="form-label">Vendor <span class="required">*</span></label>
+              <select id="de-vendor" class="form-control"><option value="">Select vendor...</option>${vendorOpts}</select>
+            </div>
           </div>
           <div id="de-stock-fields" class="hidden">
             <hr style="margin: 16px 0; border: 0; border-top: 1px solid var(--border);">
@@ -245,6 +252,21 @@ const DeflashingModule = (() => {
       </div>
     </div>`;
   }
+  function onDestinationChange() {
+    const dest = document.getElementById('de-destination').value;
+    const vendorGroup = document.getElementById('de-vendor-group');
+    const vendorSelect = document.getElementById('de-vendor');
+    if (!vendorGroup || !vendorSelect) return;
+    if (dest === 'trimming' || dest === 'deflashing') {
+      vendorGroup.classList.remove('hidden');
+      const vendors = DB.Vendors.byDept(dest);
+      vendorSelect.innerHTML = '<option value="">Select vendor...</option>' + vendors.map(v => `<option value="${v.id}">${v.name}</option>`).join('');
+    } else {
+      vendorGroup.classList.add('hidden');
+      vendorSelect.innerHTML = '<option value="">Not required</option>';
+      vendorSelect.value = '';
+    }
+  }
   let _deInputQty = 0;
   function openProcess(batchId, inputQty) {
     _deInputQty = inputQty;
@@ -283,6 +305,8 @@ const DeflashingModule = (() => {
     }
 
     document.getElementById('de-batch-info').innerHTML = `<strong>${b.batchNo}</strong> — ${b.jmrefNo}<br><span class="text-muted text-sm">Input Qty: <strong>${formatNum(inputQty)}</strong></span>`;
+    document.getElementById('de-destination').value = 'trimming';
+    onDestinationChange();
     document.getElementById('de-vendor').value = '';
     document.getElementById('de-output-qty').value = '';
     document.getElementById('de-loss-qty').value = '';
@@ -327,13 +351,14 @@ const DeflashingModule = (() => {
     const outputQty = parseInt(document.getElementById('de-output-qty').value);
     const destination = document.getElementById('de-destination').value;
     const notes = document.getElementById('de-notes').value.trim();
-    if (!vendorId) { showToast('Please select a vendor', 'error'); return; }
+    if ((destination === 'trimming' || destination === 'deflashing') && !vendorId) { showToast('Please select a vendor', 'error'); return; }
     if (isNaN(outputQty) || outputQty < 0) { showToast('Enter a valid output quantity', 'error'); return; }
     if (outputQty > _deInputQty) { showToast('Output cannot exceed input quantity', 'error'); return; }
     const lossQty = Math.max(0, _deInputQty - outputQty);
     const session = Auth.getSession();
     const batch = DB.Batches.find(batchId);
     const dateStr = new Date().toISOString().slice(0,10);
+    const finalVendorId = (destination === 'trimming' || destination === 'deflashing') ? vendorId : '';
 
     const isStock = _activeBatch && (_activeBatch.isStockUpload || (_activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-')));
     if (isStock) {
@@ -401,7 +426,7 @@ const DeflashingModule = (() => {
         inputQty: totalDeducted,
         outputQty: outputQty,
         lossQty: lossQty,
-        vendorId,
+        vendorId: finalVendorId,
         movedTo: destination,
         movedFrom: 'deflashing',
         date: dateStr,
@@ -426,11 +451,11 @@ const DeflashingModule = (() => {
       return;
     }
 
-    DB.StageRecords.insert({ batchId, stage:'deflashing', inputQty:_deInputQty, outputQty, lossQty, vendorId, movedTo:destination, movedFrom:'deflashing', date:dateStr, recordedBy:session?.userId, notes:notes });
+    DB.StageRecords.insert({ batchId, stage:'deflashing', inputQty:_deInputQty, outputQty, lossQty, vendorId: finalVendorId, movedTo:destination, movedFrom:'deflashing', date:dateStr, recordedBy:session?.userId, notes:notes });
     if (lossQty > 0) DB.LossTracker.insert({ batchId, stage:'deflashing', lossQty, date:dateStr, jmrefNo:batch?.jmrefNo, partNo:batch?.partNo });
     DB.Batches.update(batchId, { currentStage:destination });
     document.getElementById('de-process-modal').classList.add('hidden');
-    showToast('Batch moved to ' + destination, 'success');
+    showToast('Batch moved to ' + (STAGE_LABELS[destination] || destination), 'success');
     render();
   }
   function openReject(batchId) {
@@ -464,5 +489,5 @@ const DeflashingModule = (() => {
     }
   }
 
-  return { render, openProcess, calcLoss, process, openReject, rejectBatch, filterHistory, filterPending, updateDynamicBatchNo };
+  return { render, openProcess, calcLoss, process, openReject, rejectBatch, filterHistory, filterPending, updateDynamicBatchNo, onDestinationChange };
 })();

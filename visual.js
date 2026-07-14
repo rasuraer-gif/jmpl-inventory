@@ -5,9 +5,11 @@ const VisualModule = (() => {
   let _activeBatch = null;
   function getInputQty(batchId) {
     const recs = DB.StageRecords.all().filter(r => r.batchId === batchId && r.movedTo === 'visual');
-    if (!recs.length) return (DB.Batches.find(batchId)||{}).initialQty||0;
+    const batch = DB.Batches.find(batchId) || {};
+    if (!recs.length) return batch.initialQty || 0;
     const lastRec = recs[recs.length - 1];
-    return lastRec.isRecheck ? lastRec.recheckQty : lastRec.outputQty;
+    const qtyVal = Number(lastRec.isRecheck ? lastRec.recheckQty : lastRec.outputQty);
+    return !isNaN(qtyVal) ? qtyVal : (batch.initialQty || 0);
   }
 
   let historySearch = '';
@@ -213,13 +215,34 @@ const VisualModule = (() => {
             <div id="vis-inspector-dropdown" class="hidden" style="position:absolute; top:100%; left:0; right:0; z-index:1000; max-height:180px; overflow-y:auto; background:var(--card-bg); border:1px solid var(--border); border-radius:8px; box-shadow:0 10px 15px -3px rgba(0,0,0,0.3); margin-top:4px; padding: 4px;"></div>
           </div>
 
-          <div class="form-group"><label class="form-label">Output Quantity <span class="required">*</span></label><input type="number" id="vis-output-qty" class="form-control" min="0" oninput="VisualModule.calcLoss()"></div>
+          <div class="form-row-2">
+            <div class="form-group"><label class="form-label">Output Quantity <span class="required">*</span></label><input type="number" id="vis-output-qty" class="form-control" min="0" oninput="VisualModule.calcLoss()"></div>
+            <div class="form-group" id="vis-reprocess-qty-group">
+              <label class="form-label">Reprocess Qty</label>
+              <input type="number" id="vis-reprocess-qty" class="form-control" min="0" value="0" oninput="VisualModule.calcLoss()">
+            </div>
+          </div>
+          
+          <div class="form-group hidden" id="vis-reprocess-dest-group">
+            <label class="form-label">Reprocess Destination <span class="required">*</span></label>
+            <select id="vis-reprocess-destination" class="form-control">
+              <option value="cryogenic">Cryogenic</option>
+              <option value="deflashing">Flash Removal (DE Flashing)</option>
+              <option value="trimming">Trimming</option>
+            </select>
+          </div>
+
           <div class="form-group"><label class="form-label">Loss Quantity (Auto)</label><input type="text" id="vis-loss-qty" class="form-control" readonly style="color:var(--accent-red);font-weight:700;"></div>
           <div class="form-group"><label class="form-label">Destination <span class="required">*</span></label>
-            <select id="vis-destination" class="form-control">
+            <select id="vis-destination" class="form-control" onchange="VisualModule.onDestinationChange()">
               <option value="gauge">Gauge Inspection</option>
               <option value="quality">Quality Final</option>
             </select>
+          </div>
+
+          <div class="form-group hidden" id="vis-vendor-group">
+            <label class="form-label">Vendor <span class="required">*</span></label>
+            <select id="vis-vendor" class="form-control"><option value="">Select vendor...</option></select>
           </div>
           <div id="vis-stock-fields" class="hidden">
             <hr style="margin: 16px 0; border: 0; border-top: 1px solid var(--border);">
@@ -288,6 +311,21 @@ const VisualModule = (() => {
       </div>
     </div>`;
   }
+  function onDestinationChange() {
+    const dest = document.getElementById('vis-destination').value;
+    const vendorGroup = document.getElementById('vis-vendor-group');
+    const vendorSelect = document.getElementById('vis-vendor');
+    if (!vendorGroup || !vendorSelect) return;
+    if (dest === 'trimming' || dest === 'deflashing') {
+      vendorGroup.classList.remove('hidden');
+      const vendors = DB.Vendors.byDept(dest);
+      vendorSelect.innerHTML = '<option value="">Select vendor...</option>' + vendors.map(v => `<option value="${v.id}">${v.name}</option>`).join('');
+    } else {
+      vendorGroup.classList.add('hidden');
+      vendorSelect.innerHTML = '<option value="">Not required</option>';
+      vendorSelect.value = '';
+    }
+  }
   let _visInputQty = 0;
   function openProcess(batchId, inputQty) {
     _visInputQty = inputQty;
@@ -325,12 +363,34 @@ const VisualModule = (() => {
       }
     }
 
+    const isRep = b.isReprocess || (b.batchNo && b.batchNo.endsWith('-REP'));
+    const repQtyGroup = document.getElementById('vis-reprocess-qty-group');
+    if (repQtyGroup) {
+      if (isRep) {
+        repQtyGroup.classList.add('hidden');
+      } else {
+        repQtyGroup.classList.remove('hidden');
+      }
+    }
+    
+    const destSelect = document.getElementById('vis-destination');
+    if (destSelect) {
+      destSelect.innerHTML = `
+        <option value="gauge">Gauge Inspection</option>
+        <option value="quality">Quality Final</option>
+      `;
+      destSelect.value = 'gauge';
+    }
+
     document.getElementById('vis-batch-info').innerHTML = `<strong>${b.batchNo}</strong> — ${b.jmrefNo}<br><span class="text-muted text-sm">Input Qty: <strong>${formatNum(inputQty)}</strong></span>${b.recheckCount?` <span class="badge badge-amber">Recheck #${b.recheckIteration}</span>`:''}`;
     document.getElementById('vis-inspector').value = '';
     document.getElementById('vis-inspector-search').value = '';
     document.getElementById('vis-output-qty').value = '';
+    document.getElementById('vis-reprocess-qty').value = '0';
+    document.getElementById('vis-reprocess-destination').value = 'cryogenic';
     document.getElementById('vis-loss-qty').value = '';
     document.getElementById('vis-notes').value = '';
+    onDestinationChange();
     document.getElementById('vis-process-modal').classList.remove('hidden');
   }
 
@@ -360,26 +420,49 @@ const VisualModule = (() => {
   }
   function calcLoss() {
     const isStock = _activeBatch && (_activeBatch.isStockUpload || (_activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-')));
+    const out = parseInt(document.getElementById('vis-output-qty').value)||0;
+    const rep = parseInt(document.getElementById('vis-reprocess-qty')?.value)||0;
+
+    const destGroup = document.getElementById('vis-reprocess-dest-group');
+    if (destGroup) {
+      if (rep > 0) {
+        destGroup.classList.remove('hidden');
+      } else {
+        destGroup.classList.add('hidden');
+      }
+    }
+
     if (!isStock) {
-      const out = parseInt(document.getElementById('vis-output-qty').value)||0;
-      document.getElementById('vis-loss-qty').value = Math.max(0, _visInputQty - out);
+      document.getElementById('vis-loss-qty').value = Math.max(0, _visInputQty - out - rep);
     }
   }
   function process() {
     const batchId = document.getElementById('vis-batch-id').value;
     const inspectorName = document.getElementById('vis-inspector').value.trim();
     const outputQty = parseInt(document.getElementById('vis-output-qty').value);
+    const reprocessQty = parseInt(document.getElementById('vis-reprocess-qty').value)||0;
+    const reprocessDestination = document.getElementById('vis-reprocess-destination').value;
     const destination = document.getElementById('vis-destination').value;
+    const vendorId = document.getElementById('vis-vendor').value;
     const notes = document.getElementById('vis-notes').value.trim();
+
     if (!inspectorName) { showToast('Inspector name is required', 'error'); return; }
     if (isNaN(outputQty) || outputQty < 0) { showToast('Enter a valid output quantity', 'error'); return; }
-    if (outputQty > _visInputQty) { showToast('Output cannot exceed input quantity', 'error'); return; }
-    const lossQty = Math.max(0, _visInputQty - outputQty);
-    const session = Auth.getSession();
+    
     const batch = DB.Batches.find(batchId);
-    const dateStr = new Date().toISOString().slice(0,10);
+    const isRep = batch?.isReprocess || (batch?.batchNo && batch?.batchNo.endsWith('-REP'));
+    const finalReprocessQty = isRep ? 0 : reprocessQty;
+    
+    if (isNaN(finalReprocessQty) || finalReprocessQty < 0) { showToast('Enter a valid reprocess quantity', 'error'); return; }
+    if (outputQty + finalReprocessQty > _visInputQty) { showToast('Total output and reprocess quantity cannot exceed input quantity', 'error'); return; }
 
+    if ((destination === 'trimming' || destination === 'deflashing') && !vendorId) { showToast('Please select a vendor', 'error'); return; }
+    const finalVendorId = (destination === 'trimming' || destination === 'deflashing') ? vendorId : '';
+
+    const session = Auth.getSession();
+    const dateStr = new Date().toISOString().slice(0,10);
     const isStock = _activeBatch && (_activeBatch.isStockUpload || (_activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-')));
+
     if (isStock) {
       const trNo = (document.getElementById('vis-trno')?.value || '').trim();
       const shift = document.getElementById('vis-shift-move')?.value || 'day';
@@ -400,9 +483,9 @@ const VisualModule = (() => {
         return;
       }
 
-      const totalDeducted = outputQty + lossQty;
+      const totalDeducted = outputQty + finalReprocessQty + lossQty;
       if (totalDeducted > _visInputQty) {
-        showToast(`Total processed qty (Good: ${outputQty} + Loss: ${lossQty} = ${totalDeducted}) exceeds available input quantity (${_visInputQty})`, 'error');
+        showToast(`Total processed qty (Good: ${outputQty} + Reprocess: ${finalReprocessQty} + Loss: ${lossQty} = ${totalDeducted}) exceeds available input quantity (${_visInputQty})`, 'error');
         return;
       }
 
@@ -446,6 +529,9 @@ const VisualModule = (() => {
         inputQty: totalDeducted,
         outputQty: outputQty,
         lossQty: lossQty,
+        reprocessQty: finalReprocessQty,
+        reprocessDestination: finalReprocessQty > 0 ? reprocessDestination : '',
+        vendorId: finalVendorId,
         inspectorName,
         movedTo: destination,
         movedFrom: 'visual',
@@ -467,17 +553,135 @@ const VisualModule = (() => {
         });
       }
 
+      if (finalReprocessQty > 0) {
+        let baseBatchNo = `${_activeBatch.batchNo}-REP`;
+        let repBatchNo = baseBatchNo;
+        let counter = 1;
+        while (DB.Batches.all().some(b => b.batchNo === repBatchNo)) {
+          counter++;
+          repBatchNo = `${baseBatchNo}-${counter}`;
+        }
+        const repBatch = DB.Batches.insert({
+          batchNo: repBatchNo,
+          partId: _activeBatch.partId,
+          partNo: _activeBatch.partNo,
+          jmrefNo: _activeBatch.jmrefNo,
+          description: _activeBatch.description,
+          currentStage: reprocessDestination,
+          status: 'active',
+          initialQty: finalReprocessQty,
+          isReprocess: true,
+          reprocessDestination: reprocessDestination,
+          createdAt: new Date().toISOString(),
+          notes: `Reprocess batch created from stock upload batch ${_activeBatch.batchNo}. Target: ${reprocessDestination}`
+        });
+
+        DB.StageRecords.insert({
+          batchId: repBatch.id,
+          stage: 'visual',
+          inputQty: finalReprocessQty,
+          outputQty: finalReprocessQty,
+          lossQty: 0,
+          movedTo: reprocessDestination,
+          movedFrom: 'visual',
+          date: dateStr,
+          recordedBy: session?.userId,
+          notes: `Reprocess batch created from stock upload batch ${_activeBatch.batchNo}. Target: ${reprocessDestination}`
+        });
+
+        setTimeout(() => {
+          const confirmPrint = confirm(`Reprocess batch ${repBatchNo} created. Would you like to print its barcode label?`);
+          if (confirmPrint) {
+            window.printBarcode(repBatch.id);
+          }
+        }, 1200);
+      }
+
       document.getElementById('vis-process-modal').classList.add('hidden');
-      showToast('Sub-batch created and moved to ' + (destination === 'gauge' ? 'Gauge Inspection' : 'Quality Final'), 'success');
+      showToast('Sub-batch created and moved to ' + (STAGE_LABELS[destination] || destination), 'success');
       render();
       return;
     }
 
-    DB.StageRecords.insert({ batchId, stage:'visual', inputQty:_visInputQty, outputQty, lossQty, inspectorName, movedTo:destination, movedFrom:'visual', date:dateStr, recordedBy:session?.userId, notes:notes, iterationNo:batch?.recheckIteration||null });
-    if (lossQty > 0) DB.LossTracker.insert({ batchId, stage:'visual', lossQty, date:dateStr, jmrefNo:batch?.jmrefNo, partNo:batch?.partNo, iterationNo:batch?.recheckIteration||null });
+    const lossQty = Math.max(0, _visInputQty - outputQty - finalReprocessQty);
+
+    DB.StageRecords.insert({
+      batchId,
+      stage: 'visual',
+      inputQty: _visInputQty,
+      outputQty,
+      lossQty,
+      reprocessQty: finalReprocessQty,
+      reprocessDestination: finalReprocessQty > 0 ? reprocessDestination : '',
+      vendorId: finalVendorId,
+      inspectorName,
+      movedTo: destination,
+      movedFrom: 'visual',
+      date: dateStr,
+      recordedBy: session?.userId,
+      notes: notes,
+      iterationNo: batch?.recheckIteration||null
+    });
+
+    if (lossQty > 0) {
+      DB.LossTracker.insert({
+        batchId,
+        stage: 'visual',
+        lossQty,
+        date: dateStr,
+        jmrefNo: batch?.jmrefNo,
+        partNo: batch?.partNo,
+        iterationNo: batch?.recheckIteration||null
+      });
+    }
+
+    if (finalReprocessQty > 0) {
+      let baseBatchNo = `${batch.batchNo}-REP`;
+      let repBatchNo = baseBatchNo;
+      let counter = 1;
+      while (DB.Batches.all().some(b => b.batchNo === repBatchNo)) {
+        counter++;
+        repBatchNo = `${baseBatchNo}-${counter}`;
+      }
+      const repBatch = DB.Batches.insert({
+        batchNo: repBatchNo,
+        partId: batch.partId,
+        partNo: batch.partNo,
+        jmrefNo: batch.jmrefNo,
+        description: batch.description,
+        currentStage: reprocessDestination,
+        status: 'active',
+        initialQty: finalReprocessQty,
+        isReprocess: true,
+        reprocessDestination: reprocessDestination,
+        createdAt: new Date().toISOString(),
+        notes: `Reprocess batch created from batch ${batch.batchNo}. Target: ${reprocessDestination}`
+      });
+
+      DB.StageRecords.insert({
+        batchId: repBatch.id,
+        stage: 'visual',
+        inputQty: finalReprocessQty,
+        outputQty: finalReprocessQty,
+        lossQty: 0,
+        movedTo: reprocessDestination,
+        movedFrom: 'visual',
+        date: dateStr,
+        recordedBy: session?.userId,
+        notes: `Reprocess batch created from batch ${batch.batchNo}. Target: ${reprocessDestination}`
+      });
+
+      setTimeout(() => {
+        const confirmPrint = confirm(`Reprocess batch ${repBatchNo} created. Would you like to print its barcode label?`);
+        if (confirmPrint) {
+          window.printBarcode(repBatch.id);
+        }
+      }, 1200);
+    }
+
     DB.Batches.update(batchId, { currentStage:destination });
     document.getElementById('vis-process-modal').classList.add('hidden');
-    showToast('Batch moved to ' + (destination === 'gauge' ? 'Gauge Inspection' : 'Quality Final'), 'success');
+    showToast('Batch moved to ' + (STAGE_LABELS[destination] || destination), 'success');
     render();
   }
   function openReject(batchId) {
@@ -518,5 +722,5 @@ const VisualModule = (() => {
     }
   }
 
-  return { render, openProcess, calcLoss, process, openReject, rejectBatch, showInspectorDropdown, filterInspectors, selectInspector, filterHistory, filterPending, updateDynamicBatchNo };
+  return { render, openProcess, calcLoss, process, openReject, rejectBatch, showInspectorDropdown, filterInspectors, selectInspector, filterHistory, filterPending, updateDynamicBatchNo, onDestinationChange };
 })();

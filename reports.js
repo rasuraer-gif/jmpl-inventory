@@ -8,7 +8,7 @@ const ReportsModule = (() => {
 
   const MODULES = [
     'inventory','sales','production','cryogenic','deflashing',
-    'trimming','waiting-visual','visual','gauge','rejected','recheck','slob','aging'
+    'trimming','waiting-visual','visual','gauge','rejected','recheck','slob','aging','reprocess'
   ];
 
   const STAGE_LABELS = {
@@ -398,11 +398,60 @@ const ReportsModule = (() => {
     const totalPct = totalInput ? ((totalLoss / totalInput) * 100).toFixed(1) + '%' : '0.0%';
     const summaryRow = ['','','','','','TOTAL LOSS', totalLoss, totalPct, '', ...extraCols.map(()=>'')];
     dataRows.push(summaryRow);
-
     const html = `<div class="table-wrap"><table class="data-table">
       <thead><tr>${headers.map(th).join('')}</tr></thead>
       <tbody>${dataRows.map((r,i)=>`<tr class="${i===dataRows.length-1?'font-bold text-danger':''}">${r.map(v=>td(v)).join('')}</tr>`).join('')}</tbody>
     </table></div>`;
+    return { html, headers, dataRows };
+  }
+
+  // ── Render Report: Reprocessed Items ─────────────────────
+  function renderReprocess(filters) {
+    const { from, to, jmref } = filters;
+    let recs = DB.StageRecords.all().filter(r => r.reprocessQty > 0);
+    recs = filterByDateRange(recs, 'date', from, to);
+    
+    if (jmref) {
+      const q = jmref.toLowerCase();
+      recs = recs.filter(r => {
+        const b = DB.Batches.find(r.batchId) || {};
+        return (b.batchNo || '').toLowerCase().includes(q) || 
+               (b.jmrefNo || '').toLowerCase().includes(q) ||
+               (b.partNo || '').toLowerCase().includes(q);
+      });
+    }
+
+    if (!recs.length) return emptyState('No reprocessed items found.');
+
+    const headers = ['#', 'Original Batch No', 'JMREF No', 'Part No', 'Reprocess Qty', 'Reprocess Destination', 'Processed By', 'Date'];
+    const users = DB.Users.all();
+    
+    const dataRows = recs.map((r, i) => {
+      const batch = DB.Batches.find(r.batchId) || {};
+      const user = users.find(u => u.id === r.recordedBy) || {};
+      const stageLabelMap = {
+        trimming: 'Trimming',
+        cryogenic: 'Cryogenic',
+        deflashing: 'Manual DE Flashing (Flash Removal)'
+      };
+      const dateStr = r.date ? formatDate(r.date) : '—';
+      return [
+        i + 1,
+        batch.batchNo || '—',
+        batch.jmrefNo || '—',
+        batch.partNo || '—',
+        r.reprocessQty || 0,
+        stageLabelMap[r.reprocessDestination] || r.reprocessDestination || '—',
+        user.name || '—',
+        dateStr
+      ];
+    });
+
+    const html = `<div class="table-wrap"><table class="data-table">
+      <thead><tr>${headers.map(th).join('')}</tr></thead>
+      <tbody>${dataRows.map(r=>`<tr>${r.map(v=>td(v)).join('')}</tr>`).join('')}</tbody>
+    </table></div>`;
+    
     return { html, headers, dataRows };
   }
 
@@ -914,6 +963,7 @@ const ReportsModule = (() => {
       </div>`;
 
     const filterMap = {
+      reprocess: [jmrefFilter, dateRange].join(''),
       inventory: [jmrefFilter, partNoFilter].join(''),
       sales:     [jmrefFilter, dateRange].join(''),
       production:[jmrefFilter, opFilter, dateRange].join(''),
@@ -950,6 +1000,7 @@ const ReportsModule = (() => {
     let result;
 
     switch(reportKey) {
+      case 'reprocess':  result = renderReprocess(filters); break;
       case 'inventory':  result = renderInventory(filters); break;
       case 'sales':      result = renderSales(filters); break;
       case 'production': result = renderProduction(filters); break;
@@ -984,6 +1035,7 @@ const ReportsModule = (() => {
 
   // ── Report Configs ─────────────────────────────────────────
   const REPORTS = [
+    { key:'reprocess',  label:'🔄 Reprocessed Items Report',   desc:'Chronological list of all batches and quantities sent for reprocessing' },
     { key:'inventory',  label:'📦 Inventory Report',           desc:'Current quantity per part at each stage' },
     { key:'sales',      label:'💰 Sales Report',               desc:'Sales records with date range filter' },
     { key:'production', label:'🏭 Production Report',          desc:'Operator-wise and JMREF-wise production output' },

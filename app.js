@@ -223,6 +223,7 @@ const NAV = [
   { id:'rpt-slob',      label:'SLOB Report',       icon:'📉', module:'report_slob',      section:'tools', parent:'reports', perm:'report_inventory' },
   { id:'rpt-aging',     label:'Aging WIP Report',  icon:'⏳', module:'report_aging',     section:'tools', parent:'reports', perm:'report_inventory' },
   { id:'rpt-pending-batches', label:'Pending Batches', icon:'⏳', module:'report_pending_batches', section:'tools', parent:'reports', perm:'report_inventory' },
+  { id:'rpt-reprocess', label:'Reprocessed Items', icon:'🔄', module:'report_reprocess', section:'tools', parent:'reports', perm:'report_reprocess' },
 
   { id:'print-batch',  label:'Print Label',        icon:'🖨️', module:'print-batch',  section:'tools' },
   { id:'ai-agent',   label:'AI Assistant',        icon:'🤖', module:'ai-agent',  section:'tools', perm:'ai-agent' },
@@ -272,6 +273,7 @@ const App = (() => {
     report_slob:       () => ReportsModule?.render('slob'),
     report_aging:      () => ReportsModule?.render('aging'),
     report_pending_batches: () => ReportsModule?.render('pending-batches'),
+    report_reprocess:  () => ReportsModule?.render('reprocess'),
     'print-batch':     () => PrintBatchModule?.render(),
   };
 
@@ -302,6 +304,7 @@ const App = (() => {
     report_slob:'SLOB Report',
     report_aging:'Aging WIP Report',
     report_pending_batches:'Pending Batch Report',
+    report_reprocess:'Reprocessed Items Report',
   };
 
   function navigate(moduleId) {

@@ -150,10 +150,14 @@ const CryogenicModule = (() => {
           <div class="form-group"><label class="form-label">Output Quantity <span class="required">*</span></label><input type="number" id="cryo-output-qty" class="form-control" min="0" oninput="CryogenicModule.calcLoss()"></div>
           <div class="form-group"><label class="form-label">Loss Quantity (Auto)</label><input type="text" id="cryo-loss-qty" class="form-control" readonly style="color:var(--accent-red);font-weight:700;"></div>
           <div class="form-group"><label class="form-label">Destination <span class="required">*</span></label>
-            <select id="cryo-destination" class="form-control">
+            <select id="cryo-destination" class="form-control" onchange="CryogenicModule.onDestinationChange()">
               <option value="trimming">Trimming</option>
               <option value="post-curing">Post Curing</option>
             </select>
+          </div>
+          <div class="form-group hidden" id="cryo-vendor-group">
+            <label class="form-label">Vendor <span class="required">*</span></label>
+            <select id="cryo-vendor" class="form-control"><option value="">Select vendor...</option></select>
           </div>
           <div id="cryo-stock-fields" class="hidden">
             <hr style="margin: 16px 0; border: 0; border-top: 1px solid var(--border);">
@@ -264,6 +268,7 @@ const CryogenicModule = (() => {
     document.getElementById('cryo-loss-qty').value = '';
     document.getElementById('cryo-notes').value = '';
     document.getElementById('cryo-destination').value = 'trimming';
+    onDestinationChange();
     document.getElementById('cryo-process-modal').classList.remove('hidden');
   }
 
@@ -291,6 +296,21 @@ const CryogenicModule = (() => {
       }
     }
   }
+  function onDestinationChange() {
+    const dest = document.getElementById('cryo-destination').value;
+    const vendorGroup = document.getElementById('cryo-vendor-group');
+    const vendorSelect = document.getElementById('cryo-vendor');
+    if (!vendorGroup || !vendorSelect) return;
+    if (dest === 'trimming') {
+      vendorGroup.classList.remove('hidden');
+      const vendors = DB.Vendors.byDept(dest);
+      vendorSelect.innerHTML = '<option value="">Select vendor...</option>' + vendors.map(v => `<option value="${v.id}">${v.name}</option>`).join('');
+    } else {
+      vendorGroup.classList.add('hidden');
+      vendorSelect.innerHTML = '<option value="">Not required</option>';
+      vendorSelect.value = '';
+    }
+  }
   function calcLoss() {
     const isStock = _activeBatch && (_activeBatch.isStockUpload || (_activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-')));
     if (!isStock) {
@@ -302,9 +322,14 @@ const CryogenicModule = (() => {
     const batchId = document.getElementById('cryo-batch-id').value;
     const outputQty = parseInt(document.getElementById('cryo-output-qty').value);
     const destination = document.getElementById('cryo-destination').value;
+    const vendorId = document.getElementById('cryo-vendor')?.value || '';
     const notes = document.getElementById('cryo-notes').value.trim();
     const session = Auth.getSession();
     if (isNaN(outputQty) || outputQty < 0) { showToast('Enter a valid output quantity', 'error'); return; }
+    if (destination === 'trimming' && !vendorId) {
+      showToast('Please select a vendor for Trimming', 'error');
+      return;
+    }
     
     let inputQty = _cryoInputQty;
     let lossQty = 0;
@@ -369,6 +394,7 @@ const CryogenicModule = (() => {
         productionType: typeVal,
         pressNo,
         productionDate: dateVal,
+        vendorId: vendorId || '',
         createdAt: new Date().toISOString(),
         notes: 'Sub-batch created from Stock Upload pool batch: ' + _activeBatch.batchNo
       });
@@ -386,6 +412,7 @@ const CryogenicModule = (() => {
         inputQty: totalDeducted,
         outputQty: outputQty,
         lossQty: lossQty,
+        vendorId: vendorId || '',
         movedTo: destination,
         movedFrom: 'cryogenic',
         date: dateStr,
@@ -432,9 +459,9 @@ const CryogenicModule = (() => {
     const batch = DB.Batches.find(batchId);
     const dateStr = new Date().toISOString().slice(0,10);
 
-    DB.StageRecords.insert({ batchId, stage:'cryogenic', inputQty, outputQty, lossQty, movedTo:destination, movedFrom:'cryogenic', date:dateStr, recordedBy:session?.userId, notes:notes });
+    DB.StageRecords.insert({ batchId, stage:'cryogenic', inputQty, outputQty, lossQty, vendorId: vendorId || '', movedTo:destination, movedFrom:'cryogenic', date:dateStr, recordedBy:session?.userId, notes:notes });
     if (lossQty > 0) DB.LossTracker.insert({ batchId, stage:'cryogenic', lossQty, date:dateStr, jmrefNo:batch?.jmrefNo, partNo:batch?.partNo });
-    DB.Batches.update(batchId, { currentStage:destination });
+    DB.Batches.update(batchId, { currentStage:destination, vendorId: vendorId || '' });
     document.getElementById('cryo-process-modal').classList.add('hidden');
     showToast('Batch moved to ' + (STAGE_LABELS[destination] || destination), 'success');
     render();
@@ -471,5 +498,5 @@ const CryogenicModule = (() => {
     }
   }
 
-  return { render, openProcess, calcLoss, process, openReject, rejectBatch, filterHistory, filterPending, updateDynamicBatchNo };
+  return { render, openProcess, calcLoss, process, openReject, rejectBatch, filterHistory, filterPending, updateDynamicBatchNo, onDestinationChange };
 })();

@@ -8,9 +8,11 @@ const GaugeModule = (() => {
 
   function getInputQty(batchId) {
     const recs = DB.StageRecords.all().filter(r => r.batchId === batchId && r.movedTo === 'gauge');
-    if (!recs.length) return (DB.Batches.find(batchId)||{}).initialQty||0;
+    const batch = DB.Batches.find(batchId) || {};
+    if (!recs.length) return batch.initialQty || 0;
     const lastRec = recs[recs.length - 1];
-    return lastRec.isRecheck ? lastRec.recheckQty : lastRec.outputQty;
+    const qtyVal = Number(lastRec.isRecheck ? lastRec.recheckQty : lastRec.outputQty);
+    return !isNaN(qtyVal) ? qtyVal : (batch.initialQty || 0);
   }
   function render() {
     pendingSearch = '';

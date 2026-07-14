@@ -270,11 +270,15 @@ const ProductionModule = (() => {
               <input type="text" id="move-loss-qty" class="form-control" readonly style="color:var(--accent-red);font-weight:700;">
             </div>
             <div class="form-group"><label class="form-label">Destination Stage <span class="required">*</span></label>
-              <select id="move-destination" class="form-control">
+              <select id="move-destination" class="form-control" onchange="ProductionModule.onDestinationChange()">
                 <option value="cryogenic">Cryogenic</option>
                 <option value="deflashing">Manual DE Flashing</option>
                 <option value="trimming">Trimming</option>
               </select>
+            </div>
+            <div class="form-group hidden" id="move-vendor-group">
+              <label class="form-label">Vendor <span class="required">*</span></label>
+              <select id="move-vendor" class="form-control"><option value="">Select vendor...</option></select>
             </div>
             <div id="prod-stock-fields" class="hidden">
               <hr style="margin: 16px 0; border: 0; border-top: 1px solid var(--border);">
@@ -404,6 +408,7 @@ const ProductionModule = (() => {
       if (lossGroup) lossGroup.style.display = 'block';
     }
     document.getElementById('move-destination').value = 'cryogenic';
+    onDestinationChange();
     document.getElementById('move-notes').value = '';
     document.getElementById('prod-move-modal').classList.remove('hidden');
   }
@@ -433,6 +438,22 @@ const ProductionModule = (() => {
     }
   }
 
+  function onDestinationChange() {
+    const dest = document.getElementById('move-destination').value;
+    const vendorGroup = document.getElementById('move-vendor-group');
+    const vendorSelect = document.getElementById('move-vendor');
+    if (!vendorGroup || !vendorSelect) return;
+    if (dest === 'trimming' || dest === 'deflashing') {
+      vendorGroup.classList.remove('hidden');
+      const vendors = DB.Vendors.byDept(dest);
+      vendorSelect.innerHTML = '<option value="">Select vendor...</option>' + vendors.map(v => `<option value="${v.id}">${v.name}</option>`).join('');
+    } else {
+      vendorGroup.classList.add('hidden');
+      vendorSelect.innerHTML = '<option value="">Not required</option>';
+      vendorSelect.value = '';
+    }
+  }
+
   function calcLoss() {
     if (!_moveInputQty) {
       document.getElementById('move-loss-qty').value = '0';
@@ -450,10 +471,15 @@ const ProductionModule = (() => {
     const batchId = document.getElementById('move-batch-id').value;
     const outputQty = parseInt(document.getElementById('move-output-qty').value);
     const destination = document.getElementById('move-destination').value;
+    const vendorId = document.getElementById('move-vendor')?.value || '';
     const notes = document.getElementById('move-notes').value.trim();
     const session = Auth.getSession();
     if (!outputQty && outputQty !== 0) { showToast('Output quantity is required', 'error'); return; }
     if (_moveInputQty && outputQty > _moveInputQty) { showToast('Output quantity cannot exceed input quantity', 'error'); return; }
+    if ((destination === 'trimming' || destination === 'deflashing') && !vendorId) {
+      showToast('Please select a vendor for the selected destination', 'error');
+      return;
+    }
     const inputQty = _moveInputQty || outputQty;
     const lossQty = Math.max(0, inputQty - outputQty);
     const batch = DB.Batches.find(batchId);
@@ -507,6 +533,7 @@ const ProductionModule = (() => {
         productionType: typeVal,
         pressNo,
         productionDate: dateVal,
+        vendorId: vendorId || '',
         createdAt: new Date().toISOString(),
         notes: 'Sub-batch created from Stock Upload pool batch: ' + _activeBatch.batchNo
       });
@@ -525,6 +552,7 @@ const ProductionModule = (() => {
         inputQty: totalDeducted,
         outputQty: outputQty,
         lossQty: lossQty,
+        vendorId: vendorId || '',
         movedTo: destination,
         movedFrom: 'production',
         date: dateStr,
@@ -550,9 +578,9 @@ const ProductionModule = (() => {
       return;
     }
 
-    DB.StageRecords.insert({ batchId, stage:'production', inputQty, outputQty, lossQty, movedTo:destination, movedFrom:'production', date:dateStr, recordedBy:session?.userId, notes });
+    DB.StageRecords.insert({ batchId, stage:'production', inputQty, outputQty, lossQty, vendorId: vendorId || '', movedTo:destination, movedFrom:'production', date:dateStr, recordedBy:session?.userId, notes });
     if (lossQty > 0) DB.LossTracker.insert({ batchId, stage:'production', lossQty, date:dateStr, jmrefNo:batch.jmrefNo, partNo:batch.partNo });
-    DB.Batches.update(batchId, { currentStage: destination, initialQty: inputQty });
+    DB.Batches.update(batchId, { currentStage: destination, initialQty: inputQty, vendorId: vendorId || '' });
     document.getElementById('prod-move-modal').classList.add('hidden');
     showToast('Batch moved to ' + destination, 'success');
     renderStats();
@@ -846,5 +874,5 @@ const ProductionModule = (() => {
     }
   }
 
-  return { render, openMove, calcLoss, moveBatch, openReject, rejectBatch, onTypeChange, createBatch, resetForm, showPartDropdown, filterParts, selectPart, updateDynamicBatchNo, updateMoveDynamicBatchNo, printBarcode, filterPending, showJmrefDropdown, filterJmrefs };
+  return { render, openMove, calcLoss, moveBatch, openReject, rejectBatch, onTypeChange, createBatch, resetForm, showPartDropdown, filterParts, selectPart, updateDynamicBatchNo, updateMoveDynamicBatchNo, printBarcode, filterPending, showJmrefDropdown, filterJmrefs, onDestinationChange };
 })();
