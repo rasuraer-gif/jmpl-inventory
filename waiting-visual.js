@@ -626,7 +626,7 @@ const WaitingVisualModule = (() => {
     const outputQty = parseInt(document.getElementById('wv-output-qty').value);
     const notes = document.getElementById('wv-notes').value.trim();
     if (isNaN(outputQty) || outputQty < 0) { showToast('Enter a valid output quantity', 'error'); return; }
-    if (outputQty > _wvInputQty) { showToast('Output cannot exceed input quantity', 'error'); return; }
+    
     const lossQty = Math.max(0, _wvInputQty - outputQty);
     const session = Auth.getSession();
     const batch = DB.Batches.find(batchId);
@@ -654,10 +654,7 @@ const WaitingVisualModule = (() => {
       }
 
       const totalDeducted = outputQty + lossQty;
-      if (totalDeducted > _wvInputQty) {
-        showToast(`Total processed qty (Good: ${outputQty} + Loss: ${lossQty} = ${totalDeducted}) exceeds available input quantity (${_wvInputQty})`, 'error');
-        return;
-      }
+      
 
       const remainingQty = Math.max(0, (_activeBatch.initialQty || 0) - totalDeducted);
 

@@ -128,6 +128,13 @@ const MasterModule = (() => {
               </div>
               <div class="form-group" style="flex:1;"></div>
             </div>
+
+            <hr style="margin: 16px 0; border: 0; border-top: 1px solid var(--border);">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+              <h4 style="color:var(--primary); font-size:14px; font-weight:600; margin:0;">🛠️ Mould Details</h4>
+              <button type="button" class="btn btn-secondary btn-xs" onclick="MasterModule.addMouldRow()">+ Add Mould</button>
+            </div>
+            <div id="moulds-container" style="max-height: 200px; overflow-y: auto; padding-right: 4px; margin-bottom: 8px;"></div>
           </div>
           <div class="modal-footer">
             <button class="btn btn-secondary" onclick="document.getElementById('master-modal').classList.add('hidden')">Cancel</button>
@@ -176,7 +183,14 @@ const MasterModule = (() => {
         <td class="font-semibold">${p.salePrice != null ? p.salePrice : '—'}</td>
         <td>${p.blankWeight != null ? p.blankWeight : '—'}</td>
         <td class="font-semibold text-success">${p.averageTargetInventory != null ? formatNum(p.averageTargetInventory) : '—'}</td>
-        <td>${p.description}</td>
+        <td>
+          <div>${p.description || '—'}</div>
+          ${p.moulds && p.moulds.length ? `
+            <div style="margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px;">
+              ${p.moulds.map(m => `<span class="badge badge-gray" style="font-size: 10px; padding: 2px 6px; border: 1px solid var(--border);" title="Mould ${m.mouldNo}\nType: ${m.mouldType}\nFirst Process: ${m.firstProcess}\nFlow: ${m.processFlow}">M#${m.mouldNo} (${m.mouldType})</span>`).join('')}
+            </div>
+          ` : ''}
+        </td>
         <td class="text-muted text-sm">${(p.createdAt||'').slice(0,10)}</td>
         <td>
           <div class="flex gap-2">
@@ -188,6 +202,53 @@ const MasterModule = (() => {
   }
 
   function search(val) { searchTerm = val; renderTable(); }
+
+  function createMouldRowElement(m = {}) {
+    const div = document.createElement('div');
+    div.className = 'mould-row';
+    div.style = 'display: flex; gap: 8px; align-items: center; margin-bottom: 8px;';
+    div.innerHTML = `
+      <div style="width: 85px;">
+        <select class="form-control mould-no">
+          <option value="1" ${m.mouldNo === 1 ? 'selected' : ''}>Mould 1</option>
+          <option value="2" ${m.mouldNo === 2 ? 'selected' : ''}>Mould 2</option>
+          <option value="3" ${m.mouldNo === 3 ? 'selected' : ''}>Mould 3</option>
+          <option value="4" ${m.mouldNo === 4 ? 'selected' : ''}>Mould 4</option>
+          <option value="5" ${m.mouldNo === 5 ? 'selected' : ''}>Mould 5</option>
+        </select>
+      </div>
+      <div style="width: 110px;">
+        <select class="form-control mould-type">
+          <option value="Cryogenic" ${m.mouldType === 'Cryogenic' ? 'selected' : ''}>Cryogenic</option>
+          <option value="Flash Free" ${m.mouldType === 'Flash Free' ? 'selected' : ''}>Flash Free</option>
+          <option value="Normal" ${m.mouldType === 'Normal' ? 'selected' : ''}>Normal</option>
+        </select>
+      </div>
+      <div style="flex: 1;">
+        <input type="text" class="form-control mould-flow" placeholder="Process Flow" value="${m.processFlow || ''}">
+      </div>
+      <div style="width: 130px;">
+        <select class="form-control mould-first-process">
+          <option value="Cryogenic" ${m.firstProcess === 'Cryogenic' ? 'selected' : ''}>Cryogenic</option>
+          <option value="Flash Removal" ${m.firstProcess === 'Flash Removal' ? 'selected' : ''}>Flash Removal</option>
+          <option value="Trimming" ${m.firstProcess === 'Trimming' ? 'selected' : ''}>Trimming</option>
+        </select>
+      </div>
+      <button type="button" class="btn btn-danger btn-xs" onclick="MasterModule.removeMouldRow(this)" style="padding: 4px 8px;">✕</button>
+    `;
+    return div;
+  }
+
+  function addMouldRow() {
+    const container = document.getElementById('moulds-container');
+    if (container) {
+      container.appendChild(createMouldRowElement({}));
+    }
+  }
+
+  function removeMouldRow(btn) {
+    btn.closest('.mould-row').remove();
+  }
 
   function openAdd() {
     document.getElementById('master-edit-id').value = '';
@@ -205,6 +266,12 @@ const MasterModule = (() => {
     document.getElementById('master-length').value = '';
     document.getElementById('master-weight').value = '';
     document.getElementById('master-avgtarget').value = '';
+    
+    const container = document.getElementById('moulds-container');
+    if (container) {
+      container.innerHTML = '';
+    }
+    
     document.getElementById('master-modal').classList.remove('hidden');
   }
 
@@ -226,6 +293,17 @@ const MasterModule = (() => {
     document.getElementById('master-length').value = p.blankLength != null ? p.blankLength : '';
     document.getElementById('master-weight').value = p.blankWeight != null ? p.blankWeight : '';
     document.getElementById('master-avgtarget').value = p.averageTargetInventory != null ? p.averageTargetInventory : '';
+    
+    const container = document.getElementById('moulds-container');
+    if (container) {
+      container.innerHTML = '';
+      if (p.moulds && p.moulds.length) {
+        p.moulds.forEach(m => {
+          container.appendChild(createMouldRowElement(m));
+        });
+      }
+    }
+
     document.getElementById('master-modal').classList.remove('hidden');
   }
 
@@ -247,6 +325,30 @@ const MasterModule = (() => {
     const averageTargetInventory = document.getElementById('master-avgtarget').value !== '' ? parseInt(document.getElementById('master-avgtarget').value, 10) : null;
 
     if (!partNo || !jmrefNo || !description) { showToast('Part No, JMREF No, and Description are required', 'error'); return; }
+
+    // Read and validate moulds
+    const mouldRows = Array.from(document.querySelectorAll('.mould-row'));
+    const moulds = mouldRows.map(row => {
+      return {
+        mouldNo: parseInt(row.querySelector('.mould-no').value, 10),
+        mouldType: row.querySelector('.mould-type').value,
+        processFlow: row.querySelector('.mould-flow').value.trim(),
+        firstProcess: row.querySelector('.mould-first-process').value
+      };
+    });
+
+    if (moulds.some(m => !m.processFlow)) {
+      showToast('Process Flow is required for all moulds', 'error');
+      return;
+    }
+
+    const types = moulds.map(m => m.mouldType);
+    const uniqueTypes = new Set(types);
+    if (types.length !== uniqueTypes.size) {
+      showToast('Each mould must have a different Mould Type (Cryogenic, Flash Free, or Normal)', 'error');
+      return;
+    }
+
     const all = DB.Master.all();
     if (all.find(p => p.partNo === partNo && p.id !== id)) { showToast('Part No already exists', 'error'); return; }
     if (all.find(p => p.jmrefNo === jmrefNo && p.id !== id)) { showToast('JMREF No already exists', 'error'); return; }
@@ -264,7 +366,8 @@ const MasterModule = (() => {
       sheetThickness,
       blankLength,
       blankWeight,
-      averageTargetInventory
+      averageTargetInventory,
+      moulds
     };
 
     if (id) { 
@@ -508,5 +611,5 @@ const MasterModule = (() => {
     renderTable();
   }
 
-  return { render, search, openAdd, openEdit, save, remove, openBulk, downloadTemplate, handleFileSelect, saveBulk };
+  return { render, search, openAdd, openEdit, save, remove, openBulk, downloadTemplate, handleFileSelect, saveBulk, addMouldRow, removeMouldRow };
 })();

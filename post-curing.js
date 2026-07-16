@@ -321,7 +321,7 @@ const PostCuringModule = (() => {
     const outputQty = parseInt(document.getElementById('pc-output-qty').value);
     const notes = document.getElementById('pc-notes').value.trim();
     if (isNaN(outputQty) || outputQty < 0) { showToast('Enter a valid output quantity', 'error'); return; }
-    if (outputQty > _pcInputQty) { showToast('Output cannot exceed input quantity', 'error'); return; }
+    
     const lossQty = Math.max(0, _pcInputQty - outputQty);
     const session = Auth.getSession();
     const batch = DB.Batches.find(batchId);
@@ -349,10 +349,7 @@ const PostCuringModule = (() => {
       }
 
       const totalDeducted = outputQty + lossQty;
-      if (totalDeducted > _pcInputQty) {
-        showToast(`Total processed qty (Good: ${outputQty} + Loss: ${lossQty} = ${totalDeducted}) exceeds available input quantity (${_pcInputQty})`, 'error');
-        return;
-      }
+      
 
       const remainingQty = Math.max(0, (_activeBatch.initialQty || 0) - totalDeducted);
 

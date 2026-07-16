@@ -50,6 +50,17 @@ function printBarcode(batchId) {
 
   const formattedDate = batch.productionDate ? formatDate(batch.productionDate) : formatDate(batch.createdAt);
 
+  const part = DB.Master.find(batch.partId) || DB.Master.all().find(p => p.partNo === batch.partNo || p.jmrefNo === batch.jmrefNo) || {};
+  let mouldType = '—';
+  let processFlow = '—';
+  if (batch.mouldNo && part.moulds) {
+    const m = part.moulds.find(x => x.mouldNo === Number(batch.mouldNo));
+    if (m) {
+      mouldType = m.mouldType || '—';
+      processFlow = m.processFlow || '—';
+    }
+  }
+
   printWindow.document.write(`
     <html>
     <head>
@@ -84,7 +95,7 @@ function printBarcode(batchId) {
           padding: 16px;
         }
         .company-title {
-          font-size: 20px;
+          font-size: 17px;
           font-weight: 900;
           letter-spacing: 0.5px;
           border-bottom: 3px solid #000;
@@ -92,23 +103,31 @@ function printBarcode(batchId) {
           width: 100%;
           text-align: center;
           text-transform: uppercase;
+          white-space: nowrap;
         }
         .qr-wrapper {
           margin: 12px 0;
           display: flex;
           align-items: center;
           justify-content: center;
+          position: relative;
+          width: 100%;
         }
         .batch-no-display {
-          font-size: 28px;
-          font-weight: 800;
+          font-size: 20px;
+          font-weight: 900;
           letter-spacing: 0.5px;
           margin-bottom: 12px;
           border: 3px solid #000;
-          padding: 8px 16px;
+          padding: 6px 12px;
           border-radius: 4px;
           background: #f3f4f6;
           text-align: center;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: clip;
+          max-width: 100%;
+          box-sizing: border-box;
         }
         .details {
           width: 100%;
@@ -138,6 +157,9 @@ function printBarcode(batchId) {
       <div class="label-container">
         <div class="company-title">JANANI MOULDINGS PVT. LTD.</div>
         <div class="qr-wrapper">
+          <div style="position: absolute; left: 0; top: 50%; transform: translateY(-50%); writing-mode: vertical-rl; font-size: 15px; font-weight: 900; text-transform: uppercase; color: #000; letter-spacing: 0.5px; white-space: nowrap; height: 180px; display: flex; align-items: center; justify-content: center; text-align: center; border-right: 1px dashed #000; padding-right: 8px;">
+            ${processFlow}
+          </div>
           <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(batch.batchNo)}" style="width: 200px; height: 200px; display: block;" onload="triggerPrint()" />
         </div>
         <div class="batch-no-display">${batch.batchNo}</div>
@@ -153,6 +175,14 @@ function printBarcode(batchId) {
           <div class="detail-row">
             <span class="label">Prod Date:</span>
             <span class="value">${formattedDate}</span>
+          </div>
+          <div class="detail-row">
+            <span class="label">Mould No:</span>
+            <span class="value">${batch.mouldNo != null ? batch.mouldNo : '—'}</span>
+          </div>
+          <div class="detail-row">
+            <span class="label">Mould Type:</span>
+            <span class="value">${mouldType}</span>
           </div>
         </div>
       </div>
@@ -190,6 +220,7 @@ document.addEventListener('keydown', e => {
 const NAV = [
   { id:'dashboard',  label:'Dashboard',           icon:'🏠', module:'dashboard', section:'main' },
   { id:'master',     label:'Inventory Master',    icon:'📋', module:'master',    section:'main', perm:'master' },
+  { id:'mould-tracking', label:'Mould Tracking',   icon:'🛠️', module:'mould-tracking', section:'main', perm:'mould-tracking' },
   // Departments
   { id:'production', label:'Production',          icon:'🏭', module:'production',section:'dept', perm:'production' },
   { id:'cryogenic',  label:'Cryogenic',           icon:'❄️', module:'cryogenic', section:'dept', perm:'cryogenic' },
@@ -224,6 +255,7 @@ const NAV = [
   { id:'rpt-aging',     label:'Aging WIP Report',  icon:'⏳', module:'report_aging',     section:'tools', parent:'reports', perm:'report_inventory' },
   { id:'rpt-pending-batches', label:'Pending Batches', icon:'⏳', module:'report_pending_batches', section:'tools', parent:'reports', perm:'report_inventory' },
   { id:'rpt-reprocess', label:'Reprocessed Items', icon:'🔄', module:'report_reprocess', section:'tools', parent:'reports', perm:'report_reprocess' },
+  { id:'rpt-qty-gain',  label:'Qty Gain Report',   icon:'📈', module:'report_qty_gain',  section:'tools', parent:'reports', perm:'report_inventory' },
 
   { id:'print-batch',  label:'Print Label',        icon:'🖨️', module:'print-batch',  section:'tools' },
   { id:'ai-agent',   label:'AI Assistant',        icon:'🤖', module:'ai-agent',  section:'tools', perm:'ai-agent' },
@@ -241,6 +273,7 @@ const App = (() => {
   const MODULE_MAP = {
     dashboard:  () => renderDashboard(),
     master:     () => MasterModule?.render(),
+    'mould-tracking': () => MouldTrackingModule?.render(),
     production: () => ProductionModule?.render(),
     cryogenic:  () => CryogenicModule?.render(),
     deflashing: () => DeflashingModule?.render(),
@@ -274,11 +307,12 @@ const App = (() => {
     report_aging:      () => ReportsModule?.render('aging'),
     report_pending_batches: () => ReportsModule?.render('pending-batches'),
     report_reprocess:  () => ReportsModule?.render('reprocess'),
+    report_qty_gain:   () => ReportsModule?.render('qty-gain'),
     'print-batch':     () => PrintBatchModule?.render(),
   };
 
   const PAGE_TITLES = {
-    dashboard:'Dashboard', master:'Inventory Master', production:'Production',
+    dashboard:'Dashboard', master:'Inventory Master', 'mould-tracking':'Mould Tracking', production:'Production',
     cryogenic:'Cryogenic', deflashing:'Flash Removal', trimming:'Trimming',
     visual:'Visual Inspection', gauge:'Gauge Inspection', quality:'Quality Final',
     'post-curing':'Post Curing',
@@ -305,6 +339,7 @@ const App = (() => {
     report_aging:'Aging WIP Report',
     report_pending_batches:'Pending Batch Report',
     report_reprocess:'Reprocessed Items Report',
+    report_qty_gain:'Quantity Gain Report',
   };
 
   function navigate(moduleId) {
@@ -326,7 +361,16 @@ const App = (() => {
 
     // Update top bar title
     const topTitle = document.getElementById('top-bar-title');
-    if (topTitle) topTitle.textContent = PAGE_TITLES[moduleId] || moduleId;
+    if (topTitle) {
+      topTitle.textContent = PAGE_TITLES[moduleId] || moduleId;
+      if (localStorage.getItem('jmpl_db_is_local_backup') === 'true') {
+        const badge = document.createElement('span');
+        badge.className = 'badge badge-amber animate-pulse';
+        badge.style.cssText = 'margin-left: 12px; font-size: 11px; padding: 4px 8px; border: 1px solid rgba(245, 158, 11, 0.4); display: inline-flex; align-items: center; gap: 4px; border-radius: 4px; vertical-align: middle;';
+        badge.innerHTML = '⚠️ LOCAL BACKUP MODE (READ-ONLY)';
+        topTitle.appendChild(badge);
+      }
+    }
 
     // Close mobile sidebar if open
     document.getElementById('sidebar')?.classList.remove('open');

@@ -977,8 +977,131 @@ const ReportsModule = (() => {
       rejected:  '',
       recheck:   [opFilter, dateRange].join(''),
       'pending-batches': [pendingStageFilter, pendingTimeframeFilter].join(''),
+      'qty-gain': [jmrefFilter, dateRange].join(''),
     };
     return filterMap[report] || '';
+  }
+
+  function renderQtyGainReport(filters) {
+    const { from, to, jmref } = filters;
+    let recs = DB.StageRecords.all().filter(r => r.outputQty > r.inputQty);
+
+    recs = filterByDateRange(recs, 'date', from, to);
+
+    if (jmref) {
+      const q = jmref.toLowerCase();
+      recs = recs.filter(r => {
+        const b = DB.Batches.find(r.batchId) || {};
+        return (b.batchNo || '').toLowerCase().includes(q) ||
+               (b.jmrefNo || '').toLowerCase().includes(q) ||
+               (b.partNo || '').toLowerCase().includes(q);
+      });
+    }
+
+    if (!recs.length) return emptyState('No quantity gain transactions found matching the selected filters.');
+
+    const headers = ['Batch No', 'Part No', 'JMREF No', 'Stage Name', 'Input Qty', 'Output Qty', 'Qty Gained', 'Date', 'Recorded By'];
+    const users = DB.Users.all();
+
+    // Map to normalized transactions objects
+    const transactions = recs.map(r => {
+      const b = DB.Batches.find(r.batchId) || {};
+      const u = users.find(usr => usr.id === r.recordedBy);
+      const gain = r.outputQty - r.inputQty;
+      return {
+        batchNo: b.batchNo || '—',
+        partNo: b.partNo || '—',
+        jmrefNo: b.jmrefNo || '—',
+        stage: r.stage || '—',
+        stageLabel: STAGE_LABELS[r.stage] || r.stage || '—',
+        inputQty: r.inputQty,
+        outputQty: r.outputQty,
+        gain: gain,
+        date: (r.date || '').slice(0, 10),
+        recordedBy: u ? u.name : '—'
+      };
+    });
+
+    // Group transactions by batch number
+    const groups = {};
+    transactions.forEach(t => {
+      if (!groups[t.batchNo]) {
+        groups[t.batchNo] = {
+          batchNo: t.batchNo,
+          partNo: t.partNo,
+          jmrefNo: t.jmrefNo,
+          totalGain: 0,
+          entries: []
+        };
+      }
+      groups[t.batchNo].totalGain += t.gain;
+      groups[t.batchNo].entries.push(t);
+    });
+
+    const groupList = Object.values(groups);
+
+    // Build grouped rows HTML representation
+    const rowsHtml = groupList.map(g => {
+      const groupHeader = `
+        <tr style="background: rgba(37, 99, 235, 0.05); font-weight: bold; border-left: 4px solid var(--accent-blue);">
+          <td colspan="4" class="font-bold text-blue" style="padding: 12px 14px; font-size: 13px;">
+            📦 Batch: ${g.batchNo} 
+            <span class="badge badge-gray" style="margin-left: 8px;">Part: ${g.partNo}</span>
+            <span class="badge badge-teal" style="margin-left: 8px;">JMREF: ${g.jmrefNo}</span>
+          </td>
+          <td colspan="5" class="font-bold text-success" style="padding: 12px 14px; font-size: 13px; text-align: right;">
+            Total Gained: +${formatNum(g.totalGain)}
+          </td>
+        </tr>`;
+
+      const entriesHtml = g.entries.map(e => `
+        <tr style="border-bottom: 1px solid var(--border);">
+          <td style="padding-left: 20px; color: var(--text-muted); font-size: 12px; font-style: italic;">↳ ${e.batchNo}</td>
+          <td><span class="stage-chip ${e.stage.toLowerCase().replace(/\s+/g, '')}">${e.stageLabel}</span></td>
+          <td>${formatNum(e.inputQty)}</td>
+          <td>${formatNum(e.outputQty)}</td>
+          <td class="font-bold text-success">+${formatNum(e.gain)}</td>
+          <td class="text-muted text-sm">${e.date}</td>
+          <td class="text-sm" colspan="3">${e.recordedBy}</td>
+        </tr>
+      `).join('');
+
+      return groupHeader + entriesHtml;
+    }).join('');
+
+    const html = `
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Batch No</th>
+              <th>Stage Name</th>
+              <th>Input Qty</th>
+              <th>Output Qty</th>
+              <th>Qty Gained</th>
+              <th>Date</th>
+              <th colspan="3">Recorded By</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rowsHtml}
+          </tbody>
+        </table>
+      </div>`;
+
+    const dataRows = transactions.map(t => [
+      t.batchNo,
+      t.partNo,
+      t.jmrefNo,
+      t.stageLabel,
+      String(t.inputQty),
+      String(t.outputQty),
+      String(t.gain),
+      t.date,
+      t.recordedBy
+    ]);
+
+    return { html, headers, dataRows };
   }
 
   // ── Collect Filters ────────────────────────────────────────
@@ -1016,6 +1139,7 @@ const ReportsModule = (() => {
       case 'slob':       result = renderSlob(filters); break;
       case 'aging':      result = renderAging(filters); break;
       case 'pending-batches': result = renderPendingBatches(filters); break;
+      case 'qty-gain':        result = renderQtyGainReport(filters); break;
       default: result = emptyState('Unknown report');
     }
 
@@ -1051,6 +1175,7 @@ const ReportsModule = (() => {
     { key:'slob',       label:'📉 SLOB Report',                desc:'Slow-moving and Obsolete inventory aging analysis' },
     { key:'aging',      label:'⏳ Aging WIP Report (> 1 Week)', desc:'Active batches sitting in the same stage for more than 7 days' },
     { key:'pending-batches', label:'⏳ Pending Batch Report',  desc:'Pending batches filtered by stage and timeframe from date Received' },
+    { key:'qty-gain',   label:'📈 Quantity Gain Report',       desc:'Stages where the batch output quantity was greater than the input quantity' },
   ];
 
   // ── Render ────────────────────────────────────────────────

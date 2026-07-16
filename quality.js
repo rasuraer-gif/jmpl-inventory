@@ -258,7 +258,7 @@ const QualityModule = (() => {
     const batchId = document.getElementById('qf-pass-batch-id').value;
     const outputQty = parseInt(document.getElementById('qf-pass-output').value);
     if (isNaN(outputQty) || outputQty < 0) { showToast('Enter a valid output quantity', 'error'); return; }
-    if (outputQty > _passInputQty) { showToast('Output cannot exceed input', 'error'); return; }
+    
     const lossQty = Math.max(0, _passInputQty - outputQty);
     const session = Auth.getSession();
     const batch = DB.Batches.find(batchId);
@@ -318,7 +318,7 @@ const QualityModule = (() => {
     const toStage = document.getElementById('qf-rc-stage').value;
     const recheckQty = parseInt(document.getElementById('qf-rc-qty').value);
     if (!recheckQty || recheckQty < 1) { showToast('Enter a valid recheck quantity', 'error'); return; }
-    if (recheckQty > _rcInputQty) { showToast('Recheck qty cannot exceed input qty', 'error'); return; }
+    
     const lossQty = Math.max(0, _rcInputQty - recheckQty);
     const iterNo = DB.RecheckTracker.nextIterationNo(batchId);
     const session = Auth.getSession();

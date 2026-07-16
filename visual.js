@@ -454,7 +454,7 @@ const VisualModule = (() => {
     const finalReprocessQty = isRep ? 0 : reprocessQty;
     
     if (isNaN(finalReprocessQty) || finalReprocessQty < 0) { showToast('Enter a valid reprocess quantity', 'error'); return; }
-    if (outputQty + finalReprocessQty > _visInputQty) { showToast('Total output and reprocess quantity cannot exceed input quantity', 'error'); return; }
+    
 
     if ((destination === 'trimming' || destination === 'deflashing') && !vendorId) { showToast('Please select a vendor', 'error'); return; }
     const finalVendorId = (destination === 'trimming' || destination === 'deflashing') ? vendorId : '';
@@ -484,10 +484,7 @@ const VisualModule = (() => {
       }
 
       const totalDeducted = outputQty + finalReprocessQty + lossQty;
-      if (totalDeducted > _visInputQty) {
-        showToast(`Total processed qty (Good: ${outputQty} + Reprocess: ${finalReprocessQty} + Loss: ${lossQty} = ${totalDeducted}) exceeds available input quantity (${_visInputQty})`, 'error');
-        return;
-      }
+      
 
       const remainingQty = Math.max(0, (_activeBatch.initialQty || 0) - totalDeducted);
 

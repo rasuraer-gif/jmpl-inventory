@@ -355,22 +355,8 @@ const CryogenicModule = (() => {
         return;
       }
 
-      if (outputQty > inputQty) {
-        inputQty = outputQty;
-        lossQty = 0;
-        DB.Batches.update(_activeBatch.id, { initialQty: outputQty });
-        _activeBatch.initialQty = outputQty;
-      } else {
-        lossQty = sLossQty;
-      }
-
+      lossQty = sLossQty;
       const totalDeducted = outputQty + lossQty;
-      if (totalDeducted > inputQty) {
-        inputQty = totalDeducted;
-        DB.Batches.update(_activeBatch.id, { initialQty: totalDeducted });
-        _activeBatch.initialQty = totalDeducted;
-      }
-
       const remainingQty = Math.max(0, (_activeBatch.initialQty || 0) - totalDeducted);
 
       DB.Batches.update(_activeBatch.id, {
@@ -437,24 +423,7 @@ const CryogenicModule = (() => {
       return;
     }
 
-    if (outputQty > inputQty) {
-      inputQty = outputQty;
-      lossQty = 0;
-      
-      const recs = DB.StageRecords.all().filter(r => r.batchId === batchId && r.movedTo === 'cryogenic');
-      if (recs.length) {
-        const lastRec = recs[recs.length - 1];
-        if (lastRec.isRecheck) {
-          DB.StageRecords.update(lastRec.id, { recheckQty: inputQty });
-        } else {
-          DB.StageRecords.update(lastRec.id, { outputQty: inputQty });
-        }
-      } else {
-        DB.Batches.update(batchId, { initialQty: inputQty });
-      }
-    } else {
-      lossQty = Math.max(0, inputQty - outputQty);
-    }
+    lossQty = Math.max(0, inputQty - outputQty);
 
     const batch = DB.Batches.find(batchId);
     const dateStr = new Date().toISOString().slice(0,10);

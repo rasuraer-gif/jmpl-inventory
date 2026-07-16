@@ -282,7 +282,7 @@ const GaugeModule = (() => {
     const outputQty = parseInt(document.getElementById('gauge-output-qty').value);
     const notes = document.getElementById('gauge-notes').value.trim();
     if (isNaN(outputQty) || outputQty < 0) { showToast('Enter a valid output quantity', 'error'); return; }
-    if (outputQty > _gaugeInputQty) { showToast('Output cannot exceed input quantity', 'error'); return; }
+    
     const lossQty = Math.max(0, _gaugeInputQty - outputQty);
     const session = Auth.getSession();
     const batch = DB.Batches.find(batchId);
@@ -310,10 +310,7 @@ const GaugeModule = (() => {
       }
 
       const totalDeducted = outputQty + lossQty;
-      if (totalDeducted > _gaugeInputQty) {
-        showToast(`Total processed qty (Good: ${outputQty} + Loss: ${lossQty} = ${totalDeducted}) exceeds available input quantity (${_gaugeInputQty})`, 'error');
-        return;
-      }
+      
 
       const remainingQty = Math.max(0, (_activeBatch.initialQty || 0) - totalDeducted);
 

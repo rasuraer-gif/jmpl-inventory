@@ -18,6 +18,7 @@ const filesToCopy = [
   'app.js',
   'admin.js',
   'master.js',
+  'mould-tracking.js',
   'production.js',
   'cryogenic.js',
   'deflashing.js',

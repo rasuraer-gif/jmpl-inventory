@@ -353,7 +353,7 @@ const DeflashingModule = (() => {
     const notes = document.getElementById('de-notes').value.trim();
     if ((destination === 'trimming' || destination === 'deflashing') && !vendorId) { showToast('Please select a vendor', 'error'); return; }
     if (isNaN(outputQty) || outputQty < 0) { showToast('Enter a valid output quantity', 'error'); return; }
-    if (outputQty > _deInputQty) { showToast('Output cannot exceed input quantity', 'error'); return; }
+    
     const lossQty = Math.max(0, _deInputQty - outputQty);
     const session = Auth.getSession();
     const batch = DB.Batches.find(batchId);
@@ -382,10 +382,7 @@ const DeflashingModule = (() => {
       }
 
       const totalDeducted = outputQty + lossQty;
-      if (totalDeducted > _deInputQty) {
-        showToast(`Total processed qty (Good: ${outputQty} + Loss: ${lossQty} = ${totalDeducted}) exceeds available input quantity (${_deInputQty})`, 'error');
-        return;
-      }
+      
 
       const remainingQty = Math.max(0, (_activeBatch.initialQty || 0) - totalDeducted);
 

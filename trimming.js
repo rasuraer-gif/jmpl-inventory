@@ -315,7 +315,7 @@ const TrimmingModule = (() => {
     const notes = document.getElementById('trim-notes').value.trim();
     if (!vendorId) { showToast('Please select a vendor', 'error'); return; }
     if (isNaN(outputQty) || outputQty < 0) { showToast('Enter a valid output quantity', 'error'); return; }
-    if (outputQty > _trimInputQty) { showToast('Output cannot exceed input quantity', 'error'); return; }
+    
     const lossQty = Math.max(0, _trimInputQty - outputQty);
     const session = Auth.getSession();
     const batch = DB.Batches.find(batchId);
@@ -343,10 +343,7 @@ const TrimmingModule = (() => {
       }
 
       const totalDeducted = outputQty + lossQty;
-      if (totalDeducted > _trimInputQty) {
-        showToast(`Total processed qty (Good: ${outputQty} + Loss: ${lossQty} = ${totalDeducted}) exceeds available input quantity (${_trimInputQty})`, 'error');
-        return;
-      }
+      
 
       const remainingQty = Math.max(0, (_activeBatch.initialQty || 0) - totalDeducted);
 

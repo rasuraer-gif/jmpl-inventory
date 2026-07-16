@@ -2,9 +2,10 @@
 // admin.js — Admin Panel Module
 // ============================================================
 const AdminModule = (() => {
-  const PERMS = ['master','production','cryogenic','deflashing','trimming','post-curing','waiting-visual','visual','gauge','quality','store','stock','monthly-plan','prod-sched','replenishment','report_inventory','report_sales','report_production','report_cryogenic','report_deflashing','report_trimming','report_post_curing','report_waiting_visual','report_visual','report_gauge','report_rejected','report_recheck','report_reprocess','ai-agent'];
+  const PERMS = ['master','mould-tracking','production','cryogenic','deflashing','trimming','post-curing','waiting-visual','visual','gauge','quality','store','stock','monthly-plan','prod-sched','replenishment','report_inventory','report_sales','report_production','report_cryogenic','report_deflashing','report_trimming','report_post_curing','report_waiting_visual','report_visual','report_gauge','report_rejected','report_recheck','report_reprocess','ai-agent'];
   const PERM_LABELS = {
     master: 'Inventory Master',
+    'mould-tracking': 'Mould Tracking',
     production: 'Production',
     cryogenic: 'Cryogenic',
     deflashing: 'DE Flashing',
@@ -603,7 +604,59 @@ const AdminModule = (() => {
   }
 
   function systemTab() {
+    const isLocalBackup = localStorage.getItem('jmpl_db_is_local_backup') === 'true';
+    const statusHtml = isLocalBackup 
+      ? `<span class="badge badge-amber" style="padding:6px 12px; font-size:12px;">🟡 Local Backup Database Sandbox (Offline Read-Only)</span>`
+      : `<span class="badge badge-green" style="padding:6px 12px; font-size:12px;">🟢 Live Online Database (Cloud Sync Active)</span>`;
+
+    const switchBtnText = isLocalBackup ? 'Switch to Cloud Database' : 'Switch to Local Sandbox';
+    const switchBtnClass = isLocalBackup ? 'btn-teal' : 'btn-secondary';
+
     return `
+      <!-- Connection Mode -->
+      <div class="card animate-in" style="margin-bottom:24px;">
+        <div class="card-header">
+          <h3>🔌 Database Connection Status</h3>
+        </div>
+        <div class="card-body" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px;">
+          <div>
+            <div style="margin-bottom:8px;">${statusHtml}</div>
+            <p class="text-xs text-muted" style="max-width:480px;">
+              You can toggle between the live cloud database and a local offline sandbox. 
+              The local sandbox allows you to safely verify database history or inspect older backups without affecting the live cloud database.
+            </p>
+          </div>
+          <button class="btn ${switchBtnClass}" onclick="AdminModule.toggleDatabaseMode()">${switchBtnText}</button>
+        </div>
+      </div>
+
+      <!-- Backup & Restore Operations -->
+      <div class="card animate-in" style="margin-bottom:24px;">
+        <div class="card-header">
+          <h3>📦 Database Backup &amp; Restore</h3>
+        </div>
+        <div class="card-body" style="display:flex; flex-direction:column; gap:20px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; border:1px solid var(--border); padding:16px; border-radius:8px; flex-wrap:wrap; gap:12px;">
+            <div>
+              <h4 class="font-bold" style="font-size:14px; margin-bottom:4px;">Backup Database</h4>
+              <p class="text-xs text-muted" style="max-width:480px;">Downloads a JSON snapshot of the currently active database (including all inventory parts, batch history, logs, and tracking records).</p>
+            </div>
+            <button class="btn btn-primary" onclick="AdminModule.triggerBackupExport()">📥 Download Backup JSON</button>
+          </div>
+
+          <div style="display:flex; justify-content:space-between; align-items:center; border:1px solid var(--border); padding:16px; border-radius:8px; flex-wrap:wrap; gap:12px;">
+            <div>
+              <h4 class="font-bold" style="font-size:14px; margin-bottom:4px;">Restore / Upload to Local Sandbox</h4>
+              <p class="text-xs text-muted" style="max-width:480px;">Upload a previously downloaded JSON database backup. The data will be loaded into the **local sandbox** (never overwriting the live database).</p>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <input type="file" id="db-restore-file" accept=".json" style="display:none;" onchange="AdminModule.triggerBackupImport(this)">
+              <button class="btn btn-teal" onclick="document.getElementById('db-restore-file').click()">📤 Upload Backup JSON</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div class="card animate-in">
         <div class="card-header">
           <h3>⚙️ System Maintenance</h3>
@@ -655,5 +708,56 @@ const AdminModule = (() => {
     }
   }
 
-  return { render, openAddUser, editUser, saveUser, toggleUser, onRoleChange, openAddSub, editSub, saveSub, toggleSub, openAddVendor, editVendor, saveVendor, toggleVendor, openAddOp, editOp, saveOp, toggleOp, openAddInspector, editInspector, saveInspector, toggleInspector, clearTransactionData };
+  function toggleDatabaseMode() {
+    const isLocal = localStorage.getItem('jmpl_db_is_local_backup') === 'true';
+    const newMode = !isLocal;
+    localStorage.setItem('jmpl_db_is_local_backup', String(newMode));
+    showToast(newMode ? 'Switched to Local Backup Sandbox!' : 'Switched to Live Cloud Database!', 'success');
+    setTimeout(() => {
+      window.location.reload();
+    }, 1000);
+  }
+
+  function triggerBackupExport() {
+    try {
+      const json = DB.exportBackupJSON();
+      const isLocal = localStorage.getItem('jmpl_db_is_local_backup') === 'true';
+      const filename = `JMPL_DB_Backup_${isLocal ? 'Sandbox' : 'Live'}_${new Date().toISOString().slice(0, 10)}.json`;
+      
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast('Database backup downloaded successfully', 'success');
+    } catch (e) {
+      console.error(e);
+      showToast('Backup download failed: ' + e.message, 'error');
+    }
+  }
+
+  function triggerBackupImport(input) {
+    if (!input.files || input.files.length === 0) return;
+    const file = input.files[0];
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      const res = DB.importBackupJSON(e.target.result);
+      if (res.ok) {
+        showToast('Database restored to Local Sandbox successfully! Switching connection mode...', 'success');
+        localStorage.setItem('jmpl_db_is_local_backup', 'true');
+        setTimeout(() => {
+          window.location.reload();
+        }, 1500);
+      } else {
+        showToast('Database restore failed: ' + res.error, 'error');
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  return { render, openAddUser, editUser, saveUser, toggleUser, onRoleChange, openAddSub, editSub, saveSub, toggleSub, openAddVendor, editVendor, saveVendor, toggleVendor, openAddOp, editOp, saveOp, toggleOp, openAddInspector, editInspector, saveInspector, toggleInspector, clearTransactionData, toggleDatabaseMode, triggerBackupExport, triggerBackupImport };
 })();

@@ -17,7 +17,7 @@ const JMPL_CONFIG = {
 };
 
 const DB = (() => {
-  const PREFIX = 'jmpl_';
+  const PREFIX = localStorage.getItem('jmpl_db_is_local_backup') === 'true' ? 'jmpl_backup_' : 'jmpl_';
   let db = null;
   let isInitialized = false;
 
@@ -38,7 +38,9 @@ const DB = (() => {
     sales: [],
     productionRecords: [],
     monthlyPlans: [],
-    productionSchedules: []
+    productionSchedules: [],
+    moulds: [],
+    mouldMovements: []
   };
 
   // Helper to load localStorage cache into memory on startup
@@ -71,6 +73,13 @@ const DB = (() => {
 
     // 1. Load what we have in localStorage first so the app boots instantly with cached data
     loadLocalCache();
+
+    // If local backup mode is active, we run strictly in offline fallback mode using local backup cache
+    if (localStorage.getItem('jmpl_db_is_local_backup') === 'true') {
+      console.log("Running in LOCAL BACKUP database mode (Offline sandbox).");
+      isInitialized = true;
+      return;
+    }
 
     // 2. Check if Firebase is loaded via CDN script tags
     if (typeof firebase === 'undefined') {
@@ -587,12 +596,63 @@ const DB = (() => {
     update: (id, c) => update('productionRecords', id, c),
   };
 
+  // ── MOULDS ────────────────────────────────────────────────
+  const Moulds = {
+    all: () => getAll('moulds'),
+    find: (id) => findById('moulds', id),
+    byJmref: (jmrefNo) => getAll('moulds').filter(r => r.jmrefNo === jmrefNo),
+    insert: (r) => insert('moulds', r),
+    update: (id, c) => update('moulds', id, c),
+    remove: (id) => remove('moulds', id)
+  };
+
+  // ── MOULD MOVEMENTS ───────────────────────────────────────
+  const MouldMovements = {
+    all: () => getAll('mouldMovements'),
+    find: (id) => findById('mouldMovements', id),
+    byMould: (mouldId) => getAll('mouldMovements').filter(r => r.mouldId === mouldId).sort((a,b) => (b.movementDate||'').localeCompare(a.movementDate||'')),
+    insert: (r) => insert('mouldMovements', r),
+    update: (id, c) => update('mouldMovements', id, c),
+    remove: (id) => remove('mouldMovements', id)
+  };
+
+  function exportBackupJSON() {
+    const backupData = {};
+    const collections = Object.keys(cache);
+    
+    collections.forEach(table => {
+      backupData[table] = cache[table] || [];
+    });
+
+    return JSON.stringify(backupData, null, 2);
+  }
+
+  function importBackupJSON(jsonStr) {
+    try {
+      const data = JSON.parse(jsonStr);
+      const collections = Object.keys(cache);
+      
+      collections.forEach(table => {
+        if (Array.isArray(data[table])) {
+          localStorage.setItem('jmpl_backup_' + table, JSON.stringify(data[table]));
+        } else {
+          localStorage.setItem('jmpl_backup_' + table, JSON.stringify([]));
+        }
+      });
+      return { ok: true };
+    } catch (e) {
+      console.error(e);
+      return { ok: false, error: e.message };
+    }
+  }
+
   return {
     init, genId, seedDefaults, clearTable,
     Users, Master, Subcontractors, Vendors, Operators, Inspectors,
     Batches, StageRecords, LossTracker, RejectionTracker,
     RecheckTracker, StockUploads, Sales, StoreInventory,
     ProductionRecords, MonthlyPlans, ProductionSchedules,
+    Moulds, MouldMovements, exportBackupJSON, importBackupJSON,
     raw: { getAll, setAll, insert, update, remove, findById, findWhere }
   };
 })();
