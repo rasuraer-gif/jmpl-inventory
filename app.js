@@ -256,6 +256,7 @@ const NAV = [
   { id:'rpt-pending-batches', label:'Pending Batches', icon:'⏳', module:'report_pending_batches', section:'tools', parent:'reports', perm:'report_inventory' },
   { id:'rpt-reprocess', label:'Reprocessed Items', icon:'🔄', module:'report_reprocess', section:'tools', parent:'reports', perm:'report_reprocess' },
   { id:'rpt-qty-gain',  label:'Qty Gain Report',   icon:'📈', module:'report_qty_gain',  section:'tools', parent:'reports', perm:'report_inventory' },
+  { id:'rpt-qty-loss',  label:'Qty Loss Report',   icon:'📉', module:'report_qty_loss',  section:'tools', parent:'reports', perm:'report_inventory' },
 
   { id:'print-batch',  label:'Print Label',        icon:'🖨️', module:'print-batch',  section:'tools' },
   { id:'ai-agent',   label:'AI Assistant',        icon:'🤖', module:'ai-agent',  section:'tools', perm:'ai-agent' },
@@ -308,6 +309,7 @@ const App = (() => {
     report_pending_batches: () => ReportsModule?.render('pending-batches'),
     report_reprocess:  () => ReportsModule?.render('reprocess'),
     report_qty_gain:   () => ReportsModule?.render('qty-gain'),
+    report_qty_loss:   () => ReportsModule?.render('qty-loss'),
     'print-batch':     () => PrintBatchModule?.render(),
   };
 
@@ -340,6 +342,7 @@ const App = (() => {
     report_pending_batches:'Pending Batch Report',
     report_reprocess:'Reprocessed Items Report',
     report_qty_gain:'Quantity Gain Report',
+    report_qty_loss:'Quality Loss Report',
   };
 
   function navigate(moduleId) {

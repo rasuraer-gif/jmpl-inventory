@@ -234,25 +234,39 @@ const ReportsModule = (() => {
 
   // ── Render Report 3: Production ────────────────────────────
   function renderProduction(filters) {
-    const { from, to, jmref, operatorId } = filters;
+    const { from, to, jmref, operatorId, prodType } = filters;
     let records = DB.ProductionRecords.all();
-    let batches  = DB.Batches.all().filter(b => b.currentStage !== 'production' || b.status !== 'active');
 
     // Filter by jmref
-    if (jmref) batches = batches.filter(b => b.jmrefNo?.toLowerCase().includes(jmref.toLowerCase()));
+    if (jmref) {
+      records = records.filter(r => {
+        const batch = DB.Batches.find(r.batchId) || {};
+        return (batch.jmrefNo || '').toLowerCase().includes(jmref.toLowerCase()) ||
+               (batch.partNo || '').toLowerCase().includes(jmref.toLowerCase());
+      });
+    }
 
     // Filter records by date
     records = filterByDateRange(records, 'date', from, to);
     if (operatorId) records = records.filter(r => r.operatorId === operatorId);
 
+    // Filter by production type (In House vs Subcontractor)
+    if (prodType) {
+      records = records.filter(r => {
+        const batch = DB.Batches.find(r.batchId) || {};
+        return batch.productionType === prodType;
+      });
+    }
+
     if (!records.length) return emptyState();
 
     const operators = DB.Operators.all();
-    const headers = ['#','Batch No','JMREF','Operator','Press No','No. of Lifts','Date'];
+    const headers = ['#','Batch No','JMREF','Operator','Press No','No. of Lifts','Prod Type','Date'];
     const dataRows = records.map((r, i) => {
       const batch = DB.Batches.find(r.batchId) || {};
       const op = operators.find(o => o.id === r.operatorId) || {};
-      return [i+1, batch.batchNo||'', batch.jmrefNo||'', op.name||r.operatorName||'-', r.pressNo||batch.pressNo||'-', r.noOfLifts||0, (r.date||'').slice(0,10)];
+      const typeStr = batch.productionType === 'subcontractor' ? 'Subcontractor' : 'In House';
+      return [i+1, batch.batchNo||'', batch.jmrefNo||'', op.name||r.operatorName||'-', r.pressNo||batch.pressNo||'-', r.noOfLifts||0, typeStr, (r.date||'').slice(0,10)];
     });
 
     const html = `<div class="table-wrap"><table class="data-table">
@@ -925,6 +939,15 @@ const ReportsModule = (() => {
           <option value="">All Operators</option>${opOpts}
         </select>
       </div>`;
+    const prodTypeFilter = `
+      <div class="form-group mb-0">
+        <label class="form-label">Production Type</label>
+        <select class="form-control" id="rpt-prod-type">
+          <option value="">All Types</option>
+          <option value="inhouse">In House</option>
+          <option value="subcontractor">Subcontractor</option>
+        </select>
+      </div>`;
 
     const pendingStageFilter = `
       <div class="form-group mb-0">
@@ -966,7 +989,7 @@ const ReportsModule = (() => {
       reprocess: [jmrefFilter, dateRange].join(''),
       inventory: [jmrefFilter, partNoFilter].join(''),
       sales:     [jmrefFilter, dateRange].join(''),
-      production:[jmrefFilter, opFilter, dateRange].join(''),
+      production:[jmrefFilter, opFilter, prodTypeFilter, dateRange].join(''),
       cryogenic: [jmrefFilter, dateRange].join(''),
       deflashing:[jmrefFilter, dateRange].join(''),
       trimming:  [jmrefFilter, dateRange].join(''),
@@ -978,6 +1001,7 @@ const ReportsModule = (() => {
       recheck:   [opFilter, dateRange].join(''),
       'pending-batches': [pendingStageFilter, pendingTimeframeFilter].join(''),
       'qty-gain': [jmrefFilter, dateRange].join(''),
+      'qty-loss': [jmrefFilter, dateRange].join(''),
     };
     return filterMap[report] || '';
   }
@@ -1104,6 +1128,127 @@ const ReportsModule = (() => {
     return { html, headers, dataRows };
   }
 
+  function renderQtyLossReport(filters) {
+    const { from, to, jmref } = filters;
+    let recs = DB.StageRecords.all().filter(r => r.lossQty > 0);
+
+    recs = filterByDateRange(recs, 'date', from, to);
+
+    if (jmref) {
+      const q = jmref.toLowerCase();
+      recs = recs.filter(r => {
+        const b = DB.Batches.find(r.batchId) || {};
+        return (b.batchNo || '').toLowerCase().includes(q) ||
+               (b.jmrefNo || '').toLowerCase().includes(q) ||
+               (b.partNo || '').toLowerCase().includes(q);
+      });
+    }
+
+    if (!recs.length) return emptyState('No quantity loss transactions found matching the selected filters.');
+
+    const headers = ['Batch No', 'Part No', 'JMREF No', 'Stage Name', 'Input Qty', 'Output Qty', 'Qty Lost', 'Date', 'Recorded By'];
+    const users = DB.Users.all();
+
+    // Map to normalized transactions objects
+    const transactions = recs.map(r => {
+      const b = DB.Batches.find(r.batchId) || {};
+      const u = users.find(usr => usr.id === r.recordedBy);
+      return {
+        batchNo: b.batchNo || '—',
+        partNo: b.partNo || '—',
+        jmrefNo: b.jmrefNo || '—',
+        stage: r.stage || '—',
+        stageLabel: STAGE_LABELS[r.stage] || r.stage || '—',
+        inputQty: r.inputQty,
+        outputQty: r.isRecheck ? r.recheckQty : r.outputQty,
+        loss: r.lossQty,
+        date: (r.date || '').slice(0, 10),
+        recordedBy: u ? u.name : '—'
+      };
+    });
+
+    // Group transactions by batch number
+    const groups = {};
+    transactions.forEach(t => {
+      if (!groups[t.batchNo]) {
+        groups[t.batchNo] = {
+          batchNo: t.batchNo,
+          partNo: t.partNo,
+          jmrefNo: t.jmrefNo,
+          totalLoss: 0,
+          entries: []
+        };
+      }
+      groups[t.batchNo].totalLoss += t.loss;
+      groups[t.batchNo].entries.push(t);
+    });
+
+    const groupList = Object.values(groups);
+
+    // Build grouped rows HTML representation
+    const rowsHtml = groupList.map(g => {
+      const groupHeader = `
+        <tr style="background: rgba(255, 71, 87, 0.04); font-weight: bold; border-left: 4px solid var(--accent-red);">
+          <td colspan="4" class="font-bold text-blue" style="padding: 12px 14px; font-size: 13px;">
+            📦 Batch: ${g.batchNo} 
+            <span class="badge badge-gray" style="margin-left: 8px;">Part: ${g.partNo}</span>
+            <span class="badge badge-teal" style="margin-left: 8px;">JMREF: ${g.jmrefNo}</span>
+          </td>
+          <td colspan="5" class="font-bold text-danger" style="padding: 12px 14px; font-size: 13px; text-align: right;">
+            Total Lost: -${formatNum(g.totalLoss)}
+          </td>
+        </tr>`;
+
+      const entriesHtml = g.entries.map(e => `
+        <tr style="border-bottom: 1px solid var(--border);">
+          <td style="padding-left: 20px; color: var(--text-muted); font-size: 12px; font-style: italic;">↳ ${e.batchNo}</td>
+          <td><span class="stage-chip ${e.stage.toLowerCase().replace(/\s+/g, '')}">${e.stageLabel}</span></td>
+          <td>${formatNum(e.inputQty)}</td>
+          <td>${formatNum(e.outputQty)}</td>
+          <td class="font-bold text-danger">-${formatNum(e.loss)}</td>
+          <td class="text-muted text-sm">${e.date}</td>
+          <td class="text-sm" colspan="3">${e.recordedBy}</td>
+        </tr>
+      `).join('');
+
+      return groupHeader + entriesHtml;
+    }).join('');
+
+    const html = `
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Batch No</th>
+              <th>Stage Name</th>
+              <th>Input Qty</th>
+              <th>Output Qty</th>
+              <th>Qty Lost</th>
+              <th>Date</th>
+              <th colspan="3">Recorded By</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rowsHtml}
+          </tbody>
+        </table>
+      </div>`;
+
+    const dataRows = transactions.map(t => [
+      t.batchNo,
+      t.partNo,
+      t.jmrefNo,
+      t.stageLabel,
+      String(t.inputQty),
+      String(t.outputQty),
+      String(t.loss),
+      t.date,
+      t.recordedBy
+    ]);
+
+    return { html, headers, dataRows };
+  }
+
   // ── Collect Filters ────────────────────────────────────────
   function collectFilters() {
     const g = id => (document.getElementById(id) || {}).value || '';
@@ -1114,6 +1259,7 @@ const ReportsModule = (() => {
       operatorId: g('rpt-operator'),
       pendingStage: g('rpt-pending-stage'),
       pendingTimeframe: g('rpt-pending-timeframe'),
+      prodType: g('rpt-prod-type'),
     };
   }
 
@@ -1140,6 +1286,7 @@ const ReportsModule = (() => {
       case 'aging':      result = renderAging(filters); break;
       case 'pending-batches': result = renderPendingBatches(filters); break;
       case 'qty-gain':        result = renderQtyGainReport(filters); break;
+      case 'qty-loss':        result = renderQtyLossReport(filters); break;
       default: result = emptyState('Unknown report');
     }
 
@@ -1176,6 +1323,7 @@ const ReportsModule = (() => {
     { key:'aging',      label:'⏳ Aging WIP Report (> 1 Week)', desc:'Active batches sitting in the same stage for more than 7 days' },
     { key:'pending-batches', label:'⏳ Pending Batch Report',  desc:'Pending batches filtered by stage and timeframe from date Received' },
     { key:'qty-gain',   label:'📈 Quantity Gain Report',       desc:'Stages where the batch output quantity was greater than the input quantity' },
+    { key:'qty-loss',   label:'📉 Quality Loss Report',        desc:'Stages where the batch quantity was lost, grouped by batch number' },
   ];
 
   // ── Render ────────────────────────────────────────────────

@@ -110,7 +110,27 @@ const ProductionScheduleModule = (() => {
   function renderSummaryTab(plans, schedules, master) {
     const batches = DB.Batches.all();
 
-    const rows = plans.map((p, idx) => {
+    // Map plans to include pre-computed Produced quantity and achievement percentage for sorting
+    const plansWithData = plans.map(p => {
+      const matchedBatches = batches.filter(b => {
+        const bd = (b.productionDate || b.createdAt || '').slice(0, 7);
+        return b.jmrefNo === p.jmrefNo && bd === selectedMonth;
+      });
+      const producedQty = matchedBatches.reduce((sum, b) => sum + (b.initialQty || 0), 0);
+      const totalTargetPct = p.qty > 0 ? (producedQty / p.qty) * 100 : 0;
+      return { p, producedQty, totalTargetPct };
+    });
+
+    // Sort plans by less achieved first (low to high percentage)
+    plansWithData.sort((a, b) => a.totalTargetPct - b.totalTargetPct);
+
+    const rows = plansWithData.map((data, idx) => {
+      const p = data.p;
+      const producedQty = data.producedQty;
+      const totalTargetPct = data.totalTargetPct;
+      const totalTargetPctStr = totalTargetPct.toFixed(1);
+      const progressColor = totalTargetPct >= 100 ? 'var(--accent-green)' : totalTargetPct >= 50 ? 'var(--accent-blue)' : totalTargetPct > 0 ? 'var(--accent-amber)' : 'var(--text-muted)';
+      
       const part = master.find(m => m.jmrefNo === p.jmrefNo) || {};
       
       // Matched schedules & batches
@@ -120,25 +140,21 @@ const ProductionScheduleModule = (() => {
         return b.jmrefNo === p.jmrefNo && bd === selectedMonth;
       });
 
-      // Total calculations
       const scheduledQty = matchedSchedules.reduce((sum, s) => sum + (s.qty || 0), 0);
-      const producedQty = matchedBatches.reduce((sum, b) => sum + (b.initialQty || 0), 0);
-      const schedPct = scheduledQty > 0 ? ((producedQty / scheduledQty) * 100).toFixed(1) : '0.0';
-      const progressColor = schedPct >= 100 ? 'var(--accent-green)' : schedPct >= 50 ? 'var(--accent-blue)' : schedPct > 0 ? 'var(--accent-amber)' : 'var(--text-muted)';
 
       // In-House calculations
       const matchedSchedulesInHouse = matchedSchedules.filter(s => s.producedBy === 'inhouse');
       const scheduledInHouse = matchedSchedulesInHouse.reduce((sum, s) => sum + (s.qty || 0), 0);
       const matchedBatchesInHouse = matchedBatches.filter(b => b.productionType === 'inhouse');
       const producedInHouse = matchedBatchesInHouse.reduce((sum, b) => sum + (b.initialQty || 0), 0);
-      const inHousePct = scheduledInHouse > 0 ? ((producedInHouse / scheduledInHouse) * 100).toFixed(1) : '0.0';
+      const inHouseTargetPct = p.qty > 0 ? ((producedInHouse / p.qty) * 100).toFixed(1) : '0.0';
 
       // Subcontractor calculations
       const matchedSchedulesSub = matchedSchedules.filter(s => s.producedBy === 'subcontractor');
       const scheduledSub = matchedSchedulesSub.reduce((sum, s) => sum + (s.qty || 0), 0);
       const matchedBatchesSub = matchedBatches.filter(b => b.productionType === 'subcontractor');
       const producedSub = matchedBatchesSub.reduce((sum, b) => sum + (b.initialQty || 0), 0);
-      const subPct = scheduledSub > 0 ? ((producedSub / scheduledSub) * 100).toFixed(1) : '0.0';
+      const subTargetPct = p.qty > 0 ? ((producedSub / p.qty) * 100).toFixed(1) : '0.0';
 
       return `
         <tr>
@@ -147,16 +163,18 @@ const ProductionScheduleModule = (() => {
           <td class="font-semibold text-blue">${part.partNo || '—'}</td>
           <td class="font-bold">${formatNum(p.qty)}</td>
           <td>
-            <div class="font-semibold">${formatNum(producedInHouse)} / ${formatNum(scheduledInHouse)}</div>
-            <div class="text-xs font-bold" style="color:${scheduledInHouse > 0 && producedInHouse >= scheduledInHouse ? 'var(--accent-green)' : scheduledInHouse > 0 && producedInHouse > 0 ? 'var(--accent-blue)' : 'var(--text-secondary)'};">${inHousePct}%</div>
+            <div class="font-semibold" style="font-size:12px;">Prod: <strong>${formatNum(producedInHouse)}</strong></div>
+            <div class="text-xs text-muted" style="margin-top:2px;">Sched: ${formatNum(scheduledInHouse)}</div>
+            <div class="text-xs font-bold" style="color: var(--accent-blue); margin-top:2px;">${inHouseTargetPct}% of Target</div>
           </td>
           <td>
-            <div class="font-semibold">${formatNum(producedSub)} / ${formatNum(scheduledSub)}</div>
-            <div class="text-xs font-bold" style="color:${scheduledSub > 0 && producedSub >= scheduledSub ? 'var(--accent-green)' : scheduledSub > 0 && producedSub > 0 ? 'var(--accent-blue)' : 'var(--text-secondary)'};">${subPct}%</div>
+            <div class="font-semibold" style="font-size:12px;">Prod: <strong>${formatNum(producedSub)}</strong></div>
+            <div class="text-xs text-muted" style="margin-top:2px;">Sched: ${formatNum(scheduledSub)}</div>
+            <div class="text-xs font-bold" style="color: var(--accent-blue); margin-top:2px;">${subTargetPct}% of Target</div>
           </td>
           <td>
-            <div class="font-bold text-success">${formatNum(producedQty)} / ${formatNum(scheduledQty)}</div>
-            <div class="text-xs font-bold" style="color:${progressColor};">${schedPct}%</div>
+            <div class="font-bold text-success" style="font-size:12.5px;">${formatNum(producedQty)} / ${formatNum(p.qty)}</div>
+            <div class="text-xs font-bold" style="color:${progressColor}; margin-top:2px;">${totalTargetPctStr}% Achieved</div>
           </td>
           <td>
             <button class="btn btn-teal btn-xs" onclick="ProductionScheduleModule.openAddModal('${p.jmrefNo}')">Schedule</button>
@@ -166,8 +184,9 @@ const ProductionScheduleModule = (() => {
 
     return `
       <div class="card animate-in">
-        <div class="card-header">
+        <div class="card-header" style="justify-content:space-between; flex-direction:row; align-items:center;">
           <h3>Schedule Summary for ${formatMonthLabel(selectedMonth)}</h3>
+          <button class="btn btn-teal btn-sm" onclick="ProductionScheduleModule.exportSummaryExcel()">📊 Export Excel</button>
         </div>
         <div class="table-wrap">
           <table class="data-table">
@@ -446,6 +465,95 @@ const ProductionScheduleModule = (() => {
     render();
   }
 
+  function exportSummaryExcel() {
+    if (typeof XLSX === 'undefined') {
+      showToast('Excel library not loaded', 'error'); return;
+    }
+
+    const master = DB.Master.all();
+    const plans = DB.MonthlyPlans.byMonth(selectedMonth);
+    const schedules = DB.ProductionSchedules.byMonth(selectedMonth);
+    const batches = DB.Batches.all();
+
+    // Map plans to include pre-computed Produced quantity and achievement percentage for sorting
+    const plansWithData = plans.map(p => {
+      const matchedBatches = batches.filter(b => {
+        const bd = (b.productionDate || b.createdAt || '').slice(0, 7);
+        return b.jmrefNo === p.jmrefNo && bd === selectedMonth;
+      });
+      const producedQty = matchedBatches.reduce((sum, b) => sum + (b.initialQty || 0), 0);
+      const totalTargetPct = p.qty > 0 ? (producedQty / p.qty) * 100 : 0;
+      return { p, producedQty, totalTargetPct };
+    });
+
+    // Sort by less achieved first (low to high percentage)
+    plansWithData.sort((a, b) => a.totalTargetPct - b.totalTargetPct);
+
+    const headers = [
+      '#', 'JMREF No', 'Part No', 'Monthly Target',
+      'In-House Produced', 'In-House Scheduled', 'In-House Target %',
+      'Subcontractor Produced', 'Subcontractor Scheduled', 'Subcontractor Target %',
+      'Total Produced', 'Total Target', 'Total Achievement %'
+    ];
+
+    const rows = plansWithData.map((data, idx) => {
+      const p = data.p;
+      const producedQty = data.producedQty;
+      const totalTargetPct = data.totalTargetPct;
+      const part = master.find(m => m.jmrefNo === p.jmrefNo) || {};
+      
+      const matchedSchedules = schedules.filter(s => s.jmrefNo === p.jmrefNo);
+      
+      // In-House calculations
+      const matchedSchedulesInHouse = matchedSchedules.filter(s => s.producedBy === 'inhouse');
+      const scheduledInHouse = matchedSchedulesInHouse.reduce((sum, s) => sum + (s.qty || 0), 0);
+      const matchedBatchesInHouse = batches.filter(b => {
+        const bd = (b.productionDate || b.createdAt || '').slice(0, 7);
+        return b.jmrefNo === p.jmrefNo && bd === selectedMonth && b.productionType === 'inhouse';
+      });
+      const producedInHouse = matchedBatchesInHouse.reduce((sum, b) => sum + (b.initialQty || 0), 0);
+      const inHouseTargetPct = p.qty > 0 ? ((producedInHouse / p.qty) * 100).toFixed(1) : '0.0';
+
+      // Subcontractor calculations
+      const matchedSchedulesSub = matchedSchedules.filter(s => s.producedBy === 'subcontractor');
+      const scheduledSub = matchedSchedulesSub.reduce((sum, s) => sum + (s.qty || 0), 0);
+      const matchedBatchesSub = batches.filter(b => {
+        const bd = (b.productionDate || b.createdAt || '').slice(0, 7);
+        return b.jmrefNo === p.jmrefNo && bd === selectedMonth && b.productionType === 'subcontractor';
+      });
+      const producedSub = matchedBatchesSub.reduce((sum, b) => sum + (b.initialQty || 0), 0);
+      const subTargetPct = p.qty > 0 ? ((producedSub / p.qty) * 100).toFixed(1) : '0.0';
+
+      return [
+        idx + 1,
+        p.jmrefNo,
+        part.partNo || '—',
+        p.qty,
+        producedInHouse,
+        scheduledInHouse,
+        inHouseTargetPct + '%',
+        producedSub,
+        scheduledSub,
+        subTargetPct + '%',
+        producedQty,
+        p.qty,
+        totalTargetPct.toFixed(1) + '%'
+      ];
+    });
+
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+    
+    // Auto column width
+    ws['!cols'] = headers.map((h, i) => ({
+      wch: Math.max(h.length, ...rows.map(r => String(r[i] ?? '').length), 10)
+    }));
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Production Schedule Summary');
+    XLSX.writeFile(wb, `JMPL_Production_Schedule_Summary_${selectedMonth}_${new Date().toISOString().slice(0,10)}.xlsx`);
+    showToast('Excel exported successfully', 'success');
+  }
+
   function formatMonthLabel(monthStr) {
     if (!monthStr) return '—';
     const [year, month] = monthStr.split('-');
@@ -462,6 +570,7 @@ const ProductionScheduleModule = (() => {
     openEdit,
     closeModal,
     saveSchedule,
-    deleteSchedule
+    deleteSchedule,
+    exportSummaryExcel
   };
 })();
