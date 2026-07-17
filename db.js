@@ -77,6 +77,7 @@ const DB = (() => {
     // If local backup mode is active, we run strictly in offline fallback mode using local backup cache
     if (localStorage.getItem('jmpl_db_is_local_backup') === 'true') {
       console.log("Running in LOCAL BACKUP database mode (Offline sandbox).");
+      runMouldMigration();
       isInitialized = true;
       return;
     }
@@ -84,6 +85,7 @@ const DB = (() => {
     // 2. Check if Firebase is loaded via CDN script tags
     if (typeof firebase === 'undefined') {
       console.warn("Firebase SDK not loaded. Running in offline localStorage-only fallback mode.");
+      runMouldMigration();
       isInitialized = true;
       return;
     }
@@ -157,6 +159,7 @@ const DB = (() => {
       // 4. Prompt for migration if local data exists but Cloud DB is empty
       await checkAndMigrate();
       runVisualMigration();
+      runMouldMigration();
 
     } catch (e) {
       console.error("Failed to initialize Firebase database:", e);
@@ -257,6 +260,34 @@ const DB = (() => {
         localStorage.setItem(PREFIX + 'stageRecords', JSON.stringify(cache.stageRecords));
       }
       console.log(`[Migration] Successfully moved ${migratedBatchesCount} batches and ${migratedRecordsCount} stage records to "waiting-visual".`);
+    }
+  }
+
+  function runMouldMigration() {
+    let migratedCount = 0;
+    cache.master.forEach(p => {
+      if (!p.moulds || p.moulds.length === 0) {
+        p.moulds = [{
+          mouldNo: 1,
+          mouldType: 'Yet to be assigned',
+          processFlow: 'Cryogenic',
+          firstProcess: 'Cryogenic'
+        }];
+        p.updatedAt = new Date().toISOString();
+        migratedCount++;
+        // Update in Firestore
+        if (db) {
+          const docData = { ...p };
+          delete docData.id;
+          db.collection('master').doc(p.id).set(docData).catch(err => {
+            console.error(`Migration set error on master part ${p.id}:`, err);
+          });
+        }
+      }
+    });
+    if (migratedCount > 0) {
+      localStorage.setItem(PREFIX + 'master', JSON.stringify(cache.master));
+      console.log(`[Migration] Initialised default moulds for ${migratedCount} master parts.`);
     }
   }
 

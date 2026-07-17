@@ -253,6 +253,7 @@ const MouldTrackingModule = (() => {
               <label class="form-label">Mould Type</label>
               <select id="trace-mould-type" class="form-control" onchange="MouldTrackingModule.filterTraceability()">
                 <option value="">All Mould Types...</option>
+                <option value="Yet to be assigned" ${traceMouldType === 'Yet to be assigned' ? 'selected' : ''}>Yet to be assigned</option>
                 <option value="Cryogenic" ${traceMouldType === 'Cryogenic' ? 'selected' : ''}>Cryogenic</option>
                 <option value="Flash free" ${traceMouldType === 'Flash free' ? 'selected' : ''}>Flash free</option>
                 <option value="Normal" ${traceMouldType === 'Normal' ? 'selected' : ''}>Normal</option>

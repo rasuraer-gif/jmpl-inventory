@@ -134,6 +134,13 @@ const MasterModule = (() => {
               <h4 style="color:var(--primary); font-size:14px; font-weight:600; margin:0;">🛠️ Mould Details</h4>
               <button type="button" class="btn btn-secondary btn-xs" onclick="MasterModule.addMouldRow()">+ Add Mould</button>
             </div>
+            <!-- Column Headers -->
+            <div style="display: flex; gap: 8px; font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; padding-right: 28px;">
+              <div style="width: 85px;">Mould No</div>
+              <div style="width: 110px;">Mould Type</div>
+              <div style="flex: 1;">Process Flow</div>
+              <div style="width: 130px;">First Process</div>
+            </div>
             <div id="moulds-container" style="max-height: 200px; overflow-y: auto; padding-right: 4px; margin-bottom: 8px;"></div>
           </div>
           <div class="modal-footer">
@@ -219,6 +226,7 @@ const MasterModule = (() => {
       </div>
       <div style="width: 110px;">
         <select class="form-control mould-type">
+          <option value="Yet to be assigned" ${!m.mouldType || m.mouldType === 'Yet to be assigned' ? 'selected' : ''}>Yet to be assigned</option>
           <option value="Cryogenic" ${m.mouldType === 'Cryogenic' ? 'selected' : ''}>Cryogenic</option>
           <option value="Flash Free" ${m.mouldType === 'Flash Free' ? 'selected' : ''}>Flash Free</option>
           <option value="Normal" ${m.mouldType === 'Normal' ? 'selected' : ''}>Normal</option>
@@ -270,6 +278,12 @@ const MasterModule = (() => {
     const container = document.getElementById('moulds-container');
     if (container) {
       container.innerHTML = '';
+      container.appendChild(createMouldRowElement({
+        mouldNo: 1,
+        mouldType: 'Yet to be assigned',
+        processFlow: 'Cryogenic',
+        firstProcess: 'Cryogenic'
+      }));
     }
     
     document.getElementById('master-modal').classList.remove('hidden');
@@ -342,7 +356,7 @@ const MasterModule = (() => {
       return;
     }
 
-    const types = moulds.map(m => m.mouldType);
+    const types = moulds.map(m => m.mouldType).filter(t => t && t !== 'Yet to be assigned');
     const uniqueTypes = new Set(types);
     if (types.length !== uniqueTypes.size) {
       showToast('Each mould must have a different Mould Type (Cryogenic, Flash Free, or Normal)', 'error');
