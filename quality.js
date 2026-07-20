@@ -4,6 +4,7 @@
 const QualityModule = (() => {
   const STAGE_LABELS = { production:'Production', cryogenic:'Cryogenic', deflashing:'Flash Removal', trimming:'Trimming', visual:'Visual', gauge:'Gauge' };
 
+  let activeTab = 'pending';
   let recheckSearch = '';
   let rejectSearch = '';
   let pendingSearch = '';
@@ -26,6 +27,13 @@ const QualityModule = (() => {
     const thisMonth = new Date().toISOString().slice(0,7);
     const passedThisMonth = DB.Batches.byStatus('completed').filter(b=>(b.completedAt||'').startsWith(thisMonth)).length;
     const totalQty = batches.reduce((sum, b) => sum + getInputQty(b.id), 0);
+
+    let contentHtml = '';
+    if (activeTab === 'pending') contentHtml = pendingTab(batches);
+    else if (activeTab === 'completed') contentHtml = completedBatchesTab();
+    else if (activeTab === 'recheck') contentHtml = recheckHistoryTab();
+    else contentHtml = rejectedTab();
+
     el.innerHTML = `
       <div class="animate-in">
         <div class="mb-6"><h2 class="font-bold" style="font-size:20px;">Quality Final</h2><p class="text-sm text-muted mt-1">Final quality check — Pass to Store, Reject, or Send for Recheck</p></div>
@@ -37,18 +45,29 @@ const QualityModule = (() => {
           <div class="stat-card blue"><div class="stat-label">Rechecks Issued</div><div class="stat-value blue">${allRechecks.length}</div></div>
         </div>
         <div class="tabs" id="qf-tabs">
-          <button class="tab-btn active" data-tab="pending">Pending</button>
-          <button class="tab-btn" data-tab="recheck">Recheck History</button>
-          <button class="tab-btn" data-tab="rejected">Rejected Batches</button>
+          <button class="tab-btn ${activeTab === 'pending' ? 'active' : ''}" data-tab="pending">Pending</button>
+          <button class="tab-btn ${activeTab === 'completed' ? 'active' : ''}" data-tab="completed">Completed Batches</button>
+          <button class="tab-btn ${activeTab === 'recheck' ? 'active' : ''}" data-tab="recheck">Recheck History</button>
+          <button class="tab-btn ${activeTab === 'rejected' ? 'active' : ''}" data-tab="rejected">Rejected Batches</button>
         </div>
-        <div id="qf-content">${pendingTab(batches)}</div>
+        <div id="qf-content">${contentHtml}</div>
       </div>
       ${passModal()}${rejectModal()}${recheckModal()}`;
+
     document.querySelectorAll('#qf-tabs .tab-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         document.querySelectorAll('#qf-tabs .tab-btn').forEach(b=>b.classList.remove('active'));
         btn.classList.add('active');
-        document.getElementById('qf-content').innerHTML = btn.dataset.tab==='pending' ? pendingTab(batches) : btn.dataset.tab==='recheck' ? recheckHistoryTab() : rejectedTab();
+        activeTab = btn.dataset.tab;
+        if (activeTab === 'pending') {
+          document.getElementById('qf-content').innerHTML = pendingTab(batches);
+        } else if (activeTab === 'completed') {
+          document.getElementById('qf-content').innerHTML = completedBatchesTab();
+        } else if (activeTab === 'recheck') {
+          document.getElementById('qf-content').innerHTML = recheckHistoryTab();
+        } else {
+          document.getElementById('qf-content').innerHTML = rejectedTab();
+        }
       });
     });
   }
@@ -99,6 +118,57 @@ const QualityModule = (() => {
       </div>`;
   }
 
+  function completedBatchesTab() {
+    let completed = DB.Batches.all().filter(b => b.status === 'completed');
+    completed.sort((a,b) => (b.completedAt||b.createdAt||'').localeCompare(a.completedAt||a.createdAt||''));
+
+    const rows = completed.map(b => {
+      const qfRecs = DB.StageRecords.all().filter(r => r.batchId === b.id && r.stage === 'quality' && r.movedTo === 'store');
+      const qfRec = qfRecs.length ? qfRecs[0] : {};
+
+      const storeRecs = DB.StageRecords.all().filter(r => r.batchId === b.id && r.stage === 'store');
+      const passedQty = storeRecs.length ? (storeRecs[0].inputQty || 0) : (b.initialQty || 0);
+      
+      let inputQty = qfRec.inputQty || passedQty;
+      let lossQty = qfRec.lossQty || 0;
+
+      if (b.recheckCount && b.recheckCount > 0) {
+        const recheckRecs = DB.RecheckTracker.all().filter(r => r.batchId === b.id);
+        const latestRecheck = recheckRecs.sort((x,y) => y.recheckNo - x.recheckNo)[0];
+        if (latestRecheck) {
+          inputQty = latestRecheck.qty;
+          lossQty = Math.max(0, inputQty - passedQty);
+        }
+      }
+
+      return `<tr>
+        <td class="font-semibold text-blue">${b.batchNo}</td>
+        <td>${b.partNo||'—'}</td>
+        <td><span class="badge badge-teal">${b.jmrefNo||'—'}</span></td>
+        <td class="font-semibold">${formatNum(inputQty)}</td>
+        <td class="font-semibold text-success">${formatNum(passedQty)}</td>
+        <td class="font-semibold text-danger">${formatNum(lossQty)}</td>
+        <td>${b.recheckCount || 0}</td>
+        <td>${formatDate(b.completedAt)}</td>
+      </tr>`;
+    }).join('');
+
+    return `
+      <div class="card animate-in">
+        <div class="card-header">
+          <h3>Completed Batches</h3>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Input Qty</th><th>Passed Qty</th><th>Loss at QF</th><th>Rechecks</th><th>Completed At</th></tr>
+            </thead>
+            <tbody>${rows || '<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-muted);">No completed batches found</td></tr>'}</tbody>
+          </table>
+        </div>
+      </div>`;
+  }
+
   function recheckHistoryTab() {
     let recs = DB.RecheckTracker.all();
     if (recheckSearch) {
@@ -121,9 +191,16 @@ const QualityModule = (() => {
     const rows = recs.sort((a,b)=>b.date.localeCompare(a.date)).map(r => {
       const batch = DB.Batches.find(r.batchId)||{};
       const user = DB.Users.find(r.recordedBy)||{};
-      const totalBefore = r.qty + r.lossQty;
-      const pct = totalBefore ? ((r.lossQty / totalBefore) * 100).toFixed(1) + '%' : '0.0%';
-      return '<tr><td class="font-semibold">' + (batch.batchNo||'&#x2014;') + '</td><td>' + (batch.jmrefNo||'&#x2014;') + '</td><td><span class="badge badge-blue">' + (STAGE_LABELS[r.toStage]||r.toStage) + '</span></td><td class="font-semibold">' + formatNum(r.qty) + '</td><td class="text-danger font-semibold">' + formatNum(r.lossQty) + '</td><td><span class="badge badge-red">' + pct + '</span></td><td><span class="badge badge-amber">Recheck #' + r.recheckNo + '</span></td><td class="text-muted text-sm">' + (user.name||'&#x2014;') + '</td><td class="text-muted text-sm">' + (r.date||'').slice(0,10) + '</td></tr>';
+      
+      const completedBatch = DB.Batches.all().find(b => b.batchNo === batch.batchNo && b.status === 'completed');
+      let qfLoss = r.lossQty;
+      if (completedBatch) {
+        const storeRecs = DB.StageRecords.all().filter(sr => sr.batchId === completedBatch.id && sr.stage === 'store');
+        const passedQty = storeRecs.length ? (storeRecs[0].inputQty || 0) : (completedBatch.initialQty || 0);
+        qfLoss = Math.max(0, r.qty - passedQty);
+      }
+      const pct = r.qty ? ((qfLoss / r.qty) * 100).toFixed(1) + '%' : '0.0%';
+      return '<tr><td class="font-semibold">' + (batch.batchNo||'&#x2014;') + '</td><td>' + (batch.jmrefNo||'&#x2014;') + '</td><td><span class="badge badge-blue">' + (STAGE_LABELS[r.toStage]||r.toStage) + '</span></td><td class="font-semibold">' + formatNum(r.qty) + '</td><td class="text-danger font-semibold">' + formatNum(qfLoss) + '</td><td><span class="badge badge-red">' + pct + '</span></td><td><span class="badge badge-amber">Recheck #' + r.recheckNo + '</span></td><td class="text-muted text-sm">' + (user.name||'&#x2014;') + '</td><td class="text-muted text-sm">' + (r.date||'').slice(0,10) + '</td></tr>';
     }).join('');
 
     return `
@@ -267,10 +344,10 @@ const QualityModule = (() => {
     DB.StageRecords.insert({ batchId, stage:'quality', inputQty:_passInputQty, outputQty, lossQty, movedTo:'store', movedFrom:'quality', date:dateStr, recordedBy:session&&session.userId, notes:document.getElementById('qf-pass-notes').value });
     if (lossQty > 0) DB.LossTracker.insert({ batchId, stage:'quality', lossQty, date:dateStr, jmrefNo:batch&&batch.jmrefNo, partNo:batch&&batch.partNo });
     DB.StageRecords.insert({ batchId, stage:'store', inputQty:outputQty, outputQty:0, lossQty:0, movedFrom:'quality', date:dateStr, recordedBy:session&&session.userId });
-    DB.Batches.update(batchId, { status:'completed', currentStage:'store', completedAt:nowStr });
+    DB.Batches.update(batchId, { status:'completed', currentStage:'store', completedAt:nowStr, initialQty: outputQty });
     document.getElementById('qf-pass-modal').classList.add('hidden');
     showToast('Batch passed to Store! Batch completed.', 'success');
-    render();
+    App.navigate(App.current);
   }
 
   function openReject(batchId, inputQty) {
@@ -291,7 +368,7 @@ const QualityModule = (() => {
     DB.Batches.update(batchId, { status:'rejected' });
     document.getElementById('qf-reject-modal').classList.add('hidden');
     showToast('Batch rejected and recorded', 'success');
-    render();
+    App.navigate(App.current);
   }
 
   function openRecheck(batchId, inputQty) {
@@ -330,7 +407,7 @@ const QualityModule = (() => {
     DB.Batches.update(batchId, { currentStage:toStage, recheckCount:(batch&&batch.recheckCount||0)+1, recheckIteration:iterNo });
     document.getElementById('qf-recheck-modal').classList.add('hidden');
     showToast('Batch sent for recheck #' + iterNo + ' to ' + (STAGE_LABELS[toStage]||toStage), 'success');
-    render();
+    App.navigate(App.current);
   }
 
   function filterPending(val) {

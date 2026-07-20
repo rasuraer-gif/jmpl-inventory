@@ -471,11 +471,12 @@ const MasterModule = (() => {
     const headers = [
       'Part No', 'JMREF No', 'Description', '10 Digit No', 'Compound Code',
       'Sale Price', 'Time (Minutes)', 'Temperature', 'Pressure', 
-      'Sheet Thickness', 'Blank Length', 'Blank Weight', 'Average Target Inventory'
+      'Sheet Thickness', 'Blank Length', 'Blank Weight', 'Average Target Inventory',
+      'Mould Nos', 'Mould Types', 'Process Flows', 'First Processes'
     ];
     const rows = [
-      ['OR-101', 'JMREF-2026-101', 'O-Ring 101 Description', '1234567890', 'CC-70', '12.50', '8', '140', '100', '2.0', '150', '3.5', '5000'],
-      ['OR-102', 'JMREF-2026-102', 'O-Ring 102 Description', '0987654321', 'CC-80', '18.00', '10', '150', '110', '2.5', '180', '4.2', '8000']
+      ['OR-101', 'JMREF-2026-101', 'O-Ring 101 Description', '1234567890', 'CC-70', '12.50', '8', '140', '100', '2.0', '150', '3.5', '5000', '1', 'Cryogenic', 'Cryogenic', 'Cryogenic'],
+      ['OR-102', 'JMREF-2026-102', 'O-Ring 102 Description', '0987654321', 'CC-80', '18.00', '10', '150', '110', '2.5', '180', '4.2', '8000', '1, 2', 'Cryogenic, Yet to be assigned', 'Cryogenic, Visual ; Cryogenic, Gauge, Visual', 'Cryogenic, Cryogenic']
     ];
     const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
     const wb = XLSX.utils.book_new();
@@ -546,6 +547,27 @@ const MasterModule = (() => {
       const blankWeight = normRow['blank weight'] || normRow['weight'] || '';
       const averageTargetInventory = normRow['average target inventory'] || normRow['avgtarget'] || normRow['average target inventory (qty)'] || normRow['target inventory'] || normRow['target'] || '';
 
+      const mouldNosStr = normRow['mould nos'] || normRow['moulds'] || normRow['mould no'] || '1';
+      const mouldTypesStr = normRow['mould types'] || normRow['mould type'] || 'Yet to be assigned';
+      const processFlowsStr = normRow['process flows'] || normRow['process flow'] || 'Cryogenic';
+      const firstProcessesStr = normRow['first processes'] || normRow['first process'] || 'Cryogenic';
+
+      const mouldNos = String(mouldNosStr).split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
+      const mouldTypes = String(mouldTypesStr).split(',').map(s => s.trim());
+      const processFlows = String(processFlowsStr).split(';').map(s => s.trim());
+      const firstProcesses = String(firstProcessesStr).split(',').map(s => s.trim());
+
+      const moulds = [];
+      const numMoulds = Math.max(mouldNos.length, 1);
+      for (let i = 0; i < numMoulds; i++) {
+        moulds.push({
+          mouldNo: mouldNos[i] || (i + 1),
+          mouldType: mouldTypes[i] || mouldTypes[0] || 'Yet to be assigned',
+          processFlow: processFlows[i] || processFlows[0] || 'Cryogenic',
+          firstProcess: firstProcesses[i] || firstProcesses[0] || 'Cryogenic'
+        });
+      }
+
       let status = 'Valid';
       let isValid = true;
 
@@ -580,6 +602,7 @@ const MasterModule = (() => {
         blankLength: blankLength !== '' ? parseFloat(blankLength) : null,
         blankWeight: blankWeight !== '' ? parseFloat(blankWeight) : null,
         averageTargetInventory: averageTargetInventory !== '' ? parseInt(averageTargetInventory, 10) : null,
+        moulds,
         isValid
       };
 

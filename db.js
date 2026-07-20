@@ -40,7 +40,8 @@ const DB = (() => {
     monthlyPlans: [],
     productionSchedules: [],
     moulds: [],
-    mouldMovements: []
+    mouldMovements: [],
+    mouldMaintenance: []
   };
 
   // Helper to load localStorage cache into memory on startup
@@ -78,6 +79,9 @@ const DB = (() => {
     if (localStorage.getItem('jmpl_db_is_local_backup') === 'true') {
       console.log("Running in LOCAL BACKUP database mode (Offline sandbox).");
       runMouldMigration();
+      runInternalBatchMigration();
+      runMouldMasterMigration();
+      runUserDeduplicationMigration();
       isInitialized = true;
       return;
     }
@@ -86,6 +90,9 @@ const DB = (() => {
     if (typeof firebase === 'undefined') {
       console.warn("Firebase SDK not loaded. Running in offline localStorage-only fallback mode.");
       runMouldMigration();
+      runInternalBatchMigration();
+      runMouldMasterMigration();
+      runUserDeduplicationMigration();
       isInitialized = true;
       return;
     }
@@ -160,6 +167,9 @@ const DB = (() => {
       await checkAndMigrate();
       runVisualMigration();
       runMouldMigration();
+      runInternalBatchMigration();
+      runMouldMasterMigration();
+      runUserDeduplicationMigration();
 
     } catch (e) {
       console.error("Failed to initialize Firebase database:", e);
@@ -288,6 +298,129 @@ const DB = (() => {
     if (migratedCount > 0) {
       localStorage.setItem(PREFIX + 'master', JSON.stringify(cache.master));
       console.log(`[Migration] Initialised default moulds for ${migratedCount} master parts.`);
+    }
+  }
+
+  function runInternalBatchMigration() {
+    let migratedCount = 0;
+    // Sort batches chronologically by createdAt to assign correct sequential IDs
+    const sortedBatches = [...cache.batches].sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+    let currentIdx = 1;
+    
+    sortedBatches.forEach(b => {
+      const match = cache.batches.find(x => x.id === b.id);
+      if (match) {
+        if (match.internalBatchNo == null) {
+          match.internalBatchNo = currentIdx;
+          match.updatedAt = new Date().toISOString();
+          migratedCount++;
+          if (db) {
+            const docData = { ...match };
+            delete docData.id;
+            db.collection('batches').doc(match.id).set(docData).catch(err => {
+              console.error(`Migration error on batch ${match.id}:`, err);
+            });
+          }
+        }
+        currentIdx = match.internalBatchNo + 1;
+      }
+    });
+
+    if (migratedCount > 0) {
+      localStorage.setItem(PREFIX + 'batches', JSON.stringify(cache.batches));
+      console.log(`[Migration] Migrated ${migratedCount} batches to have sequential internalBatchNo.`);
+    }
+  }
+
+  function runMouldMasterMigration() {
+    let migratedCount = 0;
+    cache.master.forEach(p => {
+      const mouldsList = p.moulds && p.moulds.length > 0 ? p.moulds : [{
+        mouldNo: 1,
+        mouldType: 'Yet to be assigned'
+      }];
+      
+      mouldsList.forEach(mConfig => {
+        const mouldNo = Number(mConfig.mouldNo) || 1;
+        const mouldType = mConfig.mouldType || 'Yet to be assigned';
+        const mouldId = `${p.jmrefNo}-${mouldType.toUpperCase().replace(/ /g, '_')}-${String(mouldNo).padStart(2, '0')}`;
+        
+        const exists = cache.moulds.some(m => m.mouldId === mouldId);
+        if (!exists) {
+          const newMould = {
+            id: genId(),
+            jmrefNo: p.jmrefNo,
+            mouldNo: mouldNo,
+            mouldType: mouldType,
+            mouldId: mouldId,
+            cavity: 0,
+            size: '300*300',
+            make: 'JMPL',
+            client: 'JMPL',
+            creationDate: new Date().toISOString().slice(0, 10),
+            layoutDiagram: '',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          };
+          cache.moulds.push(newMould);
+          migratedCount++;
+          
+          if (db) {
+            const docData = { ...newMould };
+            delete docData.id;
+            db.collection('moulds').doc(newMould.id).set(docData).catch(err => {
+              console.error(`Migration error on mould ${newMould.id}:`, err);
+            });
+          }
+        }
+      });
+    });
+    
+    if (migratedCount > 0) {
+      localStorage.setItem(PREFIX + 'moulds', JSON.stringify(cache.moulds));
+      console.log(`[Migration] Seeded ${migratedCount} default mould master records.`);
+    }
+  }
+
+  function runUserDeduplicationMigration() {
+    const users = getAll('users');
+    const adminUsers = users.filter(u => u.role === 'admin' || u.username === 'admin');
+    
+    if (adminUsers.length > 1) {
+      console.log(`[Migration] Found ${adminUsers.length} admin accounts. Consolidating into a single account.`);
+      
+      let primaryAdmin = adminUsers.find(u => u.username === 'admin');
+      if (!primaryAdmin) {
+        primaryAdmin = adminUsers[0];
+        primaryAdmin.username = 'admin';
+      }
+      
+      primaryAdmin.name = 'Administrator';
+      primaryAdmin.password = primaryAdmin.password || 'admin123';
+      primaryAdmin.role = 'admin';
+      primaryAdmin.permissions = ['admin','master','production','cryogenic','deflashing','trimming','post-curing','waiting-visual','visual','gauge','quality','store','stock','report_inventory','report_sales','report_production','report_cryogenic','report_deflashing','report_trimming','report_post_curing','report_waiting_visual','report_visual','report_gauge','report_rejected','report_recheck'];
+      primaryAdmin.active = true;
+
+      const duplicateIds = adminUsers.filter(u => u.id !== primaryAdmin.id).map(u => u.id);
+      
+      cache.users = cache.users.filter(u => !duplicateIds.includes(u.id));
+      
+      localStorage.setItem(PREFIX + 'users', JSON.stringify(cache.users));
+      
+      if (db) {
+        const primaryData = { ...primaryAdmin };
+        delete primaryData.id;
+        db.collection('users').doc(primaryAdmin.id).set(primaryData).catch(err => {
+          console.error(`Migration error saving primary admin:`, err);
+        });
+
+        duplicateIds.forEach(id => {
+          db.collection('users').doc(id).delete().catch(err => {
+            console.error(`Migration error deleting duplicate admin ${id}:`, err);
+          });
+        });
+      }
+      console.log(`[Migration] Consolidated admin accounts. Remaining admin account ID: ${primaryAdmin.id}`);
     }
   }
 
@@ -474,23 +607,17 @@ const DB = (() => {
     find: (id) => findById('batches', id),
     byStage: (stage) => getAll('batches').filter(r => r.currentStage === stage && r.status === 'active'),
     byStatus: (status) => getAll('batches').filter(r => r.status === status),
+
     insert: (r) => {
       let batchNo = r.batchNo;
       if (!batchNo) {
-        const batches = getAll('batches');
-        let maxNum = 0;
-        batches.forEach(b => {
-          if (b.batchNo && b.batchNo.startsWith('JMPL-')) {
-            const num = parseInt(b.batchNo.substring(5), 10);
-            if (!isNaN(num) && num > maxNum) {
-              maxNum = num;
-            }
-          }
-        });
-        const num = maxNum + 1;
-        batchNo = 'JMPL-' + String(num).padStart(5, '0');
+        batchNo = Batches.nextBatchNo();
       }
-      return insert('batches', { ...r, batchNo });
+      let internalBatchNo = r.internalBatchNo;
+      if (internalBatchNo == null) {
+        internalBatchNo = Batches.nextInternalBatchNo();
+      }
+      return insert('batches', { ...r, batchNo, internalBatchNo });
     },
     update: (id, c) => update('batches', id, c),
     nextBatchNo: () => {
@@ -505,6 +632,19 @@ const DB = (() => {
         }
       });
       return 'JMPL-' + String(maxNum + 1).padStart(5, '0');
+    },
+    nextInternalBatchNo: () => {
+      const batches = getAll('batches');
+      let maxNum = 0;
+      batches.forEach(b => {
+        if (b.internalBatchNo != null) {
+          const num = Number(b.internalBatchNo);
+          if (!isNaN(num) && num > maxNum) {
+            maxNum = num;
+          }
+        }
+      });
+      return maxNum + 1;
     },
   };
 
@@ -566,8 +706,38 @@ const DB = (() => {
   const MonthlyPlans = {
     all: () => getAll('monthlyPlans'),
     find: (id) => findById('monthlyPlans', id),
-    byMonth: (month) => getAll('monthlyPlans').filter(r => r.month === month),
-    byMonthAndJmref: (month, jmrefNo) => getAll('monthlyPlans').find(r => r.month === month && r.jmrefNo === jmrefNo) || null,
+    byMonth: (month) => {
+      let plans = getAll('monthlyPlans').filter(r => r.month === month);
+      if (plans.length === 0) {
+        const master = getAll('master');
+        const uniqueJmrefs = [...new Set(master.map(m => m.jmrefNo))].filter(Boolean);
+        uniqueJmrefs.forEach(jmref => {
+          const newPlan = {
+            id: genId(),
+            month: month,
+            jmrefNo: jmref,
+            qty: 0,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          };
+          cache.monthlyPlans.push(newPlan);
+          if (db) {
+            const docData = { ...newPlan };
+            delete docData.id;
+            db.collection('monthlyPlans').doc(newPlan.id).set(docData).catch(err => {
+              console.error(`Error seeding plan for ${jmref} on ${month}:`, err);
+            });
+          }
+        });
+        saveLocal('monthlyPlans');
+        plans = getAll('monthlyPlans').filter(r => r.month === month);
+      }
+      return plans;
+    },
+    byMonthAndJmref: (month, jmrefNo) => {
+      MonthlyPlans.byMonth(month);
+      return getAll('monthlyPlans').find(r => r.month === month && r.jmrefNo === jmrefNo) || null;
+    },
     insert: (r) => insert('monthlyPlans', r),
     update: (id, c) => update('monthlyPlans', id, c),
     remove: (id) => remove('monthlyPlans', id)
@@ -647,6 +817,16 @@ const DB = (() => {
     remove: (id) => remove('mouldMovements', id)
   };
 
+  // ── MOULD MAINTENANCE ─────────────────────────────────────
+  const MouldMaintenance = {
+    all: () => getAll('mouldMaintenance'),
+    find: (id) => findById('mouldMaintenance', id),
+    byMould: (mouldId) => getAll('mouldMaintenance').filter(r => r.mouldId === mouldId).sort((a,b) => (b.maintenanceDate||'').localeCompare(a.maintenanceDate||'')),
+    insert: (r) => insert('mouldMaintenance', r),
+    update: (id, c) => update('mouldMaintenance', id, c),
+    remove: (id) => remove('mouldMaintenance', id)
+  };
+
   function exportBackupJSON() {
     const backupData = {};
     const collections = Object.keys(cache);
@@ -683,7 +863,7 @@ const DB = (() => {
     Batches, StageRecords, LossTracker, RejectionTracker,
     RecheckTracker, StockUploads, Sales, StoreInventory,
     ProductionRecords, MonthlyPlans, ProductionSchedules,
-    Moulds, MouldMovements, exportBackupJSON, importBackupJSON,
+    Moulds, MouldMovements, MouldMaintenance, exportBackupJSON, importBackupJSON,
     raw: { getAll, setAll, insert, update, remove, findById, findWhere }
   };
 })();

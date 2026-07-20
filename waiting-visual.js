@@ -716,7 +716,7 @@ const WaitingVisualModule = (() => {
 
       document.getElementById('wv-process-modal').classList.add('hidden');
       showToast('Sub-batch created and moved to Visual Inspection', 'success');
-      render();
+      App.navigate(App.current);
       return;
     }
 
@@ -725,7 +725,7 @@ const WaitingVisualModule = (() => {
     DB.Batches.update(batchId, { currentStage:'visual' });
     document.getElementById('wv-process-modal').classList.add('hidden');
     showToast('Batch moved to Visual Inspection', 'success');
-    render();
+    App.navigate(App.current);
   }
 
   function openReject(batchId) {

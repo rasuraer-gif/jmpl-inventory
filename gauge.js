@@ -371,7 +371,7 @@ const GaugeModule = (() => {
 
       document.getElementById('gauge-process-modal').classList.add('hidden');
       showToast('Sub-batch created and moved to Quality Final', 'success');
-      render();
+      App.navigate(App.current);
       return;
     }
 
@@ -380,7 +380,7 @@ const GaugeModule = (() => {
     DB.Batches.update(batchId, { currentStage:'quality' });
     document.getElementById('gauge-process-modal').classList.add('hidden');
     showToast('Batch moved to Quality Final', 'success');
-    render();
+    App.navigate(App.current);
   }
   function openReject(batchId) {
     const b = DB.Batches.find(batchId)||{};

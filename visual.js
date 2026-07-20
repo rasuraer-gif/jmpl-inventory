@@ -679,7 +679,7 @@ const VisualModule = (() => {
     DB.Batches.update(batchId, { currentStage:destination });
     document.getElementById('vis-process-modal').classList.add('hidden');
     showToast('Batch moved to ' + (STAGE_LABELS[destination] || destination), 'success');
-    render();
+    App.navigate(App.current);
   }
   function openReject(batchId) {
     const b = DB.Batches.find(batchId)||{};

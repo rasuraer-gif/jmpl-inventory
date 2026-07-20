@@ -126,10 +126,17 @@ const PrintBatchModule = (() => {
       <div class="card animate-in">
         <div class="card-header flex justify-between items-center">
           <h3>Batch Validation & Metadata</h3>
-          <span class="badge badge-blue" style="font-size:13px; font-weight:700; padding:6px 12px;">${b.batchNo}</span>
+          <div class="flex gap-2">
+            <span class="badge badge-teal" style="font-size:13px; font-weight:700; padding:6px 12px;">IB: ${b.internalBatchNo || '—'}</span>
+            <span class="badge badge-blue" style="font-size:13px; font-weight:700; padding:6px 12px;">${b.batchNo}</span>
+          </div>
         </div>
         <div class="card-body">
           <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:20px; margin-bottom: 24px;">
+            <div>
+              <div class="text-sm text-muted">Internal Batch No</div>
+              <div class="font-bold text-lg text-teal mt-1">IB: ${b.internalBatchNo || '—'}</div>
+            </div>
             <div>
               <div class="text-sm text-muted">JMREF No</div>
               <div class="font-bold text-lg text-primary mt-1">${b.jmrefNo || '—'}</div>

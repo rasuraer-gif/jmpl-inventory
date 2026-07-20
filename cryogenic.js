@@ -419,7 +419,7 @@ const CryogenicModule = (() => {
 
       document.getElementById('cryo-process-modal').classList.add('hidden');
       showToast('Sub-batch created and moved to ' + (STAGE_LABELS[destination] || destination), 'success');
-      render();
+      App.navigate(App.current);
       return;
     }
 
@@ -433,7 +433,7 @@ const CryogenicModule = (() => {
     DB.Batches.update(batchId, { currentStage:destination, vendorId: vendorId || '' });
     document.getElementById('cryo-process-modal').classList.add('hidden');
     showToast('Batch moved to ' + (STAGE_LABELS[destination] || destination), 'success');
-    render();
+    App.navigate(App.current);
   }
   function openReject(batchId) {
     const b = DB.Batches.find(batchId)||{};

@@ -161,6 +161,9 @@ function printBarcode(batchId) {
             ${processFlow}
           </div>
           <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(batch.batchNo)}" style="width: 200px; height: 200px; display: block;" onload="triggerPrint()" />
+          <div style="position: absolute; right: 0; top: 50%; transform: translateY(-50%); writing-mode: vertical-rl; font-size: 15px; font-weight: 900; text-transform: uppercase; color: #000; letter-spacing: 0.5px; white-space: nowrap; height: 180px; display: flex; align-items: center; justify-content: center; text-align: center; border-left: 1px dashed #000; padding-left: 8px;">
+            IB: ${batch.internalBatchNo || '—'}
+          </div>
         </div>
         <div class="batch-no-display">${batch.batchNo}</div>
         <div class="details">
@@ -257,6 +260,11 @@ const NAV = [
   { id:'rpt-reprocess', label:'Reprocessed Items', icon:'🔄', module:'report_reprocess', section:'tools', parent:'reports', perm:'report_reprocess' },
   { id:'rpt-qty-gain',  label:'Qty Gain Report',   icon:'📈', module:'report_qty_gain',  section:'tools', parent:'reports', perm:'report_inventory' },
   { id:'rpt-qty-loss',  label:'Qty Loss Report',   icon:'📉', module:'report_qty_loss',  section:'tools', parent:'reports', perm:'report_inventory' },
+  { id:'rpt-op-efficiency', label:'Operator & Inspector Efficiency', icon:'👷', module:'report_op_efficiency', section:'tools', parent:'reports', perm:'report_production' },
+  { id:'rpt-mould-lifecycle', label:'Mould Lifecycle & Performance', icon:'⚙️', module:'report_mould_lifecycle', section:'tools', parent:'reports', perm:'mould-tracking' },
+  { id:'rpt-cycle-time', label:'Production Cycle Time & Bottlenecks', icon:'⏳', module:'report_cycle_time', section:'tools', parent:'reports', perm:'report_production' },
+  { id:'rpt-wip-valuation', label:'WIP Inventory Valuation', icon:'💰', module:'report_wip_valuation', section:'tools', parent:'reports', perm:'report_inventory' },
+  { id:'rpt-sub-vs-inhouse', label:'Subcontractor vs. In-House Comparison', icon:'🏢', module:'report_sub_vs_inhouse', section:'tools', parent:'reports', perm:'report_production' },
 
   { id:'print-batch',  label:'Print Label',        icon:'🖨️', module:'print-batch',  section:'tools' },
   { id:'ai-agent',   label:'AI Assistant',        icon:'🤖', module:'ai-agent',  section:'tools', perm:'ai-agent' },
@@ -310,6 +318,11 @@ const App = (() => {
     report_reprocess:  () => ReportsModule?.render('reprocess'),
     report_qty_gain:   () => ReportsModule?.render('qty-gain'),
     report_qty_loss:   () => ReportsModule?.render('qty-loss'),
+    report_op_efficiency:  () => ReportsModule?.render('op-efficiency'),
+    report_mould_lifecycle:() => ReportsModule?.render('mould-lifecycle'),
+    report_cycle_time:     () => ReportsModule?.render('cycle-time'),
+    report_wip_valuation:  () => ReportsModule?.render('wip-valuation'),
+    report_sub_vs_inhouse: () => ReportsModule?.render('sub-vs-inhouse'),
     'print-batch':     () => PrintBatchModule?.render(),
   };
 
@@ -343,6 +356,11 @@ const App = (() => {
     report_reprocess:'Reprocessed Items Report',
     report_qty_gain:'Quantity Gain Report',
     report_qty_loss:'Quality Loss Report',
+    report_op_efficiency:  'Operator & Inspector Efficiency',
+    report_mould_lifecycle:'Mould Lifecycle & Performance',
+    report_cycle_time:     'Production Cycle Time & Bottlenecks',
+    report_wip_valuation:  'WIP Inventory Valuation',
+    report_sub_vs_inhouse: 'Subcontractor vs. In-House Comparison',
   };
 
   function navigate(moduleId) {
@@ -420,6 +438,7 @@ const App = (() => {
     if (!session) { showLoginPage(); return; }
 
     showAppShell(session);
+    setupInternalBatchNoObserver();
 
     // Route to module from hash or default
     const hash = location.hash.replace('#', '');
@@ -470,6 +489,77 @@ const App = (() => {
     DB.Users.update(user.id, { password: newPwd });
     showToast('Password updated successfully', 'success');
     document.getElementById('change-pwd-modal').classList.add('hidden');
+  }
+
+  let observer = null;
+  function setupInternalBatchNoObserver() {
+    if (observer) {
+      observer.disconnect();
+    }
+
+    function applyTags(rootNode = document.body) {
+      if (typeof DB === 'undefined' || !DB.Batches) return;
+      const batches = DB.Batches.all();
+      if (!batches || !batches.length) return;
+      
+      const batchMap = new Map();
+      batches.forEach(b => {
+        if (b.batchNo && b.internalBatchNo) {
+          batchMap.set(b.batchNo.trim(), b.internalBatchNo);
+        }
+      });
+
+      if (!batchMap.size) return;
+
+      const sortedBatchNos = [...batchMap.keys()].sort((a,b) => b.length - a.length);
+      const escaped = sortedBatchNos.map(no => no.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'));
+      const regex = new RegExp(`(?<!\\(IB: \\d+\\)\\s*)(?:\\b|(?<=\\s|^))(${escaped.join('|')})(?:\\b|(?=\\s|$))(?!\\s*\\(IB: \\d+\\))`, 'g');
+
+      const walker = document.createTreeWalker(
+        rootNode,
+        NodeFilter.SHOW_TEXT,
+        {
+          acceptNode: (node) => {
+            const parent = node.parentNode;
+            if (!parent) return NodeFilter.FILTER_REJECT;
+            const tag = parent.tagName.toUpperCase();
+            if (['INPUT', 'TEXTAREA', 'SCRIPT', 'STYLE'].includes(tag)) {
+              return NodeFilter.FILTER_REJECT;
+            }
+            return NodeFilter.FILTER_ACCEPT;
+          }
+        }
+      );
+
+      let node;
+      const nodesToUpdate = [];
+      while (node = walker.nextNode()) {
+        const val = node.nodeValue;
+        if (val && regex.test(val)) {
+          nodesToUpdate.push(node);
+        }
+      }
+
+      if (observer) observer.disconnect();
+
+      nodesToUpdate.forEach(n => {
+        n.nodeValue = n.nodeValue.replace(regex, (match) => {
+          const ib = batchMap.get(match.trim());
+          return `${match} (IB: ${ib})`;
+        });
+      });
+
+      if (observer) {
+        observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+      }
+    }
+
+    observer = new MutationObserver((mutations) => {
+      applyTags();
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    applyTags();
   }
 
   return { navigate, init, toggleReportsMenu, openChangePasswordModal, changePassword, get current() { return currentModule; } };
@@ -775,10 +865,13 @@ function renderDashboard() {
 
   el.innerHTML = `
     <div class="animate-in">
-      <!-- Welcome -->
-      <div style="margin-bottom:28px;">
-        <h2 style="font-size:22px;font-weight:800;">Good ${getGreeting()}, ${Auth.getSession()?.name?.split(' ')[0]} 👋</h2>
-        <p class="text-sm text-muted mt-1">Here's your JMPL inventory overview for today</p>
+      <!-- Welcome Header with Left-Aligned Logo -->
+      <div style="display:flex; align-items:center; gap:16px; margin-bottom:28px;">
+        <img src="./logo.png" alt="JMPL Logo" style="height: 64px; width: 64px; object-fit: contain; background: white; padding: 8px; border-radius: 12px; box-shadow: var(--shadow-sm); flex-shrink: 0;">
+        <div>
+          <h2 style="font-size:22px;font-weight:800;margin:0;">Good ${getGreeting()}, ${Auth.getSession()?.name?.split(' ')[0]} 👋</h2>
+          <p class="text-sm text-muted mt-1" style="margin:0;">Here's your JMPL inventory overview for today</p>
+        </div>
       </div>
 
       <!-- Top Stats Row 1: Production & Execution -->

@@ -27,7 +27,7 @@ const ProductionModule = (() => {
         </div>
         <div id="prod-tab-content"></div>
       </div>
-      ${moveModal()}${rejectModal()}${printSuccessModal()}`;
+      ${moveModal()}${rejectModal()}${printSuccessModal()}${editBatchModal()}`;
 
     document.querySelectorAll('#prod-tabs .tab-btn').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -91,6 +91,7 @@ const ProductionModule = (() => {
           <td class="text-muted text-sm">${(b.createdAt||'').slice(0,10)}</td>
           <td>
             <div class="flex gap-2">
+              <button class="btn btn-ghost btn-xs" onclick="ProductionModule.openEditBatch('${b.id}')">✏️ Edit</button>
               <button class="btn btn-primary btn-xs" onclick="ProductionModule.openMove('${b.id}')">Move Stage</button>
               <button class="btn btn-danger btn-xs" onclick="ProductionModule.openReject('${b.id}')">Reject</button>
               <button class="btn btn-teal btn-xs" onclick="ProductionModule.printBarcode('${b.id}')">🖨️ Print</button>
@@ -253,7 +254,8 @@ const ProductionModule = (() => {
               <input type="text" id="prod-batch-no" class="form-control" readonly style="opacity:0.8; font-weight:bold; color:var(--primary);" placeholder="Select Part, TR No, Press No">
             </div>
             <div class="form-group" style="flex:1;">
-              <!-- Placeholder to align layout -->
+              <label class="form-label">Internal Batch No (Auto-Generated)</label>
+              <input type="text" id="prod-internal-batch-no" class="form-control" readonly style="opacity:0.8; font-weight:bold; color:var(--accent-teal);" value="IB: ${DB.Batches.nextInternalBatchNo()}">
             </div>
           </div>
 
@@ -616,8 +618,7 @@ const ProductionModule = (() => {
 
       document.getElementById('prod-move-modal').classList.add('hidden');
       showToast('Sub-batch created and moved to ' + destination, 'success');
-      renderStats();
-      renderTab('active');
+      App.navigate(App.current);
       return;
     }
 
@@ -626,8 +627,7 @@ const ProductionModule = (() => {
     DB.Batches.update(batchId, { currentStage: destination, initialQty: outputQty, vendorId: vendorId || '' });
     document.getElementById('prod-move-modal').classList.add('hidden');
     showToast('Batch moved to ' + destination, 'success');
-    renderStats();
-    renderTab('active');
+    App.navigate(App.current);
   }
 
   function openReject(batchId) {
@@ -958,7 +958,8 @@ const ProductionModule = (() => {
       productionDate: prodDate,
       recheckCount: 0,
       mouldNo,
-      vendorId: vendorId || ''
+      vendorId: vendorId || '',
+      internalBatchNo: DB.Batches.nextInternalBatchNo()
     });
     
     if (type === 'subcontractor') {
@@ -1060,5 +1061,223 @@ const ProductionModule = (() => {
     }
   }
 
-  return { render, openMove, calcLoss, moveBatch, openReject, rejectBatch, onTypeChange, createBatch, resetForm, showPartDropdown, filterParts, selectPart, updateDynamicBatchNo, updateMoveDynamicBatchNo, printBarcode, filterPending, showJmrefDropdown, filterJmrefs, onDestinationChange, onMouldChange, onSubDestinationChange };
+  function editBatchModal() {
+    const subs   = DB.Subcontractors.active();
+    const ops    = DB.Operators.active();
+    const subOpts  = subs.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+    const opOpts   = ops.map(o => `<option value="${o.id}">${o.name}</option>`).join('');
+    
+    return `
+      <div class="modal-overlay hidden" id="prod-edit-batch-modal">
+        <div class="modal modal-md">
+          <div class="modal-header">
+            <h3>Edit Batch Details</h3>
+            <button class="modal-close" onclick="document.getElementById('prod-edit-batch-modal').classList.add('hidden')">&#x2715;</button>
+          </div>
+          <div class="modal-body">
+            <input type="hidden" id="edit-batch-db-id">
+            
+            <div class="form-row">
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Part No</label>
+                <input type="text" id="edit-batch-partno" class="form-control" readonly style="opacity:0.8; background:var(--bg-input);">
+              </div>
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">JMREF No</label>
+                <input type="text" id="edit-batch-jmref" class="form-control" readonly style="opacity:0.8; background:var(--bg-input);">
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Mould No <span class="required">*</span></label>
+                <select id="edit-batch-mould-no" class="form-control">
+                  <option value="">Select mould...</option>
+                </select>
+              </div>
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Production Date <span class="required">*</span></label>
+                <input type="date" id="edit-batch-date" class="form-control">
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">TR No <span class="required">*</span></label>
+                <input type="text" id="edit-batch-trno" class="form-control" placeholder="Enter TR No">
+              </div>
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Shift <span class="required">*</span></label>
+                <select id="edit-batch-shift" class="form-control">
+                  <option value="day">Day (D)</option>
+                  <option value="night">Night (N)</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-row">
+               <div class="form-group" style="flex:1;">
+                <label class="form-label">Operator / Subcontractor Type</label>
+                <div class="flex gap-3 mt-2">
+                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="radio" name="edit-prod-type" value="inhouse" onchange="ProductionModule.onEditTypeChange()"> <span>In-House</span></label>
+                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="radio" name="edit-prod-type" value="subcontractor" onchange="ProductionModule.onEditTypeChange()"> <span>Subcontractor</span></label>
+                </div>
+              </div>
+              <div class="form-group" style="flex:1;" id="edit-prod-op-group">
+                <label class="form-label">Operator <span class="required">*</span></label>
+                <select id="edit-batch-op" class="form-control"><option value="">Select operator...</option>${opOpts}</select>
+              </div>
+              <div class="form-group hidden" style="flex:1;" id="edit-prod-sub-group">
+                <label class="form-label">Subcontractor <span class="required">*</span></label>
+                <select id="edit-batch-sub" class="form-control"><option value="">Select subcontractor...</option>${subOpts}</select>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Press No <span class="required">*</span></label>
+                <input type="text" id="edit-batch-press-no" class="form-control" placeholder="Enter Press No">
+              </div>
+              <div class="form-group" style="flex:1;" id="edit-prod-lifts-group">
+                <label class="form-label">No. of Lifts <span class="required">*</span></label>
+                <input type="number" id="edit-batch-lifts" class="form-control" placeholder="Number of lifts" min="0">
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Quantity <span class="required">*</span></label>
+                <input type="number" id="edit-batch-qty" class="form-control" placeholder="Enter Quantity" min="1">
+              </div>
+              <div class="form-group" style="flex:1;">
+                <!-- Spacer -->
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Notes</label>
+              <textarea id="edit-batch-notes" class="form-control" rows="2" placeholder="Optional notes"></textarea>
+            </div>
+
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="document.getElementById('prod-edit-batch-modal').classList.add('hidden')">Cancel</button>
+            <button class="btn btn-primary" onclick="ProductionModule.saveBatchEdit()">Save Changes</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function openEditBatch(batchId) {
+    const b = DB.Batches.find(batchId);
+    if (!b) return;
+
+    document.getElementById('edit-batch-db-id').value = batchId;
+    document.getElementById('edit-batch-partno').value = b.partNo || '';
+    document.getElementById('edit-batch-jmref').value = b.jmrefNo || '';
+    document.getElementById('edit-batch-date').value = b.productionDate || b.createdAt.slice(0, 10);
+    document.getElementById('edit-batch-trno').value = b.trNo || '';
+    document.getElementById('edit-batch-shift').value = b.shift || 'day';
+    document.getElementById('edit-batch-press-no').value = b.pressNo || '';
+    document.getElementById('edit-batch-lifts').value = b.lifts || 0;
+    document.getElementById('edit-batch-qty').value = b.initialQty || 0;
+    document.getElementById('edit-batch-notes').value = b.notes || '';
+
+    const part = DB.Master.all().find(p => p.jmrefNo === b.jmrefNo);
+    const mouldNoSelect = document.getElementById('edit-batch-mould-no');
+    if (mouldNoSelect) {
+      mouldNoSelect.innerHTML = '<option value="">Select mould...</option>';
+      if (part && part.moulds && part.moulds.length) {
+        part.moulds.forEach(m => {
+          mouldNoSelect.innerHTML += `<option value="${m.mouldNo}" ${b.mouldNo === m.mouldNo ? 'selected' : ''}>Mould ${m.mouldNo}</option>`;
+        });
+      }
+    }
+
+    const prodType = b.productionType || 'inhouse';
+    const radioInHouse = document.querySelector('input[name="edit-prod-type"][value="inhouse"]');
+    const radioSub = document.querySelector('input[name="edit-prod-type"][value="subcontractor"]');
+    
+    if (prodType === 'inhouse') {
+      if (radioInHouse) radioInHouse.checked = true;
+      document.getElementById('edit-batch-op').value = b.operatorId || '';
+    } else {
+      if (radioSub) radioSub.checked = true;
+      document.getElementById('edit-batch-sub').value = b.subcontractorId || '';
+    }
+    
+    onEditTypeChange();
+
+    document.getElementById('prod-edit-batch-modal').classList.remove('hidden');
+  }
+
+  function onEditTypeChange() {
+    const radioSub = document.querySelector('input[name="edit-prod-type"][value="subcontractor"]');
+    const subGroup = document.getElementById('edit-prod-sub-group');
+    const opGroup = document.getElementById('edit-prod-op-group');
+    const liftsGroup = document.getElementById('edit-prod-lifts-group');
+
+    if (radioSub && radioSub.checked) {
+      if (subGroup) subGroup.classList.remove('hidden');
+      if (opGroup) opGroup.classList.add('hidden');
+      if (liftsGroup) liftsGroup.classList.add('hidden');
+    } else {
+      if (subGroup) subGroup.classList.add('hidden');
+      if (opGroup) opGroup.classList.remove('hidden');
+      if (liftsGroup) liftsGroup.classList.remove('hidden');
+    }
+  }
+
+  function saveBatchEdit() {
+    const batchId = document.getElementById('edit-batch-db-id').value;
+    const b = DB.Batches.find(batchId);
+    if (!b) return;
+
+    const mouldNo = parseInt(document.getElementById('edit-batch-mould-no').value, 10);
+    if (isNaN(mouldNo)) { showToast('Please select a Mould No', 'error'); return; }
+
+    const prodDate = document.getElementById('edit-batch-date').value;
+    if (!prodDate) { showToast('Please select a Production Date', 'error'); return; }
+
+    const trNo = document.getElementById('edit-batch-trno').value.trim();
+    if (!trNo) { showToast('Please enter a TR No', 'error'); return; }
+
+    const shift = document.getElementById('edit-batch-shift').value;
+    const pressNo = document.getElementById('edit-batch-press-no').value.trim();
+    if (!pressNo) { showToast('Please enter a Press No', 'error'); return; }
+
+    const type = document.querySelector('input[name="edit-prod-type"]:checked')?.value || 'inhouse';
+    const opId = type === 'subcontractor' ? '' : (document.getElementById('edit-batch-op').value || '');
+    if (type !== 'subcontractor' && !opId) { showToast('Please select an operator', 'error'); return; }
+
+    const subcontractorId = type === 'subcontractor' ? (document.getElementById('edit-batch-sub').value || '') : '';
+    if (type === 'subcontractor' && !subcontractorId) { showToast('Please select a subcontractor', 'error'); return; }
+
+    const qty = parseInt(document.getElementById('edit-batch-qty').value, 10);
+    if (isNaN(qty) || qty < 1) { showToast('Please enter a valid quantity', 'error'); return; }
+
+    const lifts = type === 'subcontractor' ? 0 : (parseInt(document.getElementById('edit-batch-lifts').value, 10) || 0);
+    const notes = document.getElementById('edit-batch-notes').value.trim();
+
+    DB.Batches.update(batchId, {
+      mouldNo,
+      productionDate: prodDate,
+      trNo,
+      shift,
+      pressNo,
+      productionType: type,
+      operatorId: opId || null,
+      subcontractorId: subcontractorId || null,
+      initialQty: qty,
+      lifts,
+      notes
+    });
+
+    showToast('Batch details updated successfully', 'success');
+    document.getElementById('prod-edit-batch-modal').classList.add('hidden');
+    render();
+  }
+
+  return { render, openMove, calcLoss, moveBatch, openReject, rejectBatch, onTypeChange, createBatch, resetForm, showPartDropdown, filterParts, selectPart, updateDynamicBatchNo, updateMoveDynamicBatchNo, printBarcode, filterPending, showJmrefDropdown, filterJmrefs, onDestinationChange, onMouldChange, onSubDestinationChange, openEditBatch, onEditTypeChange, saveBatchEdit };
 })();

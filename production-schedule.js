@@ -65,7 +65,7 @@ const ProductionScheduleModule = (() => {
       });
 
       const totalQtyInHand = storeQty + wipQty;
-      return (p.qty * 2) >= totalQtyInHand;
+      return p.qty === 0 || (p.qty * 2) >= totalQtyInHand;
     });
 
     const tabContent = 

@@ -81,8 +81,12 @@ const ReportsModule = (() => {
     const stages = ['production','cryogenic','deflashing','trimming','post-curing','waiting-visual','visual','gauge','quality','store'];
 
     let parts = master.filter(p => {
-      if (jmref  && !p.jmrefNo.toLowerCase().includes(jmref.toLowerCase()))  return false;
-      if (partNo && !p.partNo.toLowerCase().includes(partNo.toLowerCase())) return false;
+      if (jmref) {
+        const q = jmref.toLowerCase();
+        const matchJmref = p.jmrefNo && p.jmrefNo.toLowerCase().includes(q);
+        const matchPartNo = p.partNo && p.partNo.toLowerCase().includes(q);
+        if (!matchJmref && !matchPartNo) return false;
+      }
       return true;
     });
 
@@ -261,12 +265,24 @@ const ReportsModule = (() => {
     if (!records.length) return emptyState();
 
     const operators = DB.Operators.all();
-    const headers = ['#','Batch No','JMREF','Operator','Press No','No. of Lifts','Prod Type','Date'];
+    const subcontractors = DB.Subcontractors.all();
+    const headers = ['#','Batch No','JMREF','Operator','Subcontractor Name','Press No','No. of Lifts','Prod Type','Date'];
     const dataRows = records.map((r, i) => {
       const batch = DB.Batches.find(r.batchId) || {};
       const op = operators.find(o => o.id === r.operatorId) || {};
+      const sub = subcontractors.find(s => s.id === batch.subcontractorId) || {};
       const typeStr = batch.productionType === 'subcontractor' ? 'Subcontractor' : 'In House';
-      return [i+1, batch.batchNo||'', batch.jmrefNo||'', op.name||r.operatorName||'-', r.pressNo||batch.pressNo||'-', r.noOfLifts||0, typeStr, (r.date||'').slice(0,10)];
+      return [
+        i+1, 
+        batch.batchNo||'', 
+        batch.jmrefNo||'', 
+        op.name||r.operatorName||'-', 
+        (sub.name && sub.name !== '-') ? sub.name : typeStr,
+        r.pressNo||batch.pressNo||'-', 
+        r.noOfLifts||0, 
+        typeStr, 
+        (r.date||'').slice(0,10)
+      ];
     });
 
     const html = `<div class="table-wrap"><table class="data-table">
@@ -906,6 +922,535 @@ const ReportsModule = (() => {
     return { html, headers, dataRows: rows };
   }
 
+  // ── 1. Operator & Inspector Efficiency ─────────────────────
+  function renderOpEfficiency(filters) {
+    const { from, to } = filters;
+    const operators = DB.Operators.all();
+    const inspectors = DB.Inspectors.all();
+    const batches = DB.Batches.all();
+    const stageRecords = DB.StageRecords.all();
+
+    // Calculate Operator rows
+    const opRows = operators.map(op => {
+      const opBatches = batches.filter(b => b.operatorId === op.id);
+      const inRangeBatches = filterByDateRange(opBatches, 'createdAt', from, to);
+      const totalBatches = inRangeBatches.length;
+
+      const inputQty = inRangeBatches.reduce((sum, b) => sum + (b.initialQty || 0), 0);
+      const batchIds = new Set(inRangeBatches.map(b => b.id));
+      const opRecords = stageRecords.filter(r => r.stage === 'production' && batchIds.has(r.batchId));
+      const lossQty = opRecords.reduce((sum, r) => sum + (r.lossQty || 0), 0);
+      const outputQty = Math.max(0, inputQty - lossQty);
+      const yieldRate = inputQty > 0 ? (outputQty / inputQty) * 100 : 100;
+      let grade = 'C';
+      if (yieldRate >= 98) grade = 'A';
+      else if (yieldRate >= 95) grade = 'B';
+
+      return {
+        name: op.name,
+        role: 'Operator',
+        totalBatches,
+        inputQty,
+        outputQty,
+        lossQty,
+        yieldRate: yieldRate.toFixed(2) + '%',
+        grade
+      };
+    });
+
+    // Calculate Inspector rows
+    const inspRows = inspectors.map(insp => {
+      const allInspRecords = stageRecords.filter(r => r.stage === 'visual' && r.inspectorName && r.inspectorName.toLowerCase() === insp.name.toLowerCase());
+      const inRangeRecords = filterByDateRange(allInspRecords, 'date', from, to);
+      
+      const batchIds = new Set(inRangeRecords.map(r => r.batchId));
+      const totalBatches = batchIds.size;
+      const inputQty = inRangeRecords.reduce((sum, r) => sum + (r.inputQty || 0), 0);
+      const lossQty = inRangeRecords.reduce((sum, r) => sum + (r.lossQty || 0), 0);
+      const outputQty = Math.max(0, inputQty - lossQty);
+      const yieldRate = inputQty > 0 ? (outputQty / inputQty) * 100 : 100;
+      let grade = 'C';
+      if (yieldRate >= 98) grade = 'A';
+      else if (yieldRate >= 95) grade = 'B';
+
+      return {
+        name: insp.name,
+        role: 'Inspector',
+        totalBatches,
+        inputQty,
+        outputQty,
+        lossQty,
+        yieldRate: yieldRate.toFixed(2) + '%',
+        grade
+      };
+    });
+
+    const allRows = [...opRows, ...inspRows].filter(r => r.totalBatches > 0 || r.inputQty > 0);
+    const headers = ['Name', 'Role', 'Total Batches', 'Input Qty', 'Output Qty', 'Loss Qty', 'Yield Rate', 'Performance Grade'];
+    const dataRows = allRows.map(r => [
+      r.name, r.role, String(r.totalBatches), String(r.inputQty), String(r.outputQty), String(r.lossQty), r.yieldRate, r.grade
+    ]);
+
+    const opHtmlRows = opRows.filter(r => r.totalBatches > 0 || r.inputQty > 0).map(r => `
+      <tr>
+        <td class="font-semibold text-blue">${r.name}</td>
+        <td><span class="badge badge-blue">Operator</span></td>
+        <td>${formatNum(r.totalBatches)}</td>
+        <td>${formatNum(r.inputQty)}</td>
+        <td>${formatNum(r.outputQty)}</td>
+        <td class="text-danger font-semibold">${formatNum(r.lossQty)}</td>
+        <td class="font-bold text-success">${r.yieldRate}</td>
+        <td><span class="badge ${r.grade === 'A' ? 'badge-green' : r.grade === 'B' ? 'badge-blue' : 'badge-amber'}">${r.grade}</span></td>
+      </tr>`).join('');
+
+    const inspHtmlRows = inspRows.filter(r => r.totalBatches > 0 || r.inputQty > 0).map(r => `
+      <tr>
+        <td class="font-semibold text-blue">${r.name}</td>
+        <td><span class="badge badge-purple">Inspector</span></td>
+        <td>${formatNum(r.totalBatches)}</td>
+        <td>${formatNum(r.inputQty)}</td>
+        <td>${formatNum(r.outputQty)}</td>
+        <td class="text-danger font-semibold">${formatNum(r.lossQty)}</td>
+        <td class="font-bold text-success">${r.yieldRate}</td>
+        <td><span class="badge ${r.grade === 'A' ? 'badge-green' : r.grade === 'B' ? 'badge-blue' : 'badge-amber'}">${r.grade}</span></td>
+      </tr>`).join('');
+
+    const html = `
+      <div style="margin-bottom: 24px;">
+        <h4 style="font-weight:600; font-size:15px; margin-bottom:12px; color:var(--primary);">👷 Operator Performance</h4>
+        <div class="table-wrap" style="margin-bottom: 28px;">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Operator Name</th>
+                <th>Role</th>
+                <th>Batches Created</th>
+                <th>Input Qty (pcs)</th>
+                <th>Output Qty (pcs)</th>
+                <th>Loss Qty (pcs)</th>
+                <th>Yield Rate</th>
+                <th>Grade</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${opHtmlRows || '<tr><td colspan="8" style="text-align:center;padding:16px;color:var(--text-muted);">No operator data for range</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+
+        <h4 style="font-weight:600; font-size:15px; margin-bottom:12px; color:var(--primary);">🔍 Inspector Performance</h4>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Inspector Name</th>
+                <th>Role</th>
+                <th>Batches Inspected</th>
+                <th>Input Qty (pcs)</th>
+                <th>Output Qty (pcs)</th>
+                <th>Loss Qty (pcs)</th>
+                <th>Yield Rate</th>
+                <th>Grade</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${inspHtmlRows || '<tr><td colspan="8" style="text-align:center;padding:16px;color:var(--text-muted);">No inspector data for range</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+
+    return { html, headers, dataRows };
+  }
+
+  // ── 2. Mould Lifecycle & Performance ────────────────────────
+  function renderMouldLifecycle(filters) {
+    const { jmref } = filters;
+    const moulds = DB.Moulds.all();
+    const batches = DB.Batches.all();
+    const stageRecords = DB.StageRecords.all();
+
+    let filteredMoulds = jmref 
+      ? moulds.filter(m => m.jmrefNo && m.jmrefNo.toLowerCase().includes(jmref.toLowerCase())) 
+      : moulds;
+
+    const headers = ['Mould ID', 'JMREF No', 'Mould Type', 'Cavities', 'Size', 'Batches Run', 'Total Curing Lifts', 'Total Produced Qty', 'Avg Yield Rate', 'Rack / Location', 'Alert Level'];
+    const dataRows = filteredMoulds.map(m => {
+      const matchBatches = batches.filter(b => b.jmrefNo === m.jmrefNo && parseInt(b.mouldNo, 10) === parseInt(m.mouldNo, 10));
+      const totalBatches = matchBatches.length;
+      const totalLifts = matchBatches.reduce((sum, b) => sum + (b.lifts || 0), 0);
+      const totalProduced = matchBatches.reduce((sum, b) => sum + (b.initialQty || 0), 0);
+
+      const batchIds = new Set(matchBatches.map(b => b.id));
+      const prodRecords = stageRecords.filter(r => r.stage === 'production' && batchIds.has(r.batchId));
+      const inputSum = prodRecords.reduce((sum, r) => sum + (r.inputQty || 0), 0);
+      const outputSum = prodRecords.reduce((sum, r) => sum + (r.outputQty || 0), 0);
+      const yieldRate = inputSum > 0 ? ((outputSum / inputSum) * 100).toFixed(2) + '%' : '100.00%';
+
+      let alertStatus = 'Normal';
+      if (totalLifts >= 10000) alertStatus = 'Service Required';
+      else if (totalLifts >= 8000) alertStatus = 'Upcoming Service';
+
+      return [
+        m.id,
+        m.jmrefNo || '—',
+        m.mouldType || 'Yet to be assigned',
+        String(m.noOfCavities || 0),
+        m.mouldSize || '300*300',
+        String(totalBatches),
+        String(totalLifts),
+        String(totalProduced),
+        yieldRate,
+        m.rackDetails || 'Rack A / Row 1',
+        alertStatus
+      ];
+    });
+
+    const htmlRows = dataRows.map(r => {
+      let badgeCls = 'badge-green';
+      if (r[10] === 'Service Required') badgeCls = 'badge-red';
+      else if (r[10] === 'Upcoming Service') badgeCls = 'badge-amber';
+
+      return `
+        <tr>
+          <td class="font-semibold text-blue">${r[0]}</td>
+          <td><span class="badge badge-teal">${r[1]}</span></td>
+          <td>${r[2]}</td>
+          <td>${r[3]}</td>
+          <td>${r[4]}</td>
+          <td>${formatNum(r[5])}</td>
+          <td class="font-semibold">${formatNum(r[6])}</td>
+          <td>${formatNum(r[7])}</td>
+          <td class="font-bold text-success">${r[8]}</td>
+          <td><span class="badge badge-gray">${r[9]}</span></td>
+          <td><span class="badge ${badgeCls}">${r[10]}</span></td>
+        </tr>`;
+    }).join('');
+
+    const html = `
+      <div class="table-wrap">
+        <table class="data-table" style="min-width: 1050px;">
+          <thead>
+            <tr>
+              <th>Mould ID</th>
+              <th>JMREF No</th>
+              <th>Mould Type</th>
+              <th>Cavities</th>
+              <th>Size</th>
+              <th>Batches Run</th>
+              <th>Total Lifts</th>
+              <th>Total Produced</th>
+              <th>Avg Yield Rate</th>
+              <th>Rack Details</th>
+              <th>Status Alert</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${htmlRows || '<tr><td colspan="11" style="text-align:center;padding:24px;color:var(--text-muted);">No mould records found</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    return { html, headers, dataRows };
+  }
+
+  // ── 3. Cycle Time & Bottleneck Analysis ─────────────────────
+  function renderCycleTime(filters) {
+    const { from, to } = filters;
+    const batches = DB.Batches.all();
+    const stageRecords = DB.StageRecords.all();
+    const stages = ['production','cryogenic','deflashing','trimming','post-curing','waiting-visual','visual','gauge','quality'];
+
+    const batchTransitions = {};
+    stageRecords.forEach(r => {
+      if (!batchTransitions[r.batchId]) batchTransitions[r.batchId] = [];
+      batchTransitions[r.batchId].push(r);
+    });
+
+    const inRangeBatches = filterByDateRange(batches, 'createdAt', from, to);
+    const stageDurations = {};
+    stages.forEach(s => stageDurations[s] = []);
+
+    inRangeBatches.forEach(b => {
+      const records = (batchTransitions[b.id] || []).sort((a,b) => a.createdAt.localeCompare(b.createdAt));
+      const entryTime = new Date(b.createdAt).getTime();
+
+      let lastTime = entryTime;
+      let lastStage = 'production';
+
+      records.forEach(r => {
+        const transTime = new Date(r.createdAt).getTime();
+        const durationHrs = (transTime - lastTime) / (1000 * 60 * 60);
+        if (durationHrs >= 0 && stages.includes(lastStage)) {
+          stageDurations[lastStage].push(durationHrs);
+        }
+        lastStage = r.movedTo;
+        lastTime = transTime;
+      });
+
+      if (b.status === 'active' && b.currentStage && stages.includes(b.currentStage)) {
+        const nowTime = new Date().getTime();
+        const durationHrs = (nowTime - lastTime) / (1000 * 60 * 60);
+        if (durationHrs >= 0) {
+          stageDurations[b.currentStage].push(durationHrs);
+        }
+      }
+    });
+
+    const formatDuration = hrs => {
+      if (hrs === 0) return '0 hrs';
+      if (hrs < 24) return hrs.toFixed(1) + ' hrs';
+      return (hrs / 24).toFixed(1) + ' days';
+    };
+
+    const headers = ['Stage Name', 'Avg Dwell Time', 'Min Dwell Time', 'Max Dwell Time', 'Total Batches Processed', 'Bottleneck Risk'];
+    const dataRows = [];
+
+    stages.forEach(stage => {
+      const durs = stageDurations[stage] || [];
+      const total = durs.length;
+      const avg = total > 0 ? (durs.reduce((s, v) => s + v, 0) / total) : 0;
+      const min = total > 0 ? Math.min(...durs) : 0;
+      const max = total > 0 ? Math.max(...durs) : 0;
+
+      let risk = 'Normal';
+      if (avg > 72) risk = '🔥 High Bottleneck';
+      else if (avg > 24) risk = '⚠️ Medium Bottleneck';
+
+      dataRows.push([
+        STAGE_LABELS[stage] || stage,
+        formatDuration(avg),
+        formatDuration(min),
+        formatDuration(max),
+        String(total),
+        risk
+      ]);
+    });
+
+    const htmlRows = dataRows.map(r => {
+      let badgeCls = 'badge-green';
+      if (r[5].includes('High')) badgeCls = 'badge-red';
+      else if (r[5].includes('Medium')) badgeCls = 'badge-amber';
+
+      return `
+        <tr>
+          <td class="font-semibold text-blue">${r[0]}</td>
+          <td class="font-bold">${r[1]}</td>
+          <td>${r[2]}</td>
+          <td>${r[3]}</td>
+          <td>${formatNum(r[4])}</td>
+          <td><span class="badge ${badgeCls}">${r[5]}</span></td>
+        </tr>`;
+    }).join('');
+
+    const html = `
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Stage Name</th>
+              <th>Avg Dwell Time</th>
+              <th>Min Dwell Time</th>
+              <th>Max Dwell Time</th>
+              <th>Total Batches Processed</th>
+              <th>Bottleneck Risk</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${htmlRows}
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    return { html, headers, dataRows };
+  }
+
+  // ── 4. WIP Valuation Report ────────────────────────────────
+  function renderWipValuation(filters) {
+    const batches = DB.Batches.all().filter(b => b.status === 'active');
+    const master = DB.Master.all();
+    const stageRecords = DB.StageRecords.all();
+
+    const groups = {};
+    batches.forEach(b => {
+      const part = master.find(p => p.jmrefNo === b.jmrefNo);
+      if (!part) return;
+
+      const stage = b.currentStage || 'production';
+      const key = `${b.jmrefNo}_${stage}`;
+
+      let qty = b.initialQty || 0;
+      const incoming = stageRecords.filter(r => r.batchId === b.id && r.movedTo === stage);
+      if (incoming.length) {
+        qty = incoming[incoming.length - 1].outputQty || 0;
+      }
+
+      if (!groups[key]) {
+        groups[key] = {
+          jmrefNo: b.jmrefNo,
+          partNo: part.partNo,
+          description: part.description,
+          stage: stage,
+          stageLabel: STAGE_LABELS[stage] || stage,
+          qty: 0,
+          salePrice: part.salePrice || 0
+        };
+      }
+      groups[key].qty += qty;
+    });
+
+    const rows = Object.values(groups).filter(g => g.qty > 0);
+    rows.sort((a, b) => a.stage.localeCompare(b.stage) || a.partNo.localeCompare(b.partNo));
+
+    const totalQty = rows.reduce((s, r) => s + r.qty, 0);
+    const totalValuation = rows.reduce((s, r) => s + (r.qty * r.salePrice), 0);
+
+    const headers = ['JMREF No', 'Part No', 'Description', 'Current Stage', 'WIP Qty', 'Unit Price (INR)', 'Total Valuation (INR)'];
+    const dataRows = rows.map(r => [
+      r.jmrefNo,
+      r.partNo,
+      r.description,
+      r.stageLabel,
+      String(r.qty),
+      String(r.salePrice),
+      String(r.qty * r.salePrice)
+    ]);
+
+    const htmlRows = rows.map(r => `
+      <tr>
+        <td><span class="badge badge-teal">${r.jmrefNo}</span></td>
+        <td class="font-semibold text-blue">${r.partNo}</td>
+        <td class="text-muted text-sm">${r.description}</td>
+        <td><span class="badge badge-blue">${r.stageLabel}</span></td>
+        <td class="font-semibold">${formatNum(r.qty)}</td>
+        <td>₹${formatNum(r.salePrice)}</td>
+        <td class="font-bold text-success">₹${formatNum(r.qty * r.salePrice)}</td>
+      </tr>`).join('');
+
+    const html = `
+      <div style="display:flex; gap:16px; margin-bottom: 24px; flex-wrap:wrap;">
+        <div class="stat-card blue" style="flex:1; min-width: 160px;"><div class="stat-label">Total WIP Qty</div><div class="stat-value blue">${formatNum(totalQty)} pcs</div></div>
+        <div class="stat-card green" style="flex:1; min-width: 160px;"><div class="stat-label">Total WIP Valuation</div><div class="stat-value green">₹${formatNum(totalValuation)}</div></div>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>JMREF No</th>
+              <th>Part No</th>
+              <th>Description</th>
+              <th>Current Stage</th>
+              <th>WIP Qty</th>
+              <th>Unit Price</th>
+              <th>Total Valuation</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${htmlRows || '<tr><td colspan="7" style="text-align:center;padding:24px;color:var(--text-muted);">No active WIP inventory found</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    return { html, headers, dataRows };
+  }
+
+  // ── 5. Subcontractor vs In-House Yield ──────────────────────
+  function renderSubVsInhouse(filters) {
+    const { from, to } = filters;
+    const batches = DB.Batches.all();
+    const stageRecords = DB.StageRecords.all();
+
+    const inRangeBatches = filterByDateRange(batches, 'createdAt', from, to);
+
+    const inhouseBatches = inRangeBatches.filter(b => b.productionType === 'inhouse' || !b.productionType);
+    const subBatches = inRangeBatches.filter(b => b.productionType === 'subcontractor');
+
+    const computeMetrics = (batchList, label) => {
+      const total = batchList.length;
+      const inputQty = batchList.reduce((sum, b) => sum + (b.initialQty || 0), 0);
+
+      const batchIds = new Set(batchList.map(b => b.id));
+      const records = stageRecords.filter(r => batchIds.has(r.batchId));
+
+      const lossQty = records.reduce((sum, r) => sum + (r.lossQty || 0), 0);
+      const outputQty = Math.max(0, inputQty - lossQty);
+      const yieldRate = inputQty > 0 ? ((outputQty / inputQty) * 100) : 100;
+
+      let totalTimeHrs = 0;
+      batchList.forEach(b => {
+        const start = new Date(b.createdAt).getTime();
+        const end = b.status === 'completed' && b.completedAt 
+          ? new Date(b.completedAt).getTime() 
+          : new Date().getTime();
+        totalTimeHrs += (end - start) / (1000 * 60 * 60);
+      });
+      const avgLeadTimeDays = total > 0 ? (totalTimeHrs / total / 24) : 0;
+
+      return {
+        label,
+        total,
+        inputQty,
+        outputQty,
+        lossQty,
+        yieldRate: yieldRate.toFixed(2) + '%',
+        avgLeadTime: avgLeadTimeDays.toFixed(1) + ' days'
+      };
+    };
+
+    const inhouseMetrics = computeMetrics(inhouseBatches, 'In-House');
+    const subMetrics = computeMetrics(subBatches, 'Subcontractor');
+
+    const headers = ['Manufacturing Mode', 'Total Batches', 'Total Input Qty', 'Total Output Qty', 'Total Loss Qty', 'Yield Rate', 'Avg Lead Time'];
+    const dataRows = [
+      [inhouseMetrics.label, String(inhouseMetrics.total), String(inhouseMetrics.inputQty), String(inhouseMetrics.outputQty), String(inhouseMetrics.lossQty), inhouseMetrics.yieldRate, inhouseMetrics.avgLeadTime],
+      [subMetrics.label, String(subMetrics.total), String(subMetrics.inputQty), String(subMetrics.outputQty), String(subMetrics.lossQty), subMetrics.yieldRate, subMetrics.avgLeadTime]
+    ];
+
+    const html = `
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Manufacturing Mode</th>
+              <th>Total Batches</th>
+              <th>Total Input Qty (pcs)</th>
+              <th>Total Output Qty (pcs)</th>
+              <th>Total Loss Qty (pcs)</th>
+              <th>Avg Yield Rate</th>
+              <th>Avg Lead Time (Days)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="font-semibold text-blue">🏢 In-House</td>
+              <td>${formatNum(inhouseMetrics.total)}</td>
+              <td>${formatNum(inhouseMetrics.inputQty)}</td>
+              <td>${formatNum(inhouseMetrics.outputQty)}</td>
+              <td class="text-danger font-semibold">${formatNum(inhouseMetrics.lossQty)}</td>
+              <td class="font-bold text-success">${inhouseMetrics.yieldRate}</td>
+              <td class="font-semibold text-blue">${inhouseMetrics.avgLeadTime}</td>
+            </tr>
+            <tr>
+              <td class="font-semibold text-amber">🏢 Subcontractor</td>
+              <td>${formatNum(subMetrics.total)}</td>
+              <td>${formatNum(subMetrics.inputQty)}</td>
+              <td>${formatNum(subMetrics.outputQty)}</td>
+              <td class="text-danger font-semibold">${formatNum(subMetrics.lossQty)}</td>
+              <td class="font-bold text-success">${subMetrics.yieldRate}</td>
+              <td class="font-semibold text-blue">${subMetrics.avgLeadTime}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    return { html, headers, dataRows };
+  }
+
   // ── Build Filter UI ────────────────────────────────────────
   function buildFilters(report) {
     const masterList = DB.Master.all();
@@ -987,7 +1532,7 @@ const ReportsModule = (() => {
 
     const filterMap = {
       reprocess: [jmrefFilter, dateRange].join(''),
-      inventory: [jmrefFilter, partNoFilter].join(''),
+      inventory: jmrefFilter,
       sales:     [jmrefFilter, dateRange].join(''),
       production:[jmrefFilter, opFilter, prodTypeFilter, dateRange].join(''),
       cryogenic: [jmrefFilter, dateRange].join(''),
@@ -1002,6 +1547,11 @@ const ReportsModule = (() => {
       'pending-batches': [pendingStageFilter, pendingTimeframeFilter].join(''),
       'qty-gain': [jmrefFilter, dateRange].join(''),
       'qty-loss': [jmrefFilter, dateRange].join(''),
+      'op-efficiency': dateRange,
+      'mould-lifecycle': jmrefFilter,
+      'cycle-time': dateRange,
+      'wip-valuation': '',
+      'sub-vs-inhouse': dateRange,
     };
     return filterMap[report] || '';
   }
@@ -1287,6 +1837,11 @@ const ReportsModule = (() => {
       case 'pending-batches': result = renderPendingBatches(filters); break;
       case 'qty-gain':        result = renderQtyGainReport(filters); break;
       case 'qty-loss':        result = renderQtyLossReport(filters); break;
+      case 'op-efficiency':   result = renderOpEfficiency(filters); break;
+      case 'mould-lifecycle': result = renderMouldLifecycle(filters); break;
+      case 'cycle-time':      result = renderCycleTime(filters); break;
+      case 'wip-valuation':   result = renderWipValuation(filters); break;
+      case 'sub-vs-inhouse':  result = renderSubVsInhouse(filters); break;
       default: result = emptyState('Unknown report');
     }
 
@@ -1324,6 +1879,11 @@ const ReportsModule = (() => {
     { key:'pending-batches', label:'⏳ Pending Batch Report',  desc:'Pending batches filtered by stage and timeframe from date Received' },
     { key:'qty-gain',   label:'📈 Quantity Gain Report',       desc:'Stages where the batch output quantity was greater than the input quantity' },
     { key:'qty-loss',   label:'📉 Quality Loss Report',        desc:'Stages where the batch quantity was lost, grouped by batch number' },
+    { key:'op-efficiency',  label:'👷 Operator & Inspector Efficiency', desc:'Operator-wise and Inspector-wise output, yield, and defect rates' },
+    { key:'mould-lifecycle',label:'⚙️ Mould Lifecycle & Performance',    desc:'Accumulative lift count, output yield, and maintenance alert status per mould' },
+    { key:'cycle-time',     label:'⏳ Production Cycle Time & Bottlenecks', desc:'Average hours/days batches spend at each process stage' },
+    { key:'wip-valuation',  label:'💰 WIP Inventory Valuation',          desc:'Financial valuation of live inventory based on part sale prices' },
+    { key:'sub-vs-inhouse', label:'🏢 Subcontractor vs. In-House Comparison', desc:'Yield, cycle time, and rejection comparison between manufacturing channels' }
   ];
 
   // ── Render ────────────────────────────────────────────────

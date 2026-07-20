@@ -51,6 +51,7 @@ const MouldTrackingModule = (() => {
         <div class="tabs" id="mould-tabs">
           <button class="tab-btn ${activeTab === 'moulds' ? 'active' : ''}" onclick="MouldTrackingModule.switchTab('moulds')">📋 Mould Master</button>
           <button class="tab-btn ${activeTab === 'movements' ? 'active' : ''}" onclick="MouldTrackingModule.switchTab('movements')">📜 Movement Ledger</button>
+          <button class="tab-btn ${activeTab === 'maintenance' ? 'active' : ''}" onclick="MouldTrackingModule.switchTab('maintenance')">🛠️ Maintenance Log</button>
           <button class="tab-btn ${activeTab === 'traceability' ? 'active' : ''}" onclick="MouldTrackingModule.switchTab('traceability')">🔍 Traceability Search</button>
           <button class="tab-btn ${activeTab === 'reports' ? 'active' : ''}" onclick="MouldTrackingModule.switchTab('reports')">📊 Historical Reports</button>
         </div>
@@ -62,6 +63,23 @@ const MouldTrackingModule = (() => {
       ${mouldModal()}
       <!-- Movement Modal -->
       ${movementModal()}
+      <!-- Maintenance Modal -->
+      ${maintenanceModal()}
+      <!-- Layout Diagram Preview Modal -->
+      <div class="modal-overlay hidden" id="mould-layout-view-modal">
+        <div class="modal modal-md">
+          <div class="modal-header">
+            <h3 id="mould-layout-view-title">Mould Layout Diagram</h3>
+            <button class="modal-close" onclick="document.getElementById('mould-layout-view-modal').classList.add('hidden')">&#x2715;</button>
+          </div>
+          <div class="modal-body" style="text-align: center; padding: 20px;">
+            <img id="mould-layout-view-img" src="" style="max-width: 100%; max-height: 450px; border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);" />
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="document.getElementById('mould-layout-view-modal').classList.add('hidden')">Close</button>
+          </div>
+        </div>
+      </div>
     `;
 
     renderTabContent();
@@ -84,6 +102,8 @@ const MouldTrackingModule = (() => {
       container.innerHTML = renderMouldsTab();
     } else if (activeTab === 'movements') {
       container.innerHTML = renderMovementsTab();
+    } else if (activeTab === 'maintenance') {
+      container.innerHTML = renderMaintenanceTab();
     } else if (activeTab === 'traceability') {
       container.innerHTML = renderTraceabilityTab();
     } else if (activeTab === 'reports') {
@@ -98,6 +118,10 @@ const MouldTrackingModule = (() => {
       const currentLoc = getMouldCurrentLocation(m.id);
       const isInternal = currentLoc === 'In-House Factory Floor';
       const locBadge = isInternal ? '<span class="badge badge-green">In-House</span>' : `<span class="badge badge-amber">${currentLoc}</span>`;
+      const diagramHtml = m.layoutDiagram 
+        ? `<img src="${m.layoutDiagram}" style="width: 48px; height: 32px; object-fit: cover; cursor: pointer; border: 1px solid var(--border); border-radius: 4px;" onclick="MouldTrackingModule.previewLayoutDiagram('${m.id}')" title="Click to view layout diagram" />`
+        : `<span class="text-muted" style="font-size:12px; font-style:italic;">None</span>`;
+
       return `
         <tr>
           <td class="font-semibold text-blue">${m.mouldId}</td>
@@ -107,11 +131,15 @@ const MouldTrackingModule = (() => {
           <td>${m.size || '—'}</td>
           <td>${m.make || '—'}</td>
           <td>${m.client || '—'}</td>
+          <td>${m.rackDetails || '—'}</td>
+          <td><span class="text-muted text-sm" style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;max-width:180px;" title="${m.notes || ''}">${m.notes || '—'}</span></td>
           <td class="text-muted text-sm">${m.creationDate}</td>
+          <td>${diagramHtml}</td>
           <td>${locBadge}</td>
           <td>
             <div class="flex gap-2">
               <button class="btn btn-ghost btn-xs" onclick="MouldTrackingModule.openEditModal('${m.id}')">✏️ Edit</button>
+              <button class="btn btn-primary btn-xs" onclick="MouldTrackingModule.openMaintenanceModal('${m.id}')">🔧 Log Maintenance</button>
               <button class="btn btn-danger btn-xs" onclick="MouldTrackingModule.deleteMould('${m.id}')">✕ Delete</button>
             </div>
           </td>
@@ -132,13 +160,16 @@ const MouldTrackingModule = (() => {
                 <th>Size</th>
                 <th>Make</th>
                 <th>Client</th>
+                <th>Rack Details</th>
+                <th>Notes</th>
                 <th>Creation Date</th>
+                <th>Layout Diagram</th>
                 <th>Current Location</th>
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              ${rows || '<tr><td colspan="10" style="text-align:center;padding:32px;color:var(--text-muted);">No moulds registered. Register your first mould to begin.</td></tr>'}
+              ${rows || '<tr><td colspan="13" style="text-align:center;padding:32px;color:var(--text-muted);">No moulds registered. Register your first mould to begin.</td></tr>'}
             </tbody>
           </table>
         </div>
@@ -448,6 +479,31 @@ const MouldTrackingModule = (() => {
                 <input type="text" id="mould-client" class="form-control" placeholder="e.g. Client X">
               </div>
             </div>
+
+            <div class="form-row">
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Rack Details</label>
+                <input type="text" id="mould-rack-details" class="form-control" placeholder="e.g. Rack A / Shelf 2">
+              </div>
+              <div class="form-group" style="flex:1;">
+                <!-- Spacer -->
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Notes</label>
+              <textarea id="mould-notes" class="form-control" rows="2" placeholder="Optional notes..."></textarea>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Layout Diagram (Image)</label>
+              <input type="file" id="mould-layout-file" class="form-control" accept="image/*" onchange="MouldTrackingModule.handleLayoutUpload(event)">
+              <input type="hidden" id="mould-layout-base64">
+              <div id="mould-layout-preview-container" class="hidden" style="margin-top: 10px;">
+                <img id="mould-layout-preview" src="" style="max-width: 100%; max-height: 120px; border: 1px solid var(--border); border-radius: 4px; display: block;" />
+                <button type="button" class="btn btn-secondary btn-xs mt-2" onclick="MouldTrackingModule.clearLayoutPreview()">Remove Diagram</button>
+              </div>
+            </div>
           </div>
           <div class="modal-footer">
             <button class="btn btn-secondary" onclick="document.getElementById('mould-add-modal').classList.add('hidden')">Cancel</button>
@@ -633,6 +689,19 @@ const MouldTrackingModule = (() => {
     document.getElementById('mould-make').value = '';
     document.getElementById('mould-client').value = '';
     document.getElementById('mould-creation-date').value = new Date().toISOString().slice(0, 10);
+    document.getElementById('mould-rack-details').value = '';
+    document.getElementById('mould-notes').value = '';
+    
+    // Clear layout diagram preview
+    const fileInput = document.getElementById('mould-layout-file');
+    if (fileInput) fileInput.value = '';
+    const base64Input = document.getElementById('mould-layout-base64');
+    if (base64Input) base64Input.value = '';
+    const previewContainer = document.getElementById('mould-layout-preview-container');
+    if (previewContainer) previewContainer.classList.add('hidden');
+    const preview = document.getElementById('mould-layout-preview');
+    if (preview) preview.src = '';
+
     document.getElementById('mould-add-modal').classList.remove('hidden');
   }
 
@@ -658,6 +727,26 @@ const MouldTrackingModule = (() => {
     document.getElementById('mould-make').value = m.make || '';
     document.getElementById('mould-client').value = m.client || '';
     document.getElementById('mould-creation-date').value = m.creationDate;
+    document.getElementById('mould-rack-details').value = m.rackDetails || '';
+    document.getElementById('mould-notes').value = m.notes || '';
+
+    // Load layout diagram preview
+    const fileInput = document.getElementById('mould-layout-file');
+    if (fileInput) fileInput.value = '';
+    const base64Input = document.getElementById('mould-layout-base64');
+    const previewContainer = document.getElementById('mould-layout-preview-container');
+    const preview = document.getElementById('mould-layout-preview');
+    
+    if (m.layoutDiagram) {
+      if (base64Input) base64Input.value = m.layoutDiagram;
+      if (preview) preview.src = m.layoutDiagram;
+      if (previewContainer) previewContainer.classList.remove('hidden');
+    } else {
+      if (base64Input) base64Input.value = '';
+      if (preview) preview.src = '';
+      if (previewContainer) previewContainer.classList.add('hidden');
+    }
+
     document.getElementById('mould-add-modal').classList.remove('hidden');
   }
 
@@ -672,13 +761,16 @@ const MouldTrackingModule = (() => {
     const make = document.getElementById('mould-make').value.trim();
     const client = document.getElementById('mould-client').value.trim();
     const creationDate = document.getElementById('mould-creation-date').value;
+    const rackDetails = document.getElementById('mould-rack-details').value.trim();
+    const notes = document.getElementById('mould-notes').value.trim();
+    const layoutDiagram = document.getElementById('mould-layout-base64')?.value || '';
 
     if (!jmrefNo || isNaN(mouldNo) || !mouldType || !mouldId || !creationDate) {
       showToast('All starred fields are required', 'error');
       return;
     }
 
-    const fields = { jmrefNo, mouldNo, mouldType, mouldId, cavity, size, make, client, creationDate };
+    const fields = { jmrefNo, mouldNo, mouldType, mouldId, cavity, size, make, client, creationDate, layoutDiagram, rackDetails, notes };
 
     if (editId) {
       DB.Moulds.update(editId, fields);
@@ -785,7 +877,7 @@ const MouldTrackingModule = (() => {
       }, 500);
     }
 
-    render();
+    App.navigate(App.current);
   }
 
   // ── FILTER ACTIONS ────────────────────────────────────────
@@ -1029,6 +1121,279 @@ const MouldTrackingModule = (() => {
     }
   });
 
+  function handleLayoutUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      const base64 = e.target.result;
+      document.getElementById('mould-layout-base64').value = base64;
+      const preview = document.getElementById('mould-layout-preview');
+      if (preview) preview.src = base64;
+      const container = document.getElementById('mould-layout-preview-container');
+      if (container) container.classList.remove('hidden');
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function clearLayoutPreview() {
+    const fileInput = document.getElementById('mould-layout-file');
+    if (fileInput) fileInput.value = '';
+    const base64Input = document.getElementById('mould-layout-base64');
+    if (base64Input) base64Input.value = '';
+    const container = document.getElementById('mould-layout-preview-container');
+    if (container) container.classList.add('hidden');
+    const preview = document.getElementById('mould-layout-preview');
+    if (preview) preview.src = '';
+  }
+
+  function previewLayoutDiagram(id) {
+    const m = DB.Moulds.find(id);
+    if (m && m.layoutDiagram) {
+      document.getElementById('mould-layout-view-img').src = m.layoutDiagram;
+      document.getElementById('mould-layout-view-title').textContent = `Layout Diagram - ${m.mouldId}`;
+      document.getElementById('mould-layout-view-modal').classList.remove('hidden');
+    }
+  }
+
+  function renderMaintenanceTab() {
+    const records = DB.MouldMaintenance.all() || [];
+    
+    const activeRepair = records.filter(r => r.status === 'Under Work' || r.status === 'Awaiting Tool Room').length;
+    const completedRepair = records.filter(r => r.status === 'Ready for Production').length;
+
+    const rows = records.map((r, i) => {
+      let statusBadge = '<span class="badge badge-gray">Awaiting Tool Room</span>';
+      if (r.status === 'Under Work') statusBadge = '<span class="badge badge-amber">Under Work</span>';
+      else if (r.status === 'Ready for Production') statusBadge = '<span class="badge badge-green">Ready for Production</span>';
+
+      let actionButtons = '';
+      if (r.status === 'Awaiting Tool Room') {
+        actionButtons = `<button class="btn btn-primary btn-xs" onclick="MouldTrackingModule.startMaintenanceWork('${r.id}')">Start Work</button>`;
+      } else if (r.status === 'Under Work') {
+        actionButtons = `<button class="btn btn-success btn-xs" onclick="MouldTrackingModule.promptCompleteMaintenance('${r.id}')">Mark Ready</button>`;
+      }
+
+      return `
+        <tr>
+          <td>${i + 1}</td>
+          <td class="font-semibold text-blue">${r.mouldId}</td>
+          <td><span class="badge badge-teal">${r.jmrefNo || '—'}</span></td>
+          <td><span class="badge badge-blue">${r.maintenanceType || 'Repair'}</span></td>
+          <td>${r.reason || '—'}</td>
+          <td>${r.reworkDetails || '—'}</td>
+          <td>${r.repairedBy || '—'}</td>
+          <td>${r.maintenanceDate || '—'}</td>
+          <td>${statusBadge}</td>
+          <td>
+            <div class="flex gap-2">
+              ${actionButtons}
+              <button class="btn btn-danger btn-xs" onclick="MouldTrackingModule.deleteMaintenance('${r.id}')">✕ Delete</button>
+            </div>
+          </td>
+        </tr>`;
+    }).join('');
+
+    return `
+      <div class="animate-in">
+        <div style="display:flex; gap:16px; margin-bottom: 20px; flex-wrap:wrap;">
+          <div class="stat-card blue" style="flex:1; min-width: 150px;"><div class="stat-label">Active Moulds Under Repair</div><div class="stat-value blue">${activeRepair}</div></div>
+          <div class="stat-card green" style="flex:1; min-width: 150px;"><div class="stat-label">Completed Repairs</div><div class="stat-value green">${completedRepair}</div></div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <h3>🔧 Tool Room Maintenance Log</h3>
+            <button class="btn btn-primary btn-sm no-print" onclick="MouldTrackingModule.openMaintenanceModal()">+ New Log Entry</button>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Mould ID</th>
+                  <th>JMREF No</th>
+                  <th>Type</th>
+                  <th>Fault / Reason</th>
+                  <th>Rework / Repair Notes</th>
+                  <th>Technician</th>
+                  <th>Date</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rows || '<tr><td colspan="10" style="text-align:center;padding:24px;color:var(--text-muted);">No maintenance logs found</td></tr>'}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function maintenanceModal() {
+    const moulds = DB.Moulds.all() || [];
+    const mouldOpts = moulds.map(m => `<option value="${m.id}">${m.mouldId} (JMREF: ${m.jmrefNo})</option>`).join('');
+
+    return `
+      <div class="modal-overlay hidden" id="mould-maintenance-modal">
+        <div class="modal modal-md">
+          <div class="modal-header">
+            <h3 id="mould-maintenance-modal-title">Record Maintenance Log</h3>
+            <button class="modal-close" onclick="document.getElementById('mould-maintenance-modal').classList.add('hidden')">&#x2715;</button>
+          </div>
+          <div class="modal-body">
+            <input type="hidden" id="maint-edit-id">
+            
+            <div class="form-group">
+              <label class="form-label">Select Mould <span class="required">*</span></label>
+              <select id="maint-mould-id" class="form-control">
+                <option value="">Choose mould...</option>
+                ${mouldOpts}
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Maintenance Type</label>
+              <div class="flex gap-4 mt-1">
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="radio" name="maint-type" value="Repair" checked> <span>Repair</span></label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="radio" name="maint-type" value="PM"> <span>PM (Preventive)</span></label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="radio" name="maint-type" value="Calibration"> <span>Calibration</span></label>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Fault Description / Reason <span class="required">*</span></label>
+                <input type="text" id="maint-reason" class="form-control" placeholder="e.g. Scratched cavity block">
+              </div>
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Technician Name <span class="required">*</span></label>
+                <input type="text" id="maint-technician" class="form-control" placeholder="Technician name">
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Date <span class="required">*</span></label>
+                <input type="date" id="maint-date" class="form-control">
+              </div>
+              <div class="form-group" style="flex:1;"></div>
+            </div>
+
+            <div class="form-group hidden" id="maint-rework-group">
+              <label class="form-label">Rework / Repair Notes</label>
+              <textarea id="maint-rework" class="form-control" rows="2" placeholder="Describe repair/PM work done..."></textarea>
+            </div>
+
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="document.getElementById('mould-maintenance-modal').classList.add('hidden')">Cancel</button>
+            <button class="btn btn-primary" onclick="MouldTrackingModule.saveMaintenance()">Save Entry</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function openMaintenanceModal(mouldId = null) {
+    document.getElementById('maint-edit-id').value = '';
+    document.getElementById('maint-mould-id').value = mouldId || '';
+    document.getElementById('maint-reason').value = '';
+    document.getElementById('maint-technician').value = '';
+    document.getElementById('maint-date').value = new Date().toISOString().slice(0, 10);
+    document.getElementById('maint-rework').value = '';
+    document.getElementById('maint-rework-group').classList.add('hidden');
+    document.getElementById('mould-maintenance-modal-title').textContent = 'Record Maintenance Log';
+    
+    const select = document.getElementById('maint-mould-id');
+    if (mouldId) {
+      select.disabled = true;
+      select.style.opacity = '0.8';
+    } else {
+      select.disabled = false;
+      select.style.opacity = '1';
+    }
+    
+    document.getElementById('mould-maintenance-modal').classList.remove('hidden');
+  }
+
+  function saveMaintenance() {
+    const id = document.getElementById('maint-edit-id').value;
+    const mouldId = document.getElementById('maint-mould-id').value;
+    if (!mouldId) { showToast('Please select a mould', 'error'); return; }
+
+    const mould = DB.Moulds.find(mouldId);
+    if (!mould) return;
+
+    const reason = document.getElementById('maint-reason').value.trim();
+    if (!reason) { showToast('Please enter a fault description / reason', 'error'); return; }
+
+    const technician = document.getElementById('maint-technician').value.trim();
+    if (!technician) { showToast('Please enter technician name', 'error'); return; }
+
+    const date = document.getElementById('maint-date').value;
+    if (!date) { showToast('Please enter date', 'error'); return; }
+
+    const type = document.querySelector('input[name="maint-type"]:checked')?.value || 'Repair';
+    const rework = document.getElementById('maint-rework').value.trim();
+
+    if (!id) {
+      DB.MouldMaintenance.insert({
+        mouldDbId: mould.id,
+        mouldId: mould.mouldId,
+        jmrefNo: mould.jmrefNo,
+        maintenanceType: type,
+        reason,
+        repairedBy: technician,
+        maintenanceDate: date,
+        reworkDetails: rework,
+        status: 'Awaiting Tool Room'
+      });
+      showToast('Maintenance request logged', 'success');
+    } else {
+      DB.MouldMaintenance.update(id, {
+        maintenanceType: type,
+        reason,
+        repairedBy: technician,
+        maintenanceDate: date,
+        reworkDetails: rework
+      });
+      showToast('Maintenance entry updated', 'success');
+    }
+    
+    document.getElementById('mould-maintenance-modal').classList.add('hidden');
+    renderTabContent();
+  }
+
+  function startMaintenanceWork(recordId) {
+    DB.MouldMaintenance.update(recordId, {
+      status: 'Under Work'
+    });
+    showToast('Mould repair status: Under Work', 'success');
+    renderTabContent();
+  }
+
+  function promptCompleteMaintenance(recordId) {
+    const rework = prompt("Enter repair / rework work details done on this mould:");
+    if (rework === null) return;
+    
+    DB.MouldMaintenance.update(recordId, {
+      status: 'Ready for Production',
+      reworkDetails: rework || 'Repair completed'
+    });
+    showToast('Mould marked Ready for Production', 'success');
+    renderTabContent();
+  }
+
+  function deleteMaintenance(recordId) {
+    if (confirm('Are you sure you want to delete this maintenance record?')) {
+      DB.MouldMaintenance.remove(recordId);
+      showToast('Record deleted', 'success');
+      renderTabContent();
+    }
+  }
+
   return {
     render,
     switchTab,
@@ -1049,6 +1414,14 @@ const MouldTrackingModule = (() => {
     showJmrefDropdown,
     filterJmrefs,
     selectJmref,
-    onMouldNoChange
+    onMouldNoChange,
+    handleLayoutUpload,
+    clearLayoutPreview,
+    previewLayoutDiagram,
+    openMaintenanceModal,
+    saveMaintenance,
+    startMaintenanceWork,
+    promptCompleteMaintenance,
+    deleteMaintenance
   };
 })();

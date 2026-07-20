@@ -410,7 +410,7 @@ const PostCuringModule = (() => {
 
       document.getElementById('pc-process-modal').classList.add('hidden');
       showToast('Sub-batch created and moved to Waiting for Visual inspection', 'success');
-      render();
+      App.navigate(App.current);
       return;
     }
 
@@ -419,7 +419,7 @@ const PostCuringModule = (() => {
     DB.Batches.update(batchId, { currentStage:'waiting-visual' });
     document.getElementById('pc-process-modal').classList.add('hidden');
     showToast('Batch moved to Waiting for Visual inspection', 'success');
-    render();
+    App.navigate(App.current);
   }
 
   function openReject(batchId) {
