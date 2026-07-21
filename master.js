@@ -474,10 +474,44 @@ const MasterModule = (() => {
       'Sheet Thickness', 'Blank Length', 'Blank Weight', 'Average Target Inventory',
       'Mould Nos', 'Mould Types', 'Process Flows', 'First Processes'
     ];
-    const rows = [
-      ['OR-101', 'JMREF-2026-101', 'O-Ring 101 Description', '1234567890', 'CC-70', '12.50', '8', '140', '100', '2.0', '150', '3.5', '5000', '1', 'Cryogenic', 'Cryogenic', 'Cryogenic'],
-      ['OR-102', 'JMREF-2026-102', 'O-Ring 102 Description', '0987654321', 'CC-80', '18.00', '10', '150', '110', '2.5', '180', '4.2', '8000', '1, 2', 'Cryogenic, Yet to be assigned', 'Cryogenic, Visual ; Cryogenic, Gauge, Visual', 'Cryogenic, Cryogenic']
-    ];
+
+    const parts = DB.Master.all();
+    let rows = [];
+
+    if (parts && parts.length > 0) {
+      rows = parts.map(p => {
+        const mouldNos = (p.moulds || []).map(m => m.mouldNo).join(', ');
+        const mouldTypes = (p.moulds || []).map(m => m.mouldType || 'Yet to be assigned').join(', ');
+        const processFlows = (p.moulds || []).map(m => m.processFlow || 'Cryogenic').join(' ; ');
+        const firstProcesses = (p.moulds || []).map(m => m.firstProcess || 'Cryogenic').join(', ');
+
+        return [
+          p.partNo || '',
+          p.jmrefNo || '',
+          p.description || '',
+          p.tenDigitNo || '',
+          p.compoundCode || '',
+          p.salePrice != null ? p.salePrice : '',
+          p.timeMinutes != null ? p.timeMinutes : '',
+          p.temperature != null ? p.temperature : '',
+          p.pressure != null ? p.pressure : '',
+          p.sheetThickness != null ? p.sheetThickness : '',
+          p.blankLength != null ? p.blankLength : '',
+          p.blankWeight != null ? p.blankWeight : '',
+          p.averageTargetInventory != null ? p.averageTargetInventory : '',
+          mouldNos,
+          mouldTypes,
+          processFlows,
+          firstProcesses
+        ];
+      });
+    } else {
+      rows = [
+        ['OR-101', 'JMREF-2026-101', 'O-Ring 101 Description', '1234567890', 'CC-70', '12.50', '8', '140', '100', '2.0', '150', '3.5', '5000', '1', 'Cryogenic', 'Cryogenic', 'Cryogenic'],
+        ['OR-102', 'JMREF-2026-102', 'O-Ring 102 Description', '0987654321', 'CC-80', '18.00', '10', '150', '110', '2.5', '180', '4.2', '8000', '1, 2', 'Cryogenic, Yet to be assigned', 'Cryogenic, Visual ; Cryogenic, Gauge, Visual', 'Cryogenic, Cryogenic']
+      ];
+    }
+
     const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Parts Template');

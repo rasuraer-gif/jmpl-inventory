@@ -20,6 +20,15 @@ const DB = (() => {
   const PREFIX = localStorage.getItem('jmpl_db_is_local_backup') === 'true' ? 'jmpl_backup_' : 'jmpl_';
   let db = null;
   let isInitialized = false;
+  let syncStateListener = null;
+  function onSyncStateChange(callback) {
+    syncStateListener = callback;
+  }
+  function triggerSyncStateChange(table, hasPendingWrites) {
+    if (syncStateListener) {
+      try { syncStateListener(table, hasPendingWrites); } catch(e) {}
+    }
+  }
 
   // In-memory cache for all collections
   const cache = {
@@ -116,7 +125,9 @@ const DB = (() => {
         return new Promise((resolve) => {
           let resolved = false;
 
-          db.collection(table).onSnapshot(snapshot => {
+          db.collection(table).onSnapshot({ includeMetadataChanges: true }, snapshot => {
+            const hasPendingWrites = snapshot.metadata ? snapshot.metadata.hasPendingWrites : false;
+            triggerSyncStateChange(table, hasPendingWrites);
             const list = [];
             snapshot.forEach(doc => {
               list.push({ id: doc.id, ...doc.data() });
@@ -858,7 +869,7 @@ const DB = (() => {
   }
 
   return {
-    init, genId, seedDefaults, clearTable,
+  init, onSyncStateChange, genId, seedDefaults, clearTable,
     Users, Master, Subcontractors, Vendors, Operators, Inspectors,
     Batches, StageRecords, LossTracker, RejectionTracker,
     RecheckTracker, StockUploads, Sales, StoreInventory,

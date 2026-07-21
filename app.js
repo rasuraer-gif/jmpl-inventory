@@ -440,6 +440,15 @@ const App = (() => {
     showAppShell(session);
     setupInternalBatchNoObserver();
 
+    // Configure sync status badge listener
+    DB.onSyncStateChange((table, hasPendingWrites) => {
+      updateTableSyncState(table, hasPendingWrites);
+    });
+
+    window.addEventListener('online', triggerSyncStatusUpdate);
+    window.addEventListener('offline', triggerSyncStatusUpdate);
+    triggerSyncStatusUpdate(); // initial call
+
     // Route to module from hash or default
     const hash = location.hash.replace('#', '');
     navigate(hash && MODULE_MAP[hash] ? hash : 'dashboard');
@@ -543,10 +552,38 @@ const App = (() => {
       if (observer) observer.disconnect();
 
       nodesToUpdate.forEach(n => {
-        n.nodeValue = n.nodeValue.replace(regex, (match) => {
+        const parent = n.parentNode;
+        if (!parent) return;
+        const val = n.nodeValue;
+
+        const fragment = document.createDocumentFragment();
+        let lastIndex = 0;
+
+        val.replace(regex, (match, p1, offset) => {
+          if (offset > lastIndex) {
+            fragment.appendChild(document.createTextNode(val.substring(lastIndex, offset)));
+          }
+
           const ib = batchMap.get(match.trim());
-          return `${match} (IB: ${ib})`;
+          const span = document.createElement('span');
+          span.className = 'clickable-batch';
+          span.style.color = 'var(--accent-blue)';
+          span.style.cursor = 'pointer';
+          span.style.fontWeight = '600';
+          span.style.textDecoration = 'underline';
+          span.setAttribute('onclick', `App.showBatchGenealogy('${match.trim()}')`);
+          span.textContent = `${match} (IB: ${ib})`;
+          fragment.appendChild(span);
+
+          lastIndex = offset + match.length;
+          return match;
         });
+
+        if (lastIndex < val.length) {
+          fragment.appendChild(document.createTextNode(val.substring(lastIndex)));
+        }
+
+        parent.replaceChild(fragment, n);
       });
 
       if (observer) {
@@ -562,7 +599,323 @@ const App = (() => {
     applyTags();
   }
 
-  return { navigate, init, toggleReportsMenu, openChangePasswordModal, changePassword, get current() { return currentModule; } };
+  let pendingSyncCollections = new Set();
+  function updateTableSyncState(table, hasPendingWrites) {
+    if (hasPendingWrites) {
+      pendingSyncCollections.add(table);
+    } else {
+      pendingSyncCollections.delete(table);
+    }
+    triggerSyncStatusUpdate();
+  }
+
+  function triggerSyncStatusUpdate() {
+    const dot = document.getElementById('sync-status-dot');
+    const text = document.getElementById('sync-status-text');
+    if (!dot || !text) return;
+
+    if (!navigator.onLine) {
+      dot.style.background = '#ef4444'; // Red
+      text.innerText = 'DISCONNECTED';
+      text.style.color = '#ef4444';
+    } else if (pendingSyncCollections.size > 0) {
+      dot.style.background = '#f59e0b'; // Amber
+      text.innerText = 'SYNCING...';
+      text.style.color = '#f59e0b';
+    } else {
+      dot.style.background = '#10b981'; // Green
+      text.innerText = 'SYNCED';
+      text.style.color = '#10b981';
+    }
+  }
+
+  function runQuickScan() {
+    if (typeof Scanner === 'undefined') {
+      showToast('Scanner module not loaded', 'error');
+      return;
+    }
+    Scanner.start(null, (scannedText) => {
+      routeScannedBatch(scannedText);
+    });
+  }
+
+  function routeScannedBatch(batchNo) {
+    if (!batchNo) return;
+    const batch = DB.Batches.all().find(b => (b.batchNo || '').trim() === batchNo.trim());
+    if (!batch) {
+      showToast(`Batch "${batchNo}" not found in system`, 'error');
+      return;
+    }
+
+    if (batch.status === 'completed') {
+      showToast(`Batch "${batchNo}" is completed and stored in Store`, 'success');
+      navigate('store');
+      return;
+    }
+
+    if (batch.status === 'rejected') {
+      showToast(`Batch "${batchNo}" is rejected`, 'error');
+      return;
+    }
+
+    navigate(batch.currentStage);
+
+    setTimeout(() => {
+      const inputQty = getBatchCurrentQty(batch.id);
+      
+      switch (batch.currentStage) {
+        case 'production':
+          if (window.ProductionModule && typeof ProductionModule.openMove === 'function') {
+            ProductionModule.openMove(batch.id);
+          }
+          break;
+        case 'cryogenic':
+          if (window.CryogenicModule && typeof CryogenicModule.openProcess === 'function') {
+            CryogenicModule.openProcess(batch.id, inputQty);
+          }
+          break;
+        case 'deflashing':
+          if (window.DeflashingModule && typeof DeflashingModule.openProcess === 'function') {
+            DeflashingModule.openProcess(batch.id, inputQty);
+          }
+          break;
+        case 'trimming':
+          if (window.TrimmingModule && typeof TrimmingModule.openProcess === 'function') {
+            TrimmingModule.openProcess(batch.id, inputQty);
+          }
+          break;
+        case 'post-curing':
+          if (window.PostCuringModule && typeof PostCuringModule.openProcess === 'function') {
+            PostCuringModule.openProcess(batch.id, inputQty);
+          }
+          break;
+        case 'waiting-visual':
+          if (window.WaitingVisualModule && typeof WaitingVisualModule.openProcess === 'function') {
+            WaitingVisualModule.openProcess(batch.id, inputQty);
+          }
+          break;
+        case 'visual':
+          if (window.VisualModule && typeof VisualModule.openProcess === 'function') {
+            VisualModule.openProcess(batch.id, inputQty);
+          }
+          break;
+        case 'gauge':
+          if (window.GaugeModule && typeof GaugeModule.openProcess === 'function') {
+            GaugeModule.openProcess(batch.id, inputQty);
+          }
+          break;
+        case 'quality':
+          if (window.QualityModule && typeof QualityModule.openPass === 'function') {
+            QualityModule.openPass(batch.id, inputQty);
+          }
+          break;
+        default:
+          showToast(`No routing action defined for stage: ${batch.currentStage}`, 'warning');
+      }
+    }, 200);
+  }
+
+  function getBatchCurrentQty(batchId) {
+    const batch = DB.Batches.find(batchId);
+    if (!batch) return 0;
+    const recs = DB.StageRecords.all().filter(r => r.batchId === batchId);
+    if (!recs.length) return batch.initialQty || 0;
+    
+    recs.sort((a,b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+    
+    const stage = batch.currentStage;
+    const stageRecs = recs.filter(r => r.movedTo === stage);
+    if (!stageRecs.length) return batch.initialQty || 0;
+    
+    const lastStageRec = stageRecs[stageRecs.length - 1];
+    const qty = Number(lastStageRec.isRecheck ? lastStageRec.recheckQty : lastStageRec.outputQty);
+    return !isNaN(qty) ? qty : (batch.initialQty || 0);
+  }
+
+  function getParentBatch(b) {
+    if (!b || !b.notes) return null;
+    const regexes = [
+      /pool batch:\s*([^\s\.]+)/i,
+      /created from batch\s*([^\s\.]+)/i,
+      /stock upload batch\s*([^\s\.]+)/i
+    ];
+    for (const regex of regexes) {
+      const match = b.notes.match(regex);
+      if (match) {
+        const parentNo = match[1].trim();
+        const parent = DB.Batches.all().find(x => x.batchNo === parentNo);
+        if (parent) return parent;
+      }
+    }
+    return null;
+  }
+
+  function getChildBatches(parent) {
+    return DB.Batches.all().filter(b => {
+      const p = getParentBatch(b);
+      return p && p.id === parent.id;
+    });
+  }
+
+  function showBatchGenealogy(batchIdOrNo) {
+    let b = DB.Batches.find(batchIdOrNo);
+    if (!b) {
+      b = DB.Batches.all().find(x => x.batchNo === batchIdOrNo || x.batchNo === batchIdOrNo.split(' ')[0]);
+    }
+    if (!b) return;
+
+    let modal = document.getElementById('genealogy-modal-overlay');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.className = 'modal-overlay hidden';
+      modal.id = 'genealogy-modal-overlay';
+      modal.style.zIndex = '1500';
+      document.body.appendChild(modal);
+    }
+
+    const parent = getParentBatch(b);
+    const children = getChildBatches(b);
+
+    let lineageHtml = '';
+    if (!parent && !children.length) {
+      lineageHtml = `<p class="text-sm text-muted">No lineage tracing available (this batch was not split or reprocessed).</p>`;
+    } else {
+      lineageHtml += `<div class="genealogy-tree" style="background:var(--bg-input); padding:16px; border-radius:12px; border:1px solid var(--border);">`;
+      
+      if (parent) {
+        lineageHtml += `
+          <div class="tree-node parent" style="margin-bottom:12px;">
+            <span style="font-size:12px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Parent Batch</span>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+              <span style="font-size:16px;">🌳</span>
+              <button class="btn btn-ghost btn-xs text-blue" onclick="App.showBatchGenealogy('${parent.id}')" style="font-weight:700;padding:2px 6px;">
+                ${parent.batchNo} (IB: ${parent.internalBatchNo})
+              </button>
+              <span class="stage-chip ${parent.currentStage}">${parent.currentStage.toUpperCase()}</span>
+            </div>
+          </div>
+          <div style="padding-left:12px; border-left:2px dashed var(--border); margin:4px 0 12px 10px; height:16px;"></div>
+        `;
+      }
+
+      lineageHtml += `
+        <div class="tree-node active-node" style="padding:8px 12px; background:var(--accent-blue-light); border-left:4px solid var(--accent-blue); border-radius:4px;">
+          <span style="font-size:11px;color:var(--accent-blue);font-weight:700;text-transform:uppercase;">Current Batch</span>
+          <div style="font-weight:700;margin-top:2px;">${b.batchNo} (IB: ${b.internalBatchNo})</div>
+          <div class="text-sm text-muted">Qty: ${formatNum(b.initialQty)} | Stage: ${b.currentStage.toUpperCase()} | Status: ${b.status}</div>
+        </div>
+      `;
+
+      if (children.length) {
+        lineageHtml += `
+          <div style="padding-left:12px; border-left:2px dashed var(--border); margin:4px 0 4px 10px; height:16px;"></div>
+          <div class="tree-node children" style="margin-top:8px; padding-left:12px;">
+            <span style="font-size:12px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Split Sub-Batches / Reprocessed</span>
+            <div style="display:flex; flex-direction:column; gap:8px; margin-top:6px;">
+              ${children.map(child => `
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <span style="font-size:14px;">🌱</span>
+                  <button class="btn btn-ghost btn-xs text-blue" onclick="App.showBatchGenealogy('${child.id}')" style="font-weight:600;padding:2px 6px;">
+                    ${child.batchNo} (IB: ${child.internalBatchNo})
+                  </button>
+                  <span class="text-sm text-muted">Qty: ${formatNum(child.initialQty)}</span>
+                  <span class="stage-chip ${child.currentStage}">${child.currentStage.toUpperCase()}</span>
+                  <span class="badge badge-${child.status==='active'?'amber':child.status==='completed'?'green':'red'}">${child.status}</span>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        `;
+      }
+
+      lineageHtml += `</div>`;
+    }
+
+    const operator = b.operatorId ? DB.Operators.find(b.operatorId) : null;
+    const subcontractor = b.subcontractorId ? DB.Subcontractors.find(b.subcontractorId) : null;
+    const operatorName = operator ? operator.name : (b.operatorName || '—');
+    const subcontractorName = subcontractor ? subcontractor.name : '—';
+
+    modal.innerHTML = `
+      <div class="modal modal-md" style="max-width: 600px; border-radius:16px;">
+        <div class="modal-header">
+          <h3>🔍 Batch Genealogy & Details</h3>
+          <button class="modal-close" onclick="document.getElementById('genealogy-modal-overlay').classList.add('hidden')">&#x2715;</button>
+        </div>
+        <div class="modal-body" style="padding:20px; max-height:80vh; overflow-y:auto;">
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:20px;">
+            <div>
+              <span class="text-xs text-muted" style="text-transform:uppercase;font-weight:600;">Batch Number</span>
+              <div style="font-weight:700;font-size:16px;color:var(--primary);">${b.batchNo}</div>
+            </div>
+            <div>
+              <span class="text-xs text-muted" style="text-transform:uppercase;font-weight:600;">Internal Batch No</span>
+              <div style="font-weight:700;font-size:16px;color:var(--accent-teal);">IB: ${b.internalBatchNo}</div>
+            </div>
+            <div>
+              <span class="text-xs text-muted" style="text-transform:uppercase;font-weight:600;">Part Number / JMREF</span>
+              <div>${b.partNo || '—'} / <span class="badge badge-teal">${b.jmrefNo || '—'}</span></div>
+            </div>
+            <div>
+              <span class="text-xs text-muted" style="text-transform:uppercase;font-weight:600;">Description</span>
+              <div>${b.description || '—'}</div>
+            </div>
+            <div>
+              <span class="text-xs text-muted" style="text-transform:uppercase;font-weight:600;">Current Stage / Status</span>
+              <div><span class="stage-chip ${b.currentStage}">${b.currentStage.toUpperCase()}</span> / <span class="badge badge-${b.status==='active'?'amber':b.status==='completed'?'green':'red'}">${b.status}</span></div>
+            </div>
+            <div>
+              <span class="text-xs text-muted" style="text-transform:uppercase;font-weight:600;">Quantity</span>
+              <div class="font-semibold">${formatNum(b.initialQty)} units</div>
+            </div>
+            <div>
+              <span class="text-xs text-muted" style="text-transform:uppercase;font-weight:600;">Operator / Subcontractor</span>
+              <div>${operatorName} ${subcontractorName !== '—' ? `(Sub: ${subcontractorName})` : ''}</div>
+            </div>
+            <div>
+              <span class="text-xs text-muted" style="text-transform:uppercase;font-weight:600;">Created / Completed</span>
+              <div class="text-sm text-muted">${(b.createdAt || '').slice(0,16).replace('T', ' ')} ${b.completedAt ? `/ ${(b.completedAt || '').slice(0,16).replace('T', ' ')}` : ''}</div>
+            </div>
+          </div>
+
+          <div style="border-top:1px solid var(--border); margin-bottom:20px; padding-top:16px;">
+            <h4 style="font-size:14px; font-weight:700; margin-bottom:12px;">🌳 Family Lineage Tree</h4>
+            ${lineageHtml}
+          </div>
+
+          <div style="border-top:1px solid var(--border); padding-top:16px;">
+            <h4 style="font-size:14px; font-weight:700; margin-bottom:12px;">⏳ Stage History Records</h4>
+            <div class="table-wrap">
+              <table class="data-table" style="font-size:12px;">
+                <thead>
+                  <tr><th>Stage</th><th>Input</th><th>Output</th><th>Loss</th><th>Date</th><th>Notes</th></tr>
+                </thead>
+                <tbody>
+                  ${DB.StageRecords.all().filter(r => r.batchId === b.id).sort((x,y) => (x.createdAt||'').localeCompare(y.createdAt||'')).map(r => `
+                    <tr>
+                      <td class="font-semibold">${r.stage.toUpperCase()}</td>
+                      <td>${formatNum(r.inputQty)}</td>
+                      <td>${formatNum(r.outputQty)}</td>
+                      <td class="text-danger">${formatNum(r.lossQty)}</td>
+                      <td>${r.date}</td>
+                      <td class="text-muted" style="max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${r.notes||''}">${r.notes || '—'}</td>
+                    </tr>
+                  `).join('') || '<tr><td colspan="6" class="text-center text-muted">No stage history recorded</td></tr>'}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="document.getElementById('genealogy-modal-overlay').classList.add('hidden')">Close</button>
+        </div>
+      </div>
+    `;
+
+    modal.classList.remove('hidden');
+  }
+
+  return { navigate, init, toggleReportsMenu, openChangePasswordModal, changePassword, runQuickScan, showBatchGenealogy, get current() { return currentModule; } };
 })();
 
 // ── Login Page ─────────────────────────────────────────────
@@ -668,9 +1021,13 @@ function showAppShell(session) {
             <img src="./logo.png" alt="JMPL Logo" style="width: 40px; height: 40px; object-fit: contain; border-radius: 8px; background: white; padding: 4px; flex-shrink: 0;">
             <div class="brand-text">
               <h2>JMPL</h2>
-              <p>Inventory System</p>
+              <div style="display:flex;align-items:center;gap:4px;margin-top:2px;">
+                <span id="sync-status-dot" style="width:8px;height:8px;border-radius:50%;background:#10b981;display:inline-block;transition:background 0.3s ease;"></span>
+                <span id="sync-status-text" style="font-size:10px;color:#10b981;font-weight:700;letter-spacing:0.3px;transition:color 0.3s ease;">SYNCED</span>
+              </div>
             </div>
           </div>
+          <button class="btn btn-teal btn-xs mt-3 w-full" onclick="App.runQuickScan()" style="display:flex;align-items:center;justify-content:center;gap:4px;font-weight:700;padding:6px 12px;border-radius:8px;">⚡ Quick Scan</button>
         </div>
         <div class="sidebar-nav">${navHtml}</div>
         <div class="sidebar-footer">
@@ -863,6 +1220,30 @@ function renderDashboard() {
   // Recent batches
   const recentBatches = [...batches].sort((a,b) => b.createdAt.localeCompare(a.createdAt)).slice(0,8);
 
+  const stageRecordsThisMonth = DB.StageRecords.all().filter(r => {
+    const recordMonth = (r.date || r.createdAt || '').slice(0, 7);
+    return recordMonth === thisMonth;
+  });
+
+  const monthlyStageStatsHtml = STAGES.map(stage => {
+    const recs = stageRecordsThisMonth.filter(r => r.stage === stage);
+    const count = recs.length;
+    const totalIn = recs.reduce((sum, r) => sum + (r.inputQty || 0), 0);
+    const totalOut = recs.reduce((sum, r) => sum + (r.outputQty || 0), 0);
+    const totalLoss = recs.reduce((sum, r) => sum + (r.lossQty || 0), 0);
+    const lossPercent = totalIn > 0 ? ((totalLoss / totalIn) * 100).toFixed(1) + '%' : '0.0%';
+    
+    return `
+      <tr>
+        <td class="font-semibold"><span style="margin-right: 6px;">${STAGE_ICONS[stage] || '⚙️'}</span>${STAGE_NAMES[stage]}</td>
+        <td style="text-align: right;" class="font-semibold">${formatNum(count)}</td>
+        <td style="text-align: right; color: var(--text-secondary);">${formatNum(totalIn)}</td>
+        <td style="text-align: right; color: var(--success); font-weight: 700;">${formatNum(totalOut)}</td>
+        <td style="text-align: right; color: var(--danger); font-weight: 600;">${formatNum(totalLoss)}</td>
+        <td style="text-align: right; font-weight: 600;" class="${totalLoss > 0 ? 'text-amber' : 'text-muted'}">${lossPercent}</td>
+      </tr>`;
+  }).join('');
+
   el.innerHTML = `
     <div class="animate-in">
       <!-- Welcome Header with Left-Aligned Logo -->
@@ -917,7 +1298,7 @@ function renderDashboard() {
 
       <!-- Top Stats Row 2: Inventory, Sales & Health -->
       <h3 style="font-size:14px;font-weight:700;margin-top:20px;margin-bottom:12px;text-transform:uppercase;letter-spacing:0.5px;color:var(--accent-teal);">📦 Stocks, Sales &amp; Health</h3>
-      <div class="dashboard-stats-grid-6">
+      <div class="dashboard-stats-grid-6" style="margin-bottom:28px;">
         <div class="stat-card green">
           <div style="font-size:22px;margin-bottom:8px;">📦</div>
           <div class="stat-label">Total Store Stock</div>
@@ -953,6 +1334,30 @@ function renderDashboard() {
           <div class="stat-label">Completed Batches</div>
           <div class="stat-value blue" style="font-size:22px;">${formatNum(completed)}</div>
           <div class="stat-sub">total batches completed</div>
+        </div>
+      </div>
+
+      <!-- Monthly Stage Production (Current Month) -->
+      <div class="card" style="margin-bottom:28px;">
+        <div class="card-header">
+          <h3>📈 Monthly Production Summary by Stage (${new Date().toLocaleString('default', { month: 'long', year: 'numeric' })})</h3>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table" style="font-size: 13px;">
+            <thead>
+              <tr>
+                <th>Stage</th>
+                <th style="text-align: right;">Batches Processed</th>
+                <th style="text-align: right;">Total Input Qty</th>
+                <th style="text-align: right;">Total Completed/Passed Qty</th>
+                <th style="text-align: right;">Total Loss Qty</th>
+                <th style="text-align: right;">Avg. Loss %</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${monthlyStageStatsHtml}
+            </tbody>
+          </table>
         </div>
       </div>
 
