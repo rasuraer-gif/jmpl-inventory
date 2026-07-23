@@ -20,6 +20,29 @@ const MouldTrackingModule = (() => {
     ];
   }
 
+  function getMouldLiftsSinceMaintenance(mould) {
+    if (typeof DB === 'undefined' || !DB.Batches || !DB.ProductionRecords) return 0;
+    
+    const maintLogs = (DB.MouldMaintenance.all() || [])
+      .filter(l => l.mouldDbId === mould.id && l.status === 'Ready for Production');
+    
+    let lastMaintDate = null;
+    if (maintLogs.length > 0) {
+      maintLogs.sort((a, b) => (b.updatedAt || b.maintenanceDate).localeCompare(a.updatedAt || a.maintenanceDate));
+      lastMaintDate = maintLogs[0].updatedAt || maintLogs[0].maintenanceDate;
+    }
+    
+    const batches = DB.Batches.all().filter(b => b.jmrefNo === mould.jmrefNo && Number(b.mouldNo) === Number(mould.mouldNo));
+    const batchIds = new Set(batches.map(b => b.id));
+    
+    let prodRecs = DB.ProductionRecords.all().filter(r => batchIds.has(r.batchId));
+    if (lastMaintDate) {
+      prodRecs = prodRecs.filter(r => (r.createdAt || r.date || '') > lastMaintDate);
+    }
+    
+    return prodRecs.reduce((sum, r) => sum + (Number(r.noOfLifts) || 0), 0);
+  }
+
   function getMouldCurrentLocation(mouldId) {
     const movements = DB.MouldMovements.byMould(mouldId);
     if (movements && movements.length > 0) {
@@ -122,12 +145,20 @@ const MouldTrackingModule = (() => {
         ? `<img src="${m.layoutDiagram}" style="width: 48px; height: 32px; object-fit: cover; cursor: pointer; border: 1px solid var(--border); border-radius: 4px;" onclick="MouldTrackingModule.previewLayoutDiagram('${m.id}')" title="Click to view layout diagram" />`
         : `<span class="text-muted" style="font-size:12px; font-style:italic;">None</span>`;
 
+      const threshold = m.pmThreshold || 10000;
+      const liftsCount = getMouldLiftsSinceMaintenance(m);
+      const isOverThreshold = liftsCount >= threshold;
+      const liftsDisplay = isOverThreshold 
+        ? `<span class="text-danger font-bold pulse-red-glow" style="display:inline-block;padding:2px 6px;border-radius:4px;background:rgba(239,68,68,0.1);" title="Threshold: ${threshold} lifts. Maintenance required!">${formatNum(liftsCount)} ⚠️ (Needs PM)</span>`
+        : `<span class="text-success font-semibold">${formatNum(liftsCount)} / ${formatNum(threshold)}</span>`;
+
       return `
         <tr>
           <td class="font-semibold text-blue">${m.mouldId}</td>
           <td><span class="badge badge-teal">${m.jmrefNo}</span></td>
           <td><strong>${m.mouldType}</strong></td>
           <td>${m.cavity || '—'}</td>
+          <td>${liftsDisplay}</td>
           <td>${m.size || '—'}</td>
           <td>${m.make || '—'}</td>
           <td>${m.client || '—'}</td>
@@ -157,6 +188,7 @@ const MouldTrackingModule = (() => {
                 <th>JMREF No</th>
                 <th>Mould Type</th>
                 <th>Cavity</th>
+                <th>Lifts Count / PM Threshold</th>
                 <th>Size</th>
                 <th>Make</th>
                 <th>Client</th>
@@ -169,7 +201,7 @@ const MouldTrackingModule = (() => {
               </tr>
             </thead>
             <tbody>
-              ${rows || '<tr><td colspan="13" style="text-align:center;padding:32px;color:var(--text-muted);">No moulds registered. Register your first mould to begin.</td></tr>'}
+              ${rows || '<tr><td colspan="15" style="text-align:center;padding:32px;color:var(--text-muted);">No moulds registered. Register your first mould to begin.</td></tr>'}
             </tbody>
           </table>
         </div>
@@ -464,8 +496,17 @@ const MouldTrackingModule = (() => {
                 <input type="number" id="mould-cavity" class="form-control" min="1" placeholder="e.g. 4">
               </div>
               <div class="form-group" style="flex:1;">
+                <label class="form-label">PM Lifts Threshold</label>
+                <input type="number" id="mould-pm-threshold" class="form-control" min="100" placeholder="e.g. 10000">
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group" style="flex:1;">
                 <label class="form-label">Mould Size</label>
                 <input type="text" id="mould-size" class="form-control" placeholder="e.g. 250x300 mm">
+              </div>
+              <div class="form-group" style="flex:1;">
+                <!-- Spacer -->
               </div>
             </div>
 
@@ -685,6 +726,7 @@ const MouldTrackingModule = (() => {
     document.getElementById('mould-type').value = '';
     document.getElementById('mould-generated-id').value = '';
     document.getElementById('mould-cavity').value = '';
+    document.getElementById('mould-pm-threshold').value = '10000';
     document.getElementById('mould-size').value = '';
     document.getElementById('mould-make').value = '';
     document.getElementById('mould-client').value = '';
@@ -723,6 +765,7 @@ const MouldTrackingModule = (() => {
     document.getElementById('mould-type').value = m.mouldType;
     document.getElementById('mould-generated-id').value = m.mouldId;
     document.getElementById('mould-cavity').value = m.cavity || '';
+    document.getElementById('mould-pm-threshold').value = m.pmThreshold || 10000;
     document.getElementById('mould-size').value = m.size || '';
     document.getElementById('mould-make').value = m.make || '';
     document.getElementById('mould-client').value = m.client || '';
@@ -757,6 +800,7 @@ const MouldTrackingModule = (() => {
     const mouldType = document.getElementById('mould-type').value;
     const mouldId = document.getElementById('mould-generated-id').value;
     const cavity = parseInt(document.getElementById('mould-cavity').value, 10) || null;
+    const pmThreshold = parseInt(document.getElementById('mould-pm-threshold').value, 10) || 10000;
     const size = document.getElementById('mould-size').value.trim();
     const make = document.getElementById('mould-make').value.trim();
     const client = document.getElementById('mould-client').value.trim();
@@ -770,7 +814,7 @@ const MouldTrackingModule = (() => {
       return;
     }
 
-    const fields = { jmrefNo, mouldNo, mouldType, mouldId, cavity, size, make, client, creationDate, layoutDiagram, rackDetails, notes };
+    const fields = { jmrefNo, mouldNo, mouldType, mouldId, cavity, pmThreshold, size, make, client, creationDate, layoutDiagram, rackDetails, notes };
 
     if (editId) {
       DB.Moulds.update(editId, fields);

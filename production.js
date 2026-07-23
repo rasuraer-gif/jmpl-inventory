@@ -81,6 +81,7 @@ const ProductionModule = (() => {
       const op  = ops.find(o => o.id === b.operatorId);
       return `
         <tr>
+          <td><input type="checkbox" class="bulk-batch-check" value="${b.id}" style="cursor:pointer;" onclick="event.stopPropagation()"></td>
           <td class="font-semibold text-blue">${b.batchNo}</td>
           <td>${b.partNo||'—'}</td>
           <td><span class="badge badge-teal">${b.jmrefNo||'—'}</span></td>
@@ -104,6 +105,7 @@ const ProductionModule = (() => {
         <div class="card-header" style="flex-direction:row; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
           <h3>Active Batches in Production</h3>
           <div style="display:flex; align-items:center; gap:8px;">
+            <button class="btn btn-primary btn-sm no-print" onclick="ProductionModule.bulkPrintBarcodes()" style="padding: 4px 8px; height: 32px; display: flex; align-items: center; justify-content: center; gap: 4px;" title="Print Selected Barcodes">🖨️ Bulk Print</button>
             <div class="search-input" style="max-width: 250px; margin: 0;">
               <span class="search-icon">&#128269;</span>
               <input type="text" id="prod-pending-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${pendingSearch}" oninput="ProductionModule.filterPending(this.value)">
@@ -113,8 +115,8 @@ const ProductionModule = (() => {
         </div>
         <div class="table-wrap">
           <table class="data-table">
-            <thead><tr><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Type</th><th>Subcontractor</th><th>Operator</th><th>Initial Qty</th><th>Created</th><th>Actions</th></tr></thead>
-            <tbody>${rows || '<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody>
+            <thead><tr><th><input type="checkbox" onclick="ProductionModule.toggleAllActive(this)" style="cursor:pointer;"></th><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Type</th><th>Subcontractor</th><th>Operator</th><th>Initial Qty</th><th>Created</th><th>Actions</th></tr></thead>
+            <tbody>${rows || '<tr><td colspan="10" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody>
           </table>
         </div>
       </div>`;
@@ -281,6 +283,7 @@ const ProductionModule = (() => {
     if (!batches.length) return `<div class="card card-body"><div class="empty-state"><div class="empty-icon">&#9989;</div><p>No completed batches yet</p></div></div>`;
     const rows = batches.map(b => `
       <tr>
+        <td><input type="checkbox" class="bulk-batch-check" value="${b.id}" style="cursor:pointer;" onclick="event.stopPropagation()"></td>
         <td class="font-semibold text-blue">${b.batchNo}</td>
         <td>${b.partNo||'—'}</td>
         <td><span class="badge badge-teal">${b.jmrefNo||'—'}</span></td>
@@ -291,7 +294,19 @@ const ProductionModule = (() => {
           <button class="btn btn-teal btn-xs" onclick="ProductionModule.printBarcode('${b.id}')">🖨️ Print</button>
         </td>
       </tr>`).join('');
-    return `<div class="card"><div class="card-header"><h3>Completed Batches</h3></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Status</th><th>Created</th><th>Completed</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    return `
+      <div class="card">
+        <div class="card-header" style="flex-direction:row; justify-content:space-between; align-items:center;">
+          <h3>Completed Batches</h3>
+          <button class="btn btn-primary btn-sm no-print" onclick="ProductionModule.bulkPrintBarcodes()" style="padding: 4px 8px; height: 32px; display: flex; align-items: center; justify-content: center; gap: 4px;" title="Print Selected Barcodes">🖨️ Bulk Print</button>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead><tr><th><input type="checkbox" onclick="ProductionModule.toggleAllCompleted(this)" style="cursor:pointer;"></th><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Status</th><th>Created</th><th>Completed</th><th>Actions</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>`;
   }
 
   function rejectedTab() {
@@ -1361,5 +1376,91 @@ const ProductionModule = (() => {
     render();
   }
 
-  return { render, openMove, calcLoss, moveBatch, openReject, rejectBatch, onTypeChange, createBatch, resetForm, showPartDropdown, filterParts, selectPart, updateDynamicBatchNo, updateMoveDynamicBatchNo, printBarcode, filterPending, showJmrefDropdown, filterJmrefs, onDestinationChange, onMouldChange, onSubDestinationChange, openEditBatch, onEditTypeChange, saveBatchEdit, calculateInhouseQty };
+  function toggleAllActive(chk) {
+    const list = document.querySelectorAll('#prod-tab-content table input.bulk-batch-check');
+    list.forEach(el => el.checked = chk.checked);
+  }
+
+  function toggleAllCompleted(chk) {
+    const list = document.querySelectorAll('#prod-tab-content table input.bulk-batch-check');
+    list.forEach(el => el.checked = chk.checked);
+  }
+
+  function bulkPrintBarcodes() {
+    const checked = Array.from(document.querySelectorAll('.bulk-batch-check:checked')).map(el => el.value);
+    if (!checked.length) {
+      showToast('Please select at least one batch to print', 'warning');
+      return;
+    }
+
+    const printWindow = window.open('', '_blank', 'width=600,height=800');
+    if (!printWindow) {
+      showToast('Popup blocked! Please allow popups for printing.', 'warning');
+      return;
+    }
+
+    let labelsHtml = '';
+    checked.forEach((batchId, idx) => {
+      const batch = DB.Batches.find(batchId);
+      if (!batch) return;
+      const formattedDate = batch.productionDate ? formatDate(batch.productionDate) : formatDate(batch.createdAt);
+      const part = DB.Master.find(batch.partId) || DB.Master.all().find(p => p.partNo === batch.partNo || p.jmrefNo === batch.jmrefNo) || {};
+      let mouldType = '—';
+      if (batch.mouldNo && part.moulds) {
+        const m = part.moulds.find(x => x.mouldNo === Number(batch.mouldNo));
+        if (m) {
+          mouldType = m.mouldType || '—';
+        }
+      }
+
+      labelsHtml += `
+        <div class="label-container" style="${idx > 0 ? 'page-break-before: always;' : ''} width: 3.8in; height: 5.8in; border: 3px solid #000; display: flex; flex-direction: column; align-items: center; justify-content: space-between; box-sizing: border-box; padding: 16px; margin: 0 auto;">
+          <div class="company-title" style="font-size: 17px; font-weight: 900; letter-spacing: 0.5px; border-bottom: 3px solid #000; padding-bottom: 6px; width: 100%; text-align: center; text-transform: uppercase; white-space: nowrap;">JANANI MOULDINGS PVT. LTD.</div>
+          <div class="qr-wrapper" style="margin: 12px 0; display: flex; align-items: center; justify-content: center; position: relative; width: 100%;">
+            <svg id="barcode-${batch.id}"></svg>
+          </div>
+          <div class="batch-no-display" style="font-size: 20px; font-weight: 900; letter-spacing: 0.5px; margin-bottom: 12px; border: 3px solid #000; padding: 6px 12px; border-radius: 4px; background: #f3f4f6; text-align: center; white-space: nowrap; max-width: 100%; box-sizing: border-box;">${batch.batchNo}</div>
+          <div class="details" style="width: 100%; border-top: 3px solid #000; padding-top: 12px; font-size: 18px;">
+            <div class="detail-row" style="display: flex; justify-content: space-between; margin-bottom: 8px; line-height: 1.3;"><span class="label" style="font-weight: 800; text-transform: uppercase; font-size: 18px;">Part No:</span><span class="value" style="font-weight: 800; font-size: 18px;">${batch.partNo || '—'}</span></div>
+            <div class="detail-row" style="display: flex; justify-content: space-between; margin-bottom: 8px; line-height: 1.3;"><span class="label" style="font-weight: 800; text-transform: uppercase; font-size: 18px;">JMREF:</span><span class="value" style="font-weight: 800; font-size: 18px;">${batch.jmrefNo || '—'}</span></div>
+            <div class="detail-row" style="display: flex; justify-content: space-between; margin-bottom: 8px; line-height: 1.3;"><span class="label" style="font-weight: 800; text-transform: uppercase; font-size: 18px;">Mould No:</span><span class="value" style="font-weight: 800; font-size: 18px;">M# ${batch.mouldNo || '—'} (${mouldType})</span></div>
+            <div class="detail-row" style="display: flex; justify-content: space-between; margin-bottom: 8px; line-height: 1.3;"><span class="label" style="font-weight: 800; text-transform: uppercase; font-size: 18px;">Qty:</span><span class="value" style="font-weight: 800; font-size: 18px;">${Number(batch.initialQty).toLocaleString('en-IN')}</span></div>
+            <div class="detail-row" style="display: flex; justify-content: space-between; margin-bottom: 8px; line-height: 1.3;"><span class="label" style="font-weight: 800; text-transform: uppercase; font-size: 18px;">Date:</span><span class="value" style="font-weight: 800; font-size: 18px;">${formattedDate}</span></div>
+          </div>
+        </div>
+      `;
+    });
+
+    printWindow.document.write(`
+      <html>
+      <head>
+        <title>Bulk Print Labels</title>
+        <style>
+          @page { size: 4in 6in; margin: 0; }
+          body { margin: 0; padding: 0; font-family: Helvetica, Arial, sans-serif; background: #fff; color: #000; }
+        </style>
+        <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"><\/script>
+      </head>
+      <body>
+        ${labelsHtml}
+        <script>
+          window.onload = function() {
+            ${checked.map(id => {
+              const b = DB.Batches.find(id);
+              if (!b) return '';
+              return `JsBarcode("#barcode-${id}", "${b.batchNo}", { format: "CODE128", width: 2, height: 80, displayValue: false });`;
+            }).join('\n')}
+            setTimeout(function() {
+              window.print();
+              window.close();
+            }, 500);
+          }
+        <\/script>
+      </body>
+      </html>
+    `);
+    printWindow.document.close();
+  }
+
+  return { render, openMove, calcLoss, moveBatch, openReject, rejectBatch, onTypeChange, createBatch, resetForm, showPartDropdown, filterParts, selectPart, updateDynamicBatchNo, updateMoveDynamicBatchNo, printBarcode, filterPending, showJmrefDropdown, filterJmrefs, onDestinationChange, onMouldChange, onSubDestinationChange, openEditBatch, onEditTypeChange, saveBatchEdit, calculateInhouseQty, toggleAllActive, toggleAllCompleted, bulkPrintBarcodes };
 })();

@@ -275,6 +275,8 @@ const NAV = [
 
 const SECTION_LABELS = { main:'OVERVIEW', dept:'DEPARTMENTS', tools:'TOOLS', admin:'ADMINISTRATION' };
 
+let dashboardMonth = new Date().toISOString().slice(0, 7);
+
 // ── App State ──────────────────────────────────────────────
 const App = (() => {
   let currentModule = null;
@@ -617,16 +619,20 @@ const App = (() => {
     const text = document.getElementById('sync-status-text');
     if (!dot || !text) return;
 
+    dot.classList.remove('pulse-green', 'pulse-amber');
+
     if (!navigator.onLine) {
       dot.style.background = '#ef4444'; // Red
       text.innerText = 'DISCONNECTED';
       text.style.color = '#ef4444';
     } else if (pendingSyncCollections.size > 0) {
       dot.style.background = '#f59e0b'; // Amber
+      dot.classList.add('pulse-amber');
       text.innerText = 'SYNCING...';
       text.style.color = '#f59e0b';
     } else {
       dot.style.background = '#10b981'; // Green
+      dot.classList.add('pulse-green');
       text.innerText = 'SYNCED';
       text.style.color = '#10b981';
     }
@@ -920,7 +926,7 @@ const App = (() => {
     modal.classList.remove('hidden');
   }
 
-  return { navigate, init, toggleReportsMenu, openChangePasswordModal, changePassword, runQuickScan, showBatchGenealogy, get current() { return currentModule; } };
+  return { navigate, init, toggleReportsMenu, openChangePasswordModal, changePassword, runQuickScan, showBatchGenealogy, get current() { return currentModule; }, changeDashboardMonth: (val) => { dashboardMonth = val; renderDashboard(); } };
 })();
 
 // ── Login Page ─────────────────────────────────────────────
@@ -1115,6 +1121,8 @@ function renderDashboard() {
   const el = document.getElementById('content');
   if (!el) return;
 
+  const thisMonth = dashboardMonth;
+
   const batches   = DB.Batches.all();
   const master    = DB.Master.all();
   const sales     = DB.Sales.all();
@@ -1122,16 +1130,39 @@ function renderDashboard() {
   const rejected  = DB.RejectionTracker.all();
   const rechecks  = DB.RecheckTracker.all();
 
-  const active    = batches.filter(b => b.status === 'active').length;
-  const completed = batches.filter(b => b.status === 'completed').length;
-  const rejectedCount = batches.filter(b => b.status === 'rejected').length;
-  const totalLoss = losses.reduce((s, l) => s + (l.lossQty || 0), 0);
+  const active    = batches.filter(b => b.status === 'active' && (b.productionDate || b.createdAt || '').slice(0, 7) === thisMonth).length;
+  const completed = batches.filter(b => b.status === 'completed' && (b.completedAt || b.createdAt || '').slice(0, 7) === thisMonth).length;
+  const rejectedCount = batches.filter(b => b.status === 'rejected' && (b.updatedAt || b.createdAt || '').slice(0, 7) === thisMonth).length;
+  const totalLoss = losses.filter(l => (l.date || l.createdAt || '').slice(0, 7) === thisMonth).reduce((s, l) => s + (l.lossQty || 0), 0);
   const storeInv  = DB.StoreInventory.allParts();
   const totalStock = storeInv.reduce((s, p) => s + (p.available || 0), 0);
 
   // Monthly stats
-  const thisMonth = new Date().toISOString().slice(0,7);
   const salesThisMonth = sales.filter(s => (s.saleDate||'').startsWith(thisMonth)).reduce((s,r)=>s+(r.qty||0),0);
+
+  // Extract unique months for select options
+  const uniqueMonths = new Set();
+  uniqueMonths.add(new Date().toISOString().slice(0, 7)); // always include current month
+  batches.forEach(b => {
+    const d = b.productionDate || b.createdAt;
+    if (d) uniqueMonths.add(d.slice(0, 7));
+  });
+  DB.StageRecords.all().forEach(r => {
+    const d = r.date || r.createdAt;
+    if (d) uniqueMonths.add(d.slice(0, 7));
+  });
+  const sortedMonths = Array.from(uniqueMonths).sort().reverse();
+  const monthOptions = sortedMonths.map(m => {
+    const [y, mm] = m.split('-');
+    const dateStr = new Date(Number(y), Number(mm) - 1, 1).toLocaleString('default', { month: 'long', year: 'numeric' });
+    return `<option value="${m}" ${m === thisMonth ? 'selected' : ''}>${dateStr}</option>`;
+  }).join('');
+
+  const monthYearStr = (() => {
+    const [y, m] = thisMonth.split('-');
+    const date = new Date(Number(y), Number(m) - 1, 1);
+    return date.toLocaleString('default', { month: 'long', year: 'numeric' });
+  })();
 
   // Production plan & schedule metrics
   const monthlyPlans = DB.MonthlyPlans.all().filter(p => p.month === thisMonth);
@@ -1139,7 +1170,11 @@ function renderDashboard() {
   const scheduledQtyThisMonth = DB.ProductionSchedules.all().filter(s => s.month === thisMonth).reduce((s, sch) => s + (sch.qty || 0), 0);
   const producedQtyThisMonth = batches.filter(b => {
     const bd = (b.productionDate || b.createdAt || '').slice(0, 7);
-    return bd === thisMonth;
+    return bd === thisMonth && 
+           !b.isReprocess && 
+           !b.isStockUpload && 
+           !(b.batchNo && b.batchNo.includes('-REP')) && 
+           !(b.batchNo && b.batchNo.includes('-REC-'));
   }).reduce((s, b) => s + (b.initialQty || 0), 0);
 
   // Active WIP rechecks
@@ -1256,14 +1291,102 @@ function renderDashboard() {
   const grandLoss = stageRecordsThisMonth.filter(r => STAGES.includes(r.stage)).reduce((sum, r) => sum + (r.lossQty || 0), 0);
   const grandLossPercent = grandIn > 0 ? ((grandLoss / grandIn) * 100).toFixed(1) + '%' : '0.0%';
 
+  // SVG Chart code
+  const svgWidth = 500;
+  const svgHeight = 240;
+  const paddingLeft = 60;
+  const paddingRight = 20;
+  const paddingTop = 20;
+  const paddingBottom = 60;
+  
+  const chartStages = STAGES.filter(stage => {
+    return stageRecordsThisMonth.some(r => r.stage === stage && ((r.outputQty || 0) > 0 || (r.lossQty || 0) > 0));
+  });
+  const activeStagesForChart = chartStages.length > 0 ? chartStages : STAGES.slice(0, 5);
+  
+  const maxVal = Math.max(...activeStagesForChart.map(stage => {
+    const recs = stageRecordsThisMonth.filter(r => r.stage === stage);
+    return Math.max(recs.reduce((sum, r) => sum + (r.inputQty || 0), 0), 10);
+  }), 100);
+  
+  const stageData = activeStagesForChart.map(stage => {
+    const recs = stageRecordsThisMonth.filter(r => r.stage === stage);
+    const totalIn = recs.reduce((sum, r) => sum + (r.inputQty || 0), 0);
+    const totalOut = recs.reduce((sum, r) => sum + (r.outputQty || 0), 0);
+    const totalLoss = recs.reduce((sum, r) => sum + (r.lossQty || 0), 0);
+    return { name: STAGE_NAMES[stage] || stage, totalIn, totalOut, totalLoss };
+  });
+
+  const barCount = stageData.length;
+  const chartInnerWidth = svgWidth - paddingLeft - paddingRight;
+  const chartInnerHeight = svgHeight - paddingTop - paddingBottom;
+  const groupWidth = chartInnerWidth / barCount;
+  const barWidth = groupWidth * 0.3;
+  
+  let gridLines = '';
+  for (let i = 0; i <= 4; i++) {
+    const yVal = paddingTop + (chartInnerHeight / 4) * i;
+    const tickLabel = Math.round(maxVal - (maxVal / 4) * i);
+    gridLines += `
+      <line x1="${paddingLeft}" y1="${yVal}" x2="${svgWidth - paddingRight}" y2="${yVal}" stroke="var(--border)" stroke-width="1" stroke-dasharray="4" />
+      <text x="${paddingLeft - 8}" y="${yVal + 4}" font-size="9" fill="var(--text-secondary)" text-anchor="end">${formatNum(tickLabel)}</text>
+    `;
+  }
+  
+  let barsHtml = '';
+  stageData.forEach((d, idx) => {
+    const xGroupCenter = paddingLeft + groupWidth * idx + groupWidth / 2;
+    const xOutBar = xGroupCenter - barWidth - 1;
+    const xLossBar = xGroupCenter + 1;
+    
+    const outHeight = (d.totalOut / maxVal) * chartInnerHeight;
+    const lossHeight = (d.totalLoss / maxVal) * chartInnerHeight;
+    
+    const yOut = paddingTop + chartInnerHeight - outHeight;
+    const yLoss = paddingTop + chartInnerHeight - lossHeight;
+    
+    barsHtml += `
+      <rect x="${xOutBar}" y="${yOut}" width="${barWidth}" height="${outHeight}" fill="var(--accent-green)" rx="3" />
+      <rect x="${xLossBar}" y="${yLoss}" width="${barWidth}" height="${lossHeight}" fill="var(--accent-red)" rx="3" />
+      <text x="${xGroupCenter + 6}" y="${svgHeight - paddingBottom + 12}" font-size="8.5" fill="var(--text-primary)" text-anchor="end" font-weight="600" transform="rotate(-30, ${xGroupCenter + 6}, ${svgHeight - paddingBottom + 12})">${d.name}</text>
+    `;
+  });
+  
+  const dashboardChartHtml = `
+    <div class="card" style="margin-bottom:28px; padding: 16px;">
+      <div class="card-header" style="padding-bottom: 8px;">
+        <h3>📊 Monthly Stage Yield &amp; Defect Analysis</h3>
+      </div>
+      <div style="display:flex; justify-content:center; align-items:center; overflow-x:auto;">
+        <svg viewBox="0 0 ${svgWidth} ${svgHeight}" style="width:100%; max-width:550px; height:auto; overflow:visible;">
+          ${gridLines}
+          ${barsHtml}
+          <line x1="${paddingLeft}" y1="${svgHeight - paddingBottom}" x2="${svgWidth - paddingRight}" y2="${svgHeight - paddingBottom}" stroke="var(--border-strong)" stroke-width="2" />
+        </svg>
+      </div>
+      <div style="display:flex; justify-content:center; gap:20px; margin-top:12px; font-size:12px;">
+        <div style="display:flex; align-items:center; gap:6px;"><span style="width:12px; height:12px; background:var(--accent-green); border-radius:3px; display:inline-block;"></span><span class="font-semibold">Passed</span></div>
+        <div style="display:flex; align-items:center; gap:6px;"><span style="width:12px; height:12px; background:var(--accent-red); border-radius:3px; display:inline-block;"></span><span class="font-semibold">Loss (Reject)</span></div>
+      </div>
+    </div>
+  `;
+
   el.innerHTML = `
     <div class="animate-in">
-      <!-- Welcome Header with Left-Aligned Logo -->
-      <div style="display:flex; align-items:center; gap:16px; margin-bottom:28px;">
-        <img src="./logo.png" alt="JMPL Logo" style="height: 64px; width: 64px; object-fit: contain; background: white; padding: 8px; border-radius: 12px; box-shadow: var(--shadow-sm); flex-shrink: 0;">
-        <div>
-          <h2 style="font-size:22px;font-weight:800;margin:0;">Good ${getGreeting()}, ${Auth.getSession()?.name?.split(' ')[0]} 👋</h2>
-          <p class="text-sm text-muted mt-1" style="margin:0;">Here's your JMPL inventory overview for today</p>
+      <!-- Welcome Header with Left-Aligned Logo & Month Selector -->
+      <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:16px; margin-bottom:28px;">
+        <div style="display:flex; align-items:center; gap:16px;">
+          <img src="./logo.png" alt="JMPL Logo" style="height: 64px; width: 64px; object-fit: contain; background: white; padding: 8px; border-radius: 12px; box-shadow: var(--shadow-sm); flex-shrink: 0;">
+          <div>
+            <h2 style="font-size:22px;font-weight:800;margin:0;">Good ${getGreeting()}, ${Auth.getSession()?.name?.split(' ')[0]} 👋</h2>
+            <p class="text-sm text-muted mt-1" style="margin:0;">Here's your JMPL inventory overview for today</p>
+          </div>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <label class="form-label" style="margin:0; font-size:13px; font-weight:700; white-space:nowrap; color:var(--text-secondary);">Select Month:</label>
+          <select id="dashboard-month-select" class="form-control form-control-sm" style="width:160px; margin:0;" onchange="App.changeDashboardMonth(this.value)">
+            ${monthOptions}
+          </select>
         </div>
       </div>
 
@@ -1349,10 +1472,12 @@ function renderDashboard() {
         </div>
       </div>
 
-      <!-- Monthly Stage Production (Current Month) -->
+      ${dashboardChartHtml}
+
+      <!-- Monthly Stage Production (Selected Month) -->
       <div class="card" style="margin-bottom:28px;">
         <div class="card-header">
-          <h3>📈 Monthly Production Summary by Stage (${new Date().toLocaleString('default', { month: 'long', year: 'numeric' })})</h3>
+          <h3>📈 Monthly Production Summary by Stage (${monthYearStr})</h3>
         </div>
         <div class="table-wrap">
           <table class="data-table" style="font-size: 13px;">

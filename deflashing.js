@@ -313,7 +313,6 @@ const DeflashingModule = (() => {
     document.getElementById('de-batch-info').innerHTML = `<strong>${b.batchNo}</strong> — ${b.jmrefNo}<br><span class="text-muted text-sm">Input Qty: <strong>${formatNum(inputQty)}</strong></span>`;
     document.getElementById('de-destination').value = 'trimming';
     onDestinationChange();
-    document.getElementById('de-vendor').value = '';
     document.getElementById('de-output-qty').value = '';
     document.getElementById('de-loss-qty').value = '';
     document.getElementById('de-notes').value = '';

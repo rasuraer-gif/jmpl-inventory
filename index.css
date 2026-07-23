@@ -695,3 +695,32 @@ table.data-table td {
   .card { border: 1px solid #ddd; box-shadow: none; }
   table.data-table thead th { background: #f3f4f6; color: #374151; }
 }
+
+/* Pulsing Indicators */
+.pulse-green {
+  animation: pulse-green-anim 1.8s infinite;
+}
+@keyframes pulse-green-anim {
+  0% { transform: scale(0.9); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+  70% { transform: scale(1.1); box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+  100% { transform: scale(0.9); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+}
+
+.pulse-amber {
+  animation: pulse-amber-anim 1.8s infinite;
+}
+@keyframes pulse-amber-anim {
+  0% { transform: scale(0.9); box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.7); }
+  70% { transform: scale(1.1); box-shadow: 0 0 0 6px rgba(245, 158, 11, 0); }
+  100% { transform: scale(0.9); box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
+}
+
+.pulse-red-glow {
+  animation: pulse-red-anim 1.8s infinite;
+}
+@keyframes pulse-red-anim {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+  70% { transform: scale(1.05); box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+}
+

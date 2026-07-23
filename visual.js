@@ -234,6 +234,33 @@ const VisualModule = (() => {
           </div>
 
           <div class="form-group"><label class="form-label">Loss Quantity (Auto)</label><input type="text" id="vis-loss-qty" class="form-control" readonly style="color:var(--accent-red);font-weight:700;"></div>
+          
+          <div id="vis-defect-section" class="hidden" style="margin-bottom: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-primary);">
+            <h4 style="margin-bottom:8px; color:var(--primary); font-size:12px; font-weight:700;">⚠️ Defect Breakdown (Must sum to Loss Qty)</h4>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
+              <div>
+                <label style="font-size:11px; color:var(--text-secondary);">Air Traps</label>
+                <input type="number" id="vis-defect-airtraps" class="form-control form-control-sm" min="0" value="0" style="padding:4px 8px; font-size:12px;">
+              </div>
+              <div>
+                <label style="font-size:11px; color:var(--text-secondary);">Excessive Flash</label>
+                <input type="number" id="vis-defect-flash" class="form-control form-control-sm" min="0" value="0" style="padding:4px 8px; font-size:12px;">
+              </div>
+              <div>
+                <label style="font-size:11px; color:var(--text-secondary);">Mould Mark</label>
+                <input type="number" id="vis-defect-mould" class="form-control form-control-sm" min="0" value="0" style="padding:4px 8px; font-size:12px;">
+              </div>
+              <div>
+                <label style="font-size:11px; color:var(--text-secondary);">Dimension Out</label>
+                <input type="number" id="vis-defect-dimension" class="form-control form-control-sm" min="0" value="0" style="padding:4px 8px; font-size:12px;">
+              </div>
+            </div>
+            <div>
+              <label style="font-size:11px; color:var(--text-secondary);">Others</label>
+              <input type="number" id="vis-defect-others" class="form-control form-control-sm" min="0" value="0" style="padding:4px 8px; font-size:12px;">
+            </div>
+          </div>
+
           <div class="form-group"><label class="form-label">Destination <span class="required">*</span></label>
             <select id="vis-destination" class="form-control" onchange="VisualModule.onDestinationChange()">
               <option value="gauge">Gauge Inspection</option>
@@ -397,6 +424,16 @@ const VisualModule = (() => {
     document.getElementById('vis-reprocess-destination').value = 'cryogenic';
     document.getElementById('vis-loss-qty').value = '';
     document.getElementById('vis-notes').value = '';
+    
+    // Reset defects
+    const defectSec = document.getElementById('vis-defect-section');
+    if (defectSec) defectSec.classList.add('hidden');
+    document.getElementById('vis-defect-airtraps').value = '0';
+    document.getElementById('vis-defect-flash').value = '0';
+    document.getElementById('vis-defect-mould').value = '0';
+    document.getElementById('vis-defect-dimension').value = '0';
+    document.getElementById('vis-defect-others').value = '0';
+
     onDestinationChange();
     document.getElementById('vis-process-modal').classList.remove('hidden');
   }
@@ -439,8 +476,29 @@ const VisualModule = (() => {
       }
     }
 
+    let lossQty = 0;
     if (!isStock) {
-      document.getElementById('vis-loss-qty').value = Math.max(0, _visInputQty - out);
+      const batch = _activeBatch;
+      const isRepBatch = batch?.isReprocess || (batch?.batchNo && batch?.batchNo.endsWith('-REP'));
+      const finalRep = isRepBatch ? 0 : rep;
+      lossQty = Math.max(0, _visInputQty - out - finalRep);
+      document.getElementById('vis-loss-qty').value = lossQty;
+    } else {
+      lossQty = parseInt(document.getElementById('vis-loss-qty').value) || 0;
+    }
+
+    const defectSection = document.getElementById('vis-defect-section');
+    if (defectSection) {
+      if (lossQty > 0) {
+        defectSection.classList.remove('hidden');
+      } else {
+        defectSection.classList.add('hidden');
+        document.getElementById('vis-defect-airtraps').value = '0';
+        document.getElementById('vis-defect-flash').value = '0';
+        document.getElementById('vis-defect-mould').value = '0';
+        document.getElementById('vis-defect-dimension').value = '0';
+        document.getElementById('vis-defect-others').value = '0';
+      }
     }
   }
   function process() {
@@ -609,7 +667,32 @@ const VisualModule = (() => {
       return;
     }
 
-    const lossQty = Math.max(0, _visInputQty - outputQty);
+    const lossQty = Math.max(0, _visInputQty - outputQty - finalReprocessQty);
+
+    const airTraps = parseInt(document.getElementById('vis-defect-airtraps')?.value) || 0;
+    const flash = parseInt(document.getElementById('vis-defect-flash')?.value) || 0;
+    const mould = parseInt(document.getElementById('vis-defect-mould')?.value) || 0;
+    const dim = parseInt(document.getElementById('vis-defect-dimension')?.value) || 0;
+    const others = parseInt(document.getElementById('vis-defect-others')?.value) || 0;
+
+    if (lossQty > 0) {
+      const sumDefects = airTraps + flash + mould + dim + others;
+      if (sumDefects !== lossQty) {
+        showToast(`Sum of defect quantities (${sumDefects}) must equal the Loss Quantity (${lossQty})`, 'error');
+        return;
+      }
+    }
+
+    let defectReason = '';
+    if (lossQty > 0) {
+      const parts = [];
+      if (airTraps > 0) parts.push(`Air Traps: ${airTraps}`);
+      if (flash > 0) parts.push(`Excessive Flash: ${flash}`);
+      if (mould > 0) parts.push(`Mould Mark: ${mould}`);
+      if (dim > 0) parts.push(`Dimension Out: ${dim}`);
+      if (others > 0) parts.push(`Others: ${others}`);
+      defectReason = parts.join(', ');
+    }
 
     DB.StageRecords.insert({
       batchId,
@@ -626,7 +709,8 @@ const VisualModule = (() => {
       date: dateStr,
       recordedBy: session?.userId,
       notes: notes,
-      iterationNo: batch?.recheckIteration||null
+      iterationNo: batch?.recheckIteration||null,
+      defectBreakdown: lossQty > 0 ? { airTraps, flash, mould, dim, others } : null
     });
 
     if (lossQty > 0) {
@@ -637,7 +721,8 @@ const VisualModule = (() => {
         date: dateStr,
         jmrefNo: batch?.jmrefNo,
         partNo: batch?.partNo,
-        iterationNo: batch?.recheckIteration||null
+        iterationNo: batch?.recheckIteration||null,
+        reason: defectReason || 'Visual Inspection reject'
       });
     }
 

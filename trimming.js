@@ -144,7 +144,12 @@ const TrimmingModule = (() => {
   }
   function processModal() {
     const vendors = DB.Vendors.byDept('trimming');
-    const vendorOpts = vendors.map(v=>`<option value="${v.id}">${v.name}</option>`).join('');
+    let vendorOpts = '';
+    if (vendors.length === 1) {
+      vendorOpts = `<option value="${vendors[0].id}" selected>${vendors[0].name}</option>`;
+    } else {
+      vendorOpts = '<option value="">Select vendor...</option>' + vendors.map(v=>`<option value="${v.id}">${v.name}</option>`).join('');
+    }
     return `<div class="modal-overlay hidden" id="trim-process-modal">
       <div class="modal modal-sm">
         <div class="modal-header"><h3>Process &amp; Move</h3><button class="modal-close" onclick="document.getElementById('trim-process-modal').classList.add('hidden')">&#x2715;</button></div>
@@ -153,7 +158,7 @@ const TrimmingModule = (() => {
           <input type="hidden" id="trim-input-qty">
           <div id="trim-batch-info" style="padding:12px;background:var(--bg-input);border-radius:8px;margin-bottom:16px;"></div>
           <div class="form-group"><label class="form-label">Vendor <span class="required">*</span></label>
-            <select id="trim-vendor" class="form-control"><option value="">Select vendor...</option>${vendorOpts}</select>
+            <select id="trim-vendor" class="form-control">${vendorOpts}</select>
           </div>
           <div class="form-group"><label class="form-label">Output Quantity <span class="required">*</span></label><input type="number" id="trim-output-qty" class="form-control" min="0" oninput="TrimmingModule.calcLoss()"></div>
           <div class="form-group"><label class="form-label">Loss Quantity (Auto)</label><input type="text" id="trim-loss-qty" class="form-control" readonly style="color:var(--accent-red);font-weight:700;"></div>
@@ -268,11 +273,16 @@ const TrimmingModule = (() => {
     }
 
     document.getElementById('trim-batch-info').innerHTML = `<strong>${b.batchNo}</strong> — ${b.jmrefNo}<br><span class="text-muted text-sm">Input Qty: <strong>${formatNum(inputQty)}</strong></span>${b.recheckCount?` <span class="badge badge-amber">Recheck #${b.recheckIteration}</span>`:''}`;
-    document.getElementById('trim-vendor').value = '';
+    const vendors = DB.Vendors.byDept('trimming');
+    if (vendors.length === 1) {
+      document.getElementById('trim-vendor').value = vendors[0].id;
+    } else {
+      document.getElementById('trim-vendor').value = '';
+    }
     document.getElementById('trim-output-qty').value = '';
     document.getElementById('trim-loss-qty').value = '';
     document.getElementById('trim-notes').value = '';
-    document.getElementById('trim-destination').value = 'visual';
+    document.getElementById('trim-destination').value = 'waiting-visual';
     document.getElementById('trim-process-modal').classList.remove('hidden');
   }
 
