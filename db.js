@@ -50,7 +50,8 @@ const DB = (() => {
     productionSchedules: [],
     moulds: [],
     mouldMovements: [],
-    mouldMaintenance: []
+    mouldMaintenance: [],
+    tasks: []
   };
 
   // Helper to load localStorage cache into memory on startup
@@ -838,6 +839,14 @@ const DB = (() => {
     remove: (id) => remove('mouldMaintenance', id)
   };
 
+  const Tasks = {
+    all: () => getAll('tasks'),
+    find: (id) => findById('tasks', id),
+    insert: (r) => insert('tasks', r),
+    update: (id, c) => update('tasks', id, c),
+    remove: (id) => remove('tasks', id)
+  };
+
   function exportBackupJSON() {
     const backupData = {};
     const collections = Object.keys(cache);
@@ -874,7 +883,7 @@ const DB = (() => {
     Batches, StageRecords, LossTracker, RejectionTracker,
     RecheckTracker, StockUploads, Sales, StoreInventory,
     ProductionRecords, MonthlyPlans, ProductionSchedules,
-    Moulds, MouldMovements, MouldMaintenance, exportBackupJSON, importBackupJSON,
+    Moulds, MouldMovements, MouldMaintenance, Tasks, exportBackupJSON, importBackupJSON,
     raw: { getAll, setAll, insert, update, remove, findById, findWhere }
   };
 })();

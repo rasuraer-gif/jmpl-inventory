@@ -138,6 +138,7 @@ const MasterModule = (() => {
             <div style="display: flex; gap: 8px; font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; padding-right: 28px;">
               <div style="width: 85px;">Mould No</div>
               <div style="width: 110px;">Mould Type</div>
+              <div style="width: 70px;">Cavities</div>
               <div style="flex: 1;">Process Flow</div>
               <div style="width: 130px;">First Process</div>
             </div>
@@ -194,7 +195,7 @@ const MasterModule = (() => {
           <div>${p.description || '—'}</div>
           ${p.moulds && p.moulds.length ? `
             <div style="margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px;">
-              ${p.moulds.map(m => `<span class="badge badge-gray" style="font-size: 10px; padding: 2px 6px; border: 1px solid var(--border);" title="Mould ${m.mouldNo}\nType: ${m.mouldType}\nFirst Process: ${m.firstProcess}\nFlow: ${m.processFlow}">M#${m.mouldNo} (${m.mouldType})</span>`).join('')}
+              ${p.moulds.map(m => `<span class="badge badge-gray" style="font-size: 10px; padding: 2px 6px; border: 1px solid var(--border);" title="Mould ${m.mouldNo}\nType: ${m.mouldType}\nCavities: ${m.cavities || '—'}\nFirst Process: ${m.firstProcess}\nFlow: ${m.processFlow}">M#${m.mouldNo} (${m.mouldType})${m.cavities ? ` [Cav: ${m.cavities}]` : ''}</span>`).join('')}
             </div>
           ` : ''}
         </td>
@@ -231,6 +232,9 @@ const MasterModule = (() => {
           <option value="Flash Free" ${m.mouldType === 'Flash Free' ? 'selected' : ''}>Flash Free</option>
           <option value="Normal" ${m.mouldType === 'Normal' ? 'selected' : ''}>Normal</option>
         </select>
+      </div>
+      <div style="width: 70px;">
+        <input type="number" class="form-control mould-cavities" placeholder="Qty" min="1" value="${m.cavities || ''}">
       </div>
       <div style="flex: 1;">
         <input type="text" class="form-control mould-flow" placeholder="Process Flow" value="${m.processFlow || ''}">
@@ -343,9 +347,11 @@ const MasterModule = (() => {
     // Read and validate moulds
     const mouldRows = Array.from(document.querySelectorAll('.mould-row'));
     const moulds = mouldRows.map(row => {
+      const cavitiesInput = row.querySelector('.mould-cavities')?.value.trim();
       return {
         mouldNo: parseInt(row.querySelector('.mould-no').value, 10),
         mouldType: row.querySelector('.mould-type').value,
+        cavities: cavitiesInput ? parseInt(cavitiesInput, 10) : null,
         processFlow: row.querySelector('.mould-flow').value.trim(),
         firstProcess: row.querySelector('.mould-first-process').value
       };
@@ -472,7 +478,7 @@ const MasterModule = (() => {
       'Part No', 'JMREF No', 'Description', '10 Digit No', 'Compound Code',
       'Sale Price', 'Time (Minutes)', 'Temperature', 'Pressure', 
       'Sheet Thickness', 'Blank Length', 'Blank Weight', 'Average Target Inventory',
-      'Mould Nos', 'Mould Types', 'Process Flows', 'First Processes'
+      'Mould Nos', 'Mould Types', 'Cavities', 'Process Flows', 'First Processes'
     ];
 
     const parts = DB.Master.all();
@@ -482,6 +488,7 @@ const MasterModule = (() => {
       rows = parts.map(p => {
         const mouldNos = (p.moulds || []).map(m => m.mouldNo).join(', ');
         const mouldTypes = (p.moulds || []).map(m => m.mouldType || 'Yet to be assigned').join(', ');
+        const cavities = (p.moulds || []).map(m => m.cavities || '').join(', ');
         const processFlows = (p.moulds || []).map(m => m.processFlow || 'Cryogenic').join(' ; ');
         const firstProcesses = (p.moulds || []).map(m => m.firstProcess || 'Cryogenic').join(', ');
 
@@ -501,14 +508,15 @@ const MasterModule = (() => {
           p.averageTargetInventory != null ? p.averageTargetInventory : '',
           mouldNos,
           mouldTypes,
+          cavities,
           processFlows,
           firstProcesses
         ];
       });
     } else {
       rows = [
-        ['OR-101', 'JMREF-2026-101', 'O-Ring 101 Description', '1234567890', 'CC-70', '12.50', '8', '140', '100', '2.0', '150', '3.5', '5000', '1', 'Cryogenic', 'Cryogenic', 'Cryogenic'],
-        ['OR-102', 'JMREF-2026-102', 'O-Ring 102 Description', '0987654321', 'CC-80', '18.00', '10', '150', '110', '2.5', '180', '4.2', '8000', '1, 2', 'Cryogenic, Yet to be assigned', 'Cryogenic, Visual ; Cryogenic, Gauge, Visual', 'Cryogenic, Cryogenic']
+        ['OR-101', 'JMREF-2026-101', 'O-Ring 101 Description', '1234567890', 'CC-70', '12.50', '8', '140', '100', '2.0', '150', '3.5', '5000', '1', 'Cryogenic', '4', 'Cryogenic', 'Cryogenic'],
+        ['OR-102', 'JMREF-2026-102', 'O-Ring 102 Description', '0987654321', 'CC-80', '18.00', '10', '150', '110', '2.5', '180', '4.2', '8000', '1, 2', 'Cryogenic, Yet to be assigned', '4, 2', 'Cryogenic, Visual ; Cryogenic, Gauge, Visual', 'Cryogenic, Cryogenic']
       ];
     }
 
@@ -583,20 +591,24 @@ const MasterModule = (() => {
 
       const mouldNosStr = normRow['mould nos'] || normRow['moulds'] || normRow['mould no'] || '1';
       const mouldTypesStr = normRow['mould types'] || normRow['mould type'] || 'Yet to be assigned';
+      const cavitiesStr = normRow['cavities'] || normRow['cavity'] || '';
       const processFlowsStr = normRow['process flows'] || normRow['process flow'] || 'Cryogenic';
       const firstProcessesStr = normRow['first processes'] || normRow['first process'] || 'Cryogenic';
 
       const mouldNos = String(mouldNosStr).split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
       const mouldTypes = String(mouldTypesStr).split(',').map(s => s.trim());
+      const cavitiesList = String(cavitiesStr).split(',').map(s => parseInt(s.trim(), 10));
       const processFlows = String(processFlowsStr).split(';').map(s => s.trim());
       const firstProcesses = String(firstProcessesStr).split(',').map(s => s.trim());
 
       const moulds = [];
       const numMoulds = Math.max(mouldNos.length, 1);
       for (let i = 0; i < numMoulds; i++) {
+        const cav = cavitiesList[i] != null && !isNaN(cavitiesList[i]) ? cavitiesList[i] : (cavitiesList[0] != null && !isNaN(cavitiesList[0]) ? cavitiesList[0] : null);
         moulds.push({
           mouldNo: mouldNos[i] || (i + 1),
           mouldType: mouldTypes[i] || mouldTypes[0] || 'Yet to be assigned',
+          cavities: cav,
           processFlow: processFlows[i] || processFlows[0] || 'Cryogenic',
           firstProcess: firstProcesses[i] || firstProcesses[0] || 'Cryogenic'
         });

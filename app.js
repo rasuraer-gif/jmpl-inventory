@@ -240,6 +240,7 @@ const NAV = [
   { id:'monthly-plan', label:'Monthly Plan',      icon:'📅', module:'monthly-plan',section:'tools', perm:'monthly-plan' },
   { id:'prod-sched',  label:'Production Schedule', icon:'📝', module:'prod-sched',  section:'tools', perm:'prod-sched' },
   { id:'replenishment',label:'Replenishment Planner',icon:'🎯', module:'replenishment',section:'tools', perm:'replenishment' },
+  { id:'task-tracking',label:'Task Tracking',     icon:'📋', module:'task-tracking',section:'tools' },
   { id:'reports',    label:'Reports',             icon:'📊', module:'reports',   section:'tools' },
   // Sub-reports
   { id:'rpt-inventory', label:'Inventory Report',  icon:'📦', module:'report_inventory', section:'tools', parent:'reports', perm:'report_inventory' },
@@ -297,6 +298,7 @@ const App = (() => {
     'monthly-plan': () => MonthlyPlanModule?.render(),
     'prod-sched':   () => ProductionScheduleModule?.render(),
     replenishment:  () => ReplenishmentModule?.render(),
+    'task-tracking': () => TaskTrackingModule?.render(),
     reports:    () => ReportsModule?.render('inventory'),
     admin:      () => AdminModule?.render(),
     'ai-agent': () => AIAgentModule?.render(),
@@ -338,6 +340,7 @@ const App = (() => {
     'monthly-plan':'Monthly Plan',
     'prod-sched':'Production Schedule',
     replenishment:'Replenishment Planner',
+    'task-tracking':'Task Tracking',
     report_inventory:'Inventory Report',
     report_sales:'Sales Report',
     report_production:'Production Report',
@@ -891,16 +894,18 @@ const App = (() => {
                   <tr><th>Stage</th><th>Input</th><th>Output</th><th>Loss</th><th>Date</th><th>Notes</th></tr>
                 </thead>
                 <tbody>
-                  ${DB.StageRecords.all().filter(r => r.batchId === b.id).sort((x,y) => (x.createdAt||'').localeCompare(y.createdAt||'')).map(r => `
-                    <tr>
-                      <td class="font-semibold">${r.stage.toUpperCase()}</td>
-                      <td>${formatNum(r.inputQty)}</td>
-                      <td>${formatNum(r.outputQty)}</td>
-                      <td class="text-danger">${formatNum(r.lossQty)}</td>
-                      <td>${r.date}</td>
-                      <td class="text-muted" style="max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${r.notes||''}">${r.notes || '—'}</td>
-                    </tr>
-                  `).join('') || '<tr><td colspan="6" class="text-center text-muted">No stage history recorded</td></tr>'}
+                  ${DB.StageRecords.all().filter(r => r.batchId === b.id).sort((x,y) => (x.createdAt||'').localeCompare(y.createdAt||'')).map(r => {
+                    const displayLoss = (r.stage === 'store') ? 0 : Math.max(0, (r.inputQty || 0) - (r.outputQty || 0));
+                    return `
+                      <tr>
+                        <td class="font-semibold">${r.stage.toUpperCase()}</td>
+                        <td>${formatNum(r.inputQty)}</td>
+                        <td>${formatNum(r.outputQty)}</td>
+                        <td class="text-danger">${formatNum(displayLoss)}</td>
+                        <td>${r.date}</td>
+                        <td class="text-muted" style="max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${r.notes||''}">${r.notes || '—'}</td>
+                      </tr>`;
+                  }).join('') || '<tr><td colspan="6" class="text-center text-muted">No stage history recorded</td></tr>'}
                 </tbody>
               </table>
             </div>
@@ -1244,6 +1249,13 @@ function renderDashboard() {
       </tr>`;
   }).join('');
 
+  // Grand totals across all stages for the month
+  const grandCount = stageRecordsThisMonth.filter(r => STAGES.includes(r.stage)).length;
+  const grandIn = stageRecordsThisMonth.filter(r => STAGES.includes(r.stage)).reduce((sum, r) => sum + (r.inputQty || 0), 0);
+  const grandOut = stageRecordsThisMonth.filter(r => STAGES.includes(r.stage)).reduce((sum, r) => sum + (r.outputQty || 0), 0);
+  const grandLoss = stageRecordsThisMonth.filter(r => STAGES.includes(r.stage)).reduce((sum, r) => sum + (r.lossQty || 0), 0);
+  const grandLossPercent = grandIn > 0 ? ((grandLoss / grandIn) * 100).toFixed(1) + '%' : '0.0%';
+
   el.innerHTML = `
     <div class="animate-in">
       <!-- Welcome Header with Left-Aligned Logo -->
@@ -1357,6 +1369,16 @@ function renderDashboard() {
             <tbody>
               ${monthlyStageStatsHtml}
             </tbody>
+            <tfoot>
+              <tr style="border-top: 2px solid var(--border); font-weight: bold; background: rgba(255,255,255,0.02);">
+                <td>Total</td>
+                <td style="text-align: right;">${formatNum(grandCount)}</td>
+                <td style="text-align: right; color: var(--text-secondary);">${formatNum(grandIn)}</td>
+                <td style="text-align: right; color: var(--success); font-weight: 700;">${formatNum(grandOut)}</td>
+                <td style="text-align: right; color: var(--danger); font-weight: 600;">${formatNum(grandLoss)}</td>
+                <td style="text-align: right; font-weight: 600;" class="${grandLoss > 0 ? 'text-amber' : 'text-muted'}">${grandLossPercent}</td>
+              </tr>
+            </tfoot>
           </table>
         </div>
       </div>

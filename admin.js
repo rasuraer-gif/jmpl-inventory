@@ -54,6 +54,7 @@ const AdminModule = (() => {
           <button class="tab-btn ${activeTab==='vendor'?'active':''}" data-tab="vendor">🤝 Vendors</button>
           <button class="tab-btn ${activeTab==='op'?'active':''}" data-tab="op">👷 Operators</button>
           <button class="tab-btn ${activeTab==='insp'?'active':''}" data-tab="insp">🔍 Inspectors</button>
+          <button class="tab-btn ${activeTab==='tasks'?'active':''}" data-tab="tasks">📋 Tasks</button>
           <button class="tab-btn ${activeTab==='system'?'active':''}" data-tab="system">⚙️ Maintenance</button>
         </div>
         <div id="admin-tab-content"></div>
@@ -79,6 +80,7 @@ const AdminModule = (() => {
     if (tab === 'vendor') el.innerHTML = vendorTab();
     if (tab === 'op')     el.innerHTML = opTab();
     if (tab === 'insp')   el.innerHTML = inspectorTab();
+    if (tab === 'tasks')  el.innerHTML = tasksTab();
     if (tab === 'system') el.innerHTML = systemTab();
   }
 
@@ -759,5 +761,257 @@ const AdminModule = (() => {
     reader.readAsText(file);
   }
 
-  return { render, openAddUser, editUser, saveUser, toggleUser, onRoleChange, openAddSub, editSub, saveSub, toggleSub, openAddVendor, editVendor, saveVendor, toggleVendor, openAddOp, editOp, saveOp, toggleOp, openAddInspector, editInspector, saveInspector, toggleInspector, clearTransactionData, toggleDatabaseMode, triggerBackupExport, triggerBackupImport };
+  function tasksTab() {
+    const tasks = DB.Tasks.all();
+    const pendingTasks = tasks.filter(t => t.status === 'pending');
+    const inProgressTasks = tasks.filter(t => t.status === 'in_progress');
+    const completedTasks = tasks.filter(t => t.status === 'completed');
+    const cancelledTasks = tasks.filter(t => t.status === 'cancelled');
+
+    const statusLabels = {
+      pending: '<span class="badge badge-amber">Pending</span>',
+      in_progress: '<span class="badge badge-blue">In Progress</span>',
+      completed: '<span class="badge badge-green">Completed</span>',
+      cancelled: '<span class="badge badge-red">Cancelled</span>'
+    };
+
+    const userOpts = DB.Users.all().map(u => `<option value="${u.id}">${u.name}</option>`).join('');
+    const jmrefOpts = DB.Master.all().map(m => `<option value="${m.jmrefNo}">${m.jmrefNo} (${m.partNo})</option>`).join('');
+
+    const rows = tasks.map(t => {
+      const formattedDate = (t.createdAt || '').slice(0, 16).replace('T', ' ');
+      return `
+        <tr>
+          <td class="font-semibold text-blue">${t.title}</td>
+          <td><span class="badge badge-teal">${t.jmrefNo}</span></td>
+          <td>${t.assignedToName || '—'}</td>
+          <td>${statusLabels[t.status] || t.status}</td>
+          <td>${t.createdByName || '—'}</td>
+          <td class="text-sm text-muted">${formattedDate}</td>
+          <td>
+            <button class="btn btn-ghost btn-xs" onclick="AdminModule.viewTaskDetails('${t.id}')">⏳ Details &amp; History</button>
+          </td>
+        </tr>`;
+    }).join('');
+
+    return `
+      <div>
+        <!-- Stats Row -->
+        <div class="dashboard-stats-grid-6" style="grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); margin-bottom: 20px; gap:16px;">
+          <div class="stat-card blue">
+            <div class="stat-label">Total Tasks</div>
+            <div class="stat-value blue" style="font-size:20px;">${tasks.length}</div>
+          </div>
+          <div class="stat-card amber">
+            <div class="stat-label">Pending Tasks</div>
+            <div class="stat-value amber" style="font-size:20px;">${pendingTasks.length}</div>
+          </div>
+          <div class="stat-card blue">
+            <div class="stat-label">In Progress</div>
+            <div class="stat-value blue" style="font-size:20px;">${inProgressTasks.length}</div>
+          </div>
+          <div class="stat-card green">
+            <div class="stat-label">Completed</div>
+            <div class="stat-value green" style="font-size:20px;">${completedTasks.length}</div>
+          </div>
+        </div>
+
+        <!-- Tasks Table -->
+        <div class="card">
+          <div class="card-header flex justify-between items-center" style="padding: 12px 20px;">
+            <h3 style="margin:0;">🗂️ Task Assignments</h3>
+            <button class="btn btn-primary btn-sm" onclick="AdminModule.openCreateTask()">➕ Create New Task</button>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Task Title</th>
+                  <th>JMREF No</th>
+                  <th>Assigned To</th>
+                  <th>Status</th>
+                  <th>Created By</th>
+                  <th>Created Date</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rows || '<tr><td colspan="7" class="text-center text-muted" style="padding:20px;">No tasks registered yet.</td></tr>'}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        
+        <!-- Admin Task Details Modal -->
+        <div class="modal-overlay hidden" id="admin-task-detail-modal">
+          <div class="modal modal-md" style="max-width: 600px;">
+            <div class="modal-header">
+              <h3>⏳ Task Details &amp; Timeline History</h3>
+              <button class="modal-close" onclick="document.getElementById('admin-task-detail-modal').classList.add('hidden')">&#x2715;</button>
+            </div>
+            <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
+              <div style="background: var(--bg-input); padding: 14px; border-radius: 8px; margin-bottom: 20px; border: 1px solid var(--border);">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 13px;">
+                  <div>
+                    <span class="text-xs text-muted" style="text-transform:uppercase; font-weight:600;">Task Title</span>
+                    <div class="font-semibold" id="adm-task-title"></div>
+                  </div>
+                  <div>
+                    <span class="text-xs text-muted" style="text-transform:uppercase; font-weight:600;">JMREF No</span>
+                    <div class="font-semibold" id="adm-task-jmref"></div>
+                  </div>
+                  <div style="grid-column: span 2;">
+                    <span class="text-xs text-muted" style="text-transform:uppercase; font-weight:600;">Description</span>
+                    <div style="white-space: pre-wrap;" id="adm-task-desc"></div>
+                  </div>
+                  <div style="grid-column: span 2; display: none;" id="adm-task-solution-panel">
+                    <span class="text-xs text-muted" style="text-transform:uppercase; font-weight:600; color:var(--success);">Solution / Action Taken</span>
+                    <div style="white-space: pre-wrap; font-weight: 600; color:var(--success);" id="adm-task-solution"></div>
+                  </div>
+                </div>
+              </div>
+              
+              <h4 style="font-size:14px; font-weight:700; margin-bottom:12px;">⏳ Tracking Logs History</h4>
+              <div id="adm-task-timeline" style="display:flex; flex-direction:column; gap:12px;"></div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-secondary" onclick="document.getElementById('admin-task-detail-modal').classList.add('hidden')">Close</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Admin Task Create Modal -->
+        <div class="modal-overlay hidden" id="adm-task-create-modal">
+          <div class="modal modal-md">
+            <div class="modal-header">
+              <h3>➕ Create New Task (Admin)</h3>
+              <button class="modal-close" onclick="document.getElementById('adm-task-create-modal').classList.add('hidden')">&#x2715;</button>
+            </div>
+            <div class="modal-body">
+              <div class="form-group">
+                <label class="form-label">Associated JMREF No <span class="required">*</span></label>
+                <select id="adm-task-create-jmref" class="form-control">
+                  <option value="">Select JMREF...</option>
+                  ${jmrefOpts}
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Task Title <span class="required">*</span></label>
+                <input type="text" id="adm-task-create-title" class="form-control" placeholder="Enter short task summary">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Task Description</label>
+                <textarea id="adm-task-create-desc" class="form-control" rows="3" placeholder="Enter detailed task context or issue description"></textarea>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Assign To User <span class="required">*</span></label>
+                <select id="adm-task-create-assign" class="form-control">
+                  <option value="">Select user...</option>
+                  ${userOpts}
+                </select>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-secondary" onclick="document.getElementById('adm-task-create-modal').classList.add('hidden')">Cancel</button>
+              <button class="btn btn-primary" onclick="AdminModule.createTask()">Create Task</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function viewTaskDetails(taskId) {
+    const t = DB.Tasks.find(taskId);
+    if (!t) return;
+    
+    document.getElementById('adm-task-title').textContent = t.title || '—';
+    document.getElementById('adm-task-jmref').textContent = t.jmrefNo || '—';
+    document.getElementById('adm-task-desc').textContent = t.taskDesc || '—';
+    
+    const solPanel = document.getElementById('adm-task-solution-panel');
+    const solText = document.getElementById('adm-task-solution');
+    if (t.solution) {
+      solPanel.style.display = 'block';
+      solText.textContent = t.solution;
+    } else {
+      solPanel.style.display = 'none';
+    }
+    
+    const timelineEl = document.getElementById('adm-task-timeline');
+    const statusPills = {
+      pending: '<span class="badge badge-amber btn-xs">Pending</span>',
+      in_progress: '<span class="badge badge-blue btn-xs">In Progress</span>',
+      completed: '<span class="badge badge-green btn-xs">Completed</span>',
+      cancelled: '<span class="badge badge-red btn-xs">Cancelled</span>'
+    };
+    
+    if (timelineEl) {
+      timelineEl.innerHTML = (t.history || []).map(h => `
+        <div style="border-left: 2px solid var(--border); padding-left: 14px; position: relative; margin-bottom: 6px;">
+          <div style="position: absolute; left: -6px; top: 4px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent-blue);"></div>
+          <div class="flex justify-between items-center flex-wrap gap-2">
+            <div class="font-semibold" style="font-size: 13px;">${statusPills[h.status] || h.status}</div>
+            <div class="text-xs text-muted">${h.date || ''} — by ${h.updatedBy || 'system'}</div>
+          </div>
+          <div class="text-sm text-muted mt-1" style="word-break: break-word;">${h.note || '—'}</div>
+          ${h.solution ? `<div class="text-sm mt-1" style="color: var(--success); font-weight: 600;">🛠️ Solution: ${h.solution}</div>` : ''}
+        </div>
+      `).join('') || '<div class="text-muted text-center">No history logs recorded</div>';
+    }
+    
+    document.getElementById('admin-task-detail-modal').classList.remove('hidden');
+  }
+
+  function openCreateTask() {
+    document.getElementById('adm-task-create-jmref').value = '';
+    document.getElementById('adm-task-create-title').value = '';
+    document.getElementById('adm-task-create-desc').value = '';
+    document.getElementById('adm-task-create-assign').value = '';
+    document.getElementById('adm-task-create-modal').classList.remove('hidden');
+  }
+
+  function createTask() {
+    const jmrefNo = document.getElementById('adm-task-create-jmref').value;
+    const title = document.getElementById('adm-task-create-title').value.trim();
+    const taskDesc = document.getElementById('adm-task-create-desc').value.trim();
+    const assignedId = document.getElementById('adm-task-create-assign').value;
+
+    if (!jmrefNo || !title || !assignedId) {
+      showToast('Please fill all required fields (*)', 'error');
+      return;
+    }
+
+    const assignedUser = DB.Users.find(assignedId);
+    const session = Auth.getSession();
+    const timestamp = new Date().toISOString();
+    const initialHistory = [{
+      status: 'pending',
+      note: 'Task initialized & assigned to ' + (assignedUser ? assignedUser.name : 'unknown'),
+      updatedBy: session ? session.name : 'system',
+      date: timestamp.slice(0, 16).replace('T', ' '),
+      createdAt: timestamp
+    }];
+
+    DB.Tasks.insert({
+      jmrefNo,
+      title,
+      taskDesc,
+      assignedTo: assignedId,
+      assignedToName: assignedUser ? assignedUser.name : 'unknown',
+      status: 'pending',
+      solution: '',
+      createdBy: session ? session.userId : 'system',
+      createdByName: session ? session.name : 'system',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      history: initialHistory
+    });
+
+    showToast('Task created successfully!', 'success');
+    document.getElementById('adm-task-create-modal').classList.add('hidden');
+    renderTab('tasks');
+  }
+
+  return { render, openAddUser, editUser, saveUser, toggleUser, onRoleChange, openAddSub, editSub, saveSub, toggleSub, openAddVendor, editVendor, saveVendor, toggleVendor, openAddOp, editOp, saveOp, toggleOp, openAddInspector, editInspector, saveInspector, toggleInspector, clearTransactionData, toggleDatabaseMode, triggerBackupExport, triggerBackupImport, viewTaskDetails, openCreateTask, createTask };
 })();

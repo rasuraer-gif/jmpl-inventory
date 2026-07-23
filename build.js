@@ -35,7 +35,8 @@ const filesToCopy = [
   'production-schedule.js',
   'replenishment.js',
   'reports.js',
-  'ai-agent.js'
+  'ai-agent.js',
+  'task-tracking.js'
 ];
 
 filesToCopy.forEach(file => {

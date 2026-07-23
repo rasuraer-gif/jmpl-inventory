@@ -116,6 +116,7 @@ const VisualModule = (() => {
         <td>${r.inspectorName||'—'}</td>
         <td>${formatNum(r.inputQty)}</td>
         <td>${formatNum(r.outputQty)}</td>
+        <td>${formatNum(r.reprocessQty || 0)}</td>
         <td class="text-danger font-semibold">${formatNum(r.lossQty)}</td>
         <td><span class="badge badge-red">${pct}</span></td>
         <td><span class="badge badge-gray">${r.movedTo||'—'}</span></td>
@@ -138,7 +139,7 @@ const VisualModule = (() => {
         <div class="table-wrap">
           <table class="data-table">
             <thead>
-              <tr><th>Batch</th><th>JMREF</th><th>Inspector</th><th>Input</th><th>Output</th><th>Loss</th><th>% Loss</th><th>Moved To</th><th>Date</th></tr>
+              <tr><th>Batch</th><th>JMREF</th><th>Inspector</th><th>Input</th><th>Output</th><th>Reprocess</th><th>Loss</th><th>% Loss</th><th>Moved To</th><th>Date</th></tr>
             </thead>
             <tbody>${rows}</tbody>
           </table>
@@ -319,7 +320,13 @@ const VisualModule = (() => {
     if (dest === 'trimming' || dest === 'deflashing') {
       vendorGroup.classList.remove('hidden');
       const vendors = DB.Vendors.byDept(dest);
-      vendorSelect.innerHTML = '<option value="">Select vendor...</option>' + vendors.map(v => `<option value="${v.id}">${v.name}</option>`).join('');
+      if (vendors.length === 1) {
+        vendorSelect.innerHTML = `<option value="${vendors[0].id}" selected>${vendors[0].name}</option>`;
+        vendorSelect.value = vendors[0].id;
+      } else {
+        vendorSelect.innerHTML = '<option value="">Select vendor...</option>' + vendors.map(v => `<option value="${v.id}">${v.name}</option>`).join('');
+        vendorSelect.value = '';
+      }
     } else {
       vendorGroup.classList.add('hidden');
       vendorSelect.innerHTML = '<option value="">Not required</option>';
@@ -433,7 +440,7 @@ const VisualModule = (() => {
     }
 
     if (!isStock) {
-      document.getElementById('vis-loss-qty').value = Math.max(0, _visInputQty - out - rep);
+      document.getElementById('vis-loss-qty').value = Math.max(0, _visInputQty - out);
     }
   }
   function process() {
@@ -520,12 +527,14 @@ const VisualModule = (() => {
         }
       }, 500);
 
+      const stageLossQty = totalDeducted - outputQty;
+
       DB.StageRecords.insert({
         batchId: subBatch.id,
         stage: 'visual',
         inputQty: totalDeducted,
         outputQty: outputQty,
-        lossQty: lossQty,
+        lossQty: stageLossQty,
         reprocessQty: finalReprocessQty,
         reprocessDestination: finalReprocessQty > 0 ? reprocessDestination : '',
         vendorId: finalVendorId,
@@ -538,11 +547,11 @@ const VisualModule = (() => {
         iterationNo: batch?.recheckIteration||null
       });
 
-      if (lossQty > 0) {
+      if (stageLossQty > 0) {
         DB.LossTracker.insert({
           batchId: subBatch.id,
           stage: 'visual',
-          lossQty,
+          lossQty: stageLossQty,
           date: dateStr,
           jmrefNo: _activeBatch.jmrefNo,
           partNo: _activeBatch.partNo,
@@ -600,7 +609,7 @@ const VisualModule = (() => {
       return;
     }
 
-    const lossQty = Math.max(0, _visInputQty - outputQty - finalReprocessQty);
+    const lossQty = Math.max(0, _visInputQty - outputQty);
 
     DB.StageRecords.insert({
       batchId,

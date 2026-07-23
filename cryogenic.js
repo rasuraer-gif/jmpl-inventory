@@ -304,7 +304,13 @@ const CryogenicModule = (() => {
     if (dest === 'trimming') {
       vendorGroup.classList.remove('hidden');
       const vendors = DB.Vendors.byDept(dest);
-      vendorSelect.innerHTML = '<option value="">Select vendor...</option>' + vendors.map(v => `<option value="${v.id}">${v.name}</option>`).join('');
+      if (vendors.length === 1) {
+        vendorSelect.innerHTML = `<option value="${vendors[0].id}" selected>${vendors[0].name}</option>`;
+        vendorSelect.value = vendors[0].id;
+      } else {
+        vendorSelect.innerHTML = '<option value="">Select vendor...</option>' + vendors.map(v => `<option value="${v.id}">${v.name}</option>`).join('');
+        vendorSelect.value = '';
+      }
     } else {
       vendorGroup.classList.add('hidden');
       vendorSelect.innerHTML = '<option value="">Not required</option>';
