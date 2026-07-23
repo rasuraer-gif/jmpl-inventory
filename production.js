@@ -995,6 +995,7 @@ const ProductionModule = (() => {
     
     const dest = document.getElementById('prod-sub-destination').value;
     
+    let vendorId = '';
     if (type === 'subcontractor') {
       vendorId = document.getElementById('prod-sub-vendor')?.value || '';
       if ((dest === 'trimming' || dest === 'deflashing' || dest === 'waiting-visual') && !vendorId) {
