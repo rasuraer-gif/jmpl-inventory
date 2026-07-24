@@ -567,13 +567,56 @@ const DB = (() => {
     remove: (id) => remove('users', id),
   };
 
+  function syncMouldsForPart(part) {
+    if (!part || !part.jmrefNo || !part.moulds || !part.moulds.length) return;
+    const existingMoulds = getAll('moulds');
+    part.moulds.forEach(m => {
+      const mouldNo = Number(m.mouldNo);
+      if (isNaN(mouldNo)) return;
+      const mouldType = m.mouldType || 'Yet to be assigned';
+      const cavity = m.cavities != null && !isNaN(Number(m.cavities)) ? Number(m.cavities) : null;
+      const mouldId = `${part.jmrefNo}-${mouldType.toUpperCase().replace(/\s+/g, '_')}-${String(mouldNo).padStart(2, '0')}`;
+      const existing = existingMoulds.find(em => em.jmrefNo === part.jmrefNo && Number(em.mouldNo) === mouldNo);
+      
+      const fields = {
+        jmrefNo: part.jmrefNo,
+        mouldNo: mouldNo,
+        mouldType: mouldType,
+        mouldId: mouldId,
+        cavity: cavity,
+        pmThreshold: existing ? (existing.pmThreshold || 10000) : 10000,
+        size: existing ? (existing.size || '300*300') : '300*300',
+        make: existing ? (existing.make || 'JMPL') : 'JMPL',
+        client: existing ? (existing.client || 'JMPL') : 'JMPL',
+        creationDate: existing ? (existing.creationDate || new Date().toISOString().slice(0, 10)) : new Date().toISOString().slice(0, 10),
+        layoutDiagram: existing ? (existing.layoutDiagram || '') : '',
+        rackDetails: existing ? (existing.rackDetails || '') : '',
+        notes: existing ? (existing.notes || '') : ''
+      };
+      
+      if (existing) {
+        update('moulds', existing.id, fields);
+      } else {
+        insert('moulds', fields);
+      }
+    });
+  }
+
   // ── INVENTORY MASTER ──────────────────────────────────────
   const Master = {
     all: () => getAll('master'),
     find: (id) => findById('master', id),
     findByJmref: (jmref) => getAll('master').find(r => r.jmrefNo === jmref) || null,
-    insert: (r) => insert('master', r),
-    update: (id, c) => update('master', id, c),
+    insert: (r) => {
+      const res = insert('master', r);
+      syncMouldsForPart(res);
+      return res;
+    },
+    update: (id, c) => {
+      const res = update('master', id, c);
+      syncMouldsForPart(res);
+      return res;
+    },
     remove: (id) => remove('master', id),
   };
 

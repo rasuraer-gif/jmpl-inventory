@@ -4,6 +4,7 @@
 const MasterModule = (() => {
   let searchTerm = '';
   let parsedRows = [];
+  let lastRawJson = null;
 
   function render() {
     const el = document.getElementById('content');
@@ -434,6 +435,11 @@ const MasterModule = (() => {
               <input type="file" id="bulk-file-input" class="form-control" accept=".xlsx, .xls" onchange="MasterModule.handleFileSelect(event)">
             </div>
             
+            <div class="form-group" style="margin-top: 12px; display: flex; align-items: center; gap: 8px;">
+              <input type="checkbox" id="bulk-update-existing" style="cursor: pointer; width: 16px; height: 16px;" onchange="MasterModule.handleUpdateCheckboxChange()">
+              <label for="bulk-update-existing" style="font-size: 13px; font-weight: 600; cursor: pointer; color: var(--text);">Update existing parts if duplicate Part No / JMREF No is found</label>
+            </div>
+            
             <div id="bulk-preview-container" class="hidden" style="margin-top:20px;">
               <h4 style="font-size:13.5px; font-weight:600; margin-bottom:10px;" id="bulk-preview-title">Preview parsed records</h4>
               <div class="table-wrap" style="max-height: 240px; overflow-y: auto;">
@@ -461,6 +467,9 @@ const MasterModule = (() => {
   function openBulk() {
     const input = document.getElementById('bulk-file-input');
     if (input) input.value = '';
+    const updateChk = document.getElementById('bulk-update-existing');
+    if (updateChk) updateChk.checked = false;
+    lastRawJson = null;
     const container = document.getElementById('bulk-preview-container');
     if (container) container.classList.add('hidden');
     const saveBtn = document.getElementById('bulk-save-btn');
@@ -544,6 +553,7 @@ const MasterModule = (() => {
         const firstSheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[firstSheetName];
         const rawJson = XLSX.utils.sheet_to_json(worksheet);
+        lastRawJson = rawJson;
         validateAndPreview(rawJson);
       } catch (err) {
         console.error(err);
@@ -551,6 +561,12 @@ const MasterModule = (() => {
       }
     };
     reader.readAsArrayBuffer(file);
+  }
+
+  function handleUpdateCheckboxChange() {
+    if (lastRawJson) {
+      validateAndPreview(lastRawJson);
+    }
   }
 
   function validateAndPreview(rawJson) {
@@ -614,18 +630,34 @@ const MasterModule = (() => {
         });
       }
 
+      const updateExisting = document.getElementById('bulk-update-existing')?.checked;
       let status = 'Valid';
       let isValid = true;
+      let existingId = null;
 
       if (!partNo || !jmrefNo || !description) {
         status = 'Missing required fields';
         isValid = false;
-      } else if (existingMaster.some(p => p.partNo === partNo) || seenPartNo.has(partNo)) {
-        status = 'Duplicate Part No';
-        isValid = false;
-      } else if (existingMaster.some(p => p.jmrefNo === jmrefNo) || seenJmref.has(jmrefNo)) {
-        status = 'Duplicate JMREF No';
-        isValid = false;
+      } else {
+        const dupPart = existingMaster.find(p => p.partNo === partNo);
+        const dupJmref = existingMaster.find(p => p.jmrefNo === jmrefNo);
+
+        if (dupPart || dupJmref) {
+          if (updateExisting) {
+            status = 'Update';
+            existingId = dupPart ? dupPart.id : dupJmref.id;
+            isValid = true;
+          } else {
+            status = dupPart ? 'Duplicate Part No' : 'Duplicate JMREF No';
+            isValid = false;
+          }
+        } else if (seenPartNo.has(partNo)) {
+          status = 'Duplicate Part No in Excel';
+          isValid = false;
+        } else if (seenJmref.has(jmrefNo)) {
+          status = 'Duplicate JMREF No in Excel';
+          isValid = false;
+        }
       }
 
       if (isValid) {
@@ -649,14 +681,18 @@ const MasterModule = (() => {
         blankWeight: blankWeight !== '' ? parseFloat(blankWeight) : null,
         averageTargetInventory: averageTargetInventory !== '' ? parseInt(averageTargetInventory, 10) : null,
         moulds,
+        id: existingId,
         isValid
       };
 
       parsedRows.push(record);
 
-      const statusBadge = isValid 
-        ? `<span class="badge badge-green">Valid</span>`
-        : `<span class="badge badge-red" title="${status}">${status}</span>`;
+      let statusBadge = `<span class="badge badge-green">Valid</span>`;
+      if (!isValid) {
+        statusBadge = `<span class="badge badge-red" title="${status}">${status}</span>`;
+      } else if (existingId) {
+        statusBadge = `<span class="badge badge-blue">Update</span>`;
+      }
 
       tbody.innerHTML += `
         <tr>
@@ -673,26 +709,49 @@ const MasterModule = (() => {
 
   function saveBulk() {
     let uploadedCount = 0;
+    let updatedCount = 0;
     parsedRows.forEach(row => {
       if (row.isValid) {
         const fields = { ...row };
         delete fields.isValid;
-        DB.Master.insert(fields);
-        uploadedCount++;
+        
+        if (fields.id) {
+          const existingId = fields.id;
+          delete fields.id;
+          const existingPart = DB.Master.find(existingId);
+          if (existingPart) {
+            const merged = { ...existingPart, ...fields };
+            if (fields.moulds && fields.moulds.length > 0) {
+              merged.moulds = fields.moulds;
+            }
+            DB.Master.update(existingId, merged);
+            updatedCount++;
+          }
+        } else {
+          DB.Master.insert(fields);
+          uploadedCount++;
+        }
       }
     });
 
-    showToast(`Successfully uploaded ${uploadedCount} parts!`, 'success');
-    document.getElementById('master-bulk-modal').classList.add('hidden');
+    if (updatedCount > 0 && uploadedCount > 0) {
+      showToast(`Successfully uploaded ${uploadedCount} new parts and updated ${updatedCount} parts!`, 'success');
+    } else if (updatedCount > 0) {
+      showToast(`Successfully updated ${updatedCount} parts!`, 'success');
+    } else {
+      showToast(`Successfully uploaded ${uploadedCount} parts!`, 'success');
+    }
     
+    document.getElementById('master-bulk-modal').classList.add('hidden');
+
     // Clear input
     const input = document.getElementById('bulk-file-input');
     if (input) input.value = '';
-    
+
     // Refresh stats & table
     renderStats();
     renderTable();
   }
 
-  return { render, search, openAdd, openEdit, save, remove, openBulk, downloadTemplate, handleFileSelect, saveBulk, addMouldRow, removeMouldRow };
+  return { render, search, openAdd, openEdit, save, remove, openBulk, downloadTemplate, handleFileSelect, saveBulk, addMouldRow, removeMouldRow, handleUpdateCheckboxChange };
 })();
