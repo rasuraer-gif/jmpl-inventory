@@ -435,6 +435,7 @@ const StoreModule = (() => {
         const storeRecs = DB.StageRecords.all().filter(r => r.batchId === b.id && r.stage === 'store');
         const storeQty = storeRecs.length ? storeRecs[0].inputQty : 0;
         return `<tr>
+          <td><input type="checkbox" class="bulk-stage-check" value="${b.id}" style="cursor:pointer;" onclick="event.stopPropagation()"></td>
           <td class="font-semibold text-blue">${b.batchNo}</td>
           <td><span class="badge badge-teal">${b.jmrefNo || '&#x2014;'}</span></td>
           <td>${b.partNo || '&#x2014;'}</td>
@@ -446,7 +447,10 @@ const StoreModule = (() => {
     return `
       <div class="card animate-in">
         <div class="card-header" style="flex-direction:row; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
-          <h3>Completed Batches in Store</h3>
+          <div style="display:flex; align-items:center; gap:16px;">
+            <h3>Completed Batches in Store</h3>
+            <button class="btn btn-secondary btn-sm" onclick="App.bulkPrintStageSelected()" style="padding:4px 12px; height:32px; display:flex; align-items:center; gap:6px;">🖨️ Bulk Print</button>
+          </div>
           <div class="search-input" style="max-width: 250px; margin: 0;">
             <span class="search-icon">&#128269;</span>
             <input type="text" id="store-batch-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${completedBatchSearch}" oninput="StoreModule.filterCompletedBatches(this.value)">
@@ -454,7 +458,7 @@ const StoreModule = (() => {
         </div>
         <div class="table-wrap">
           <table class="data-table">
-            <thead><tr><th>Batch No</th><th>JMREF</th><th>Part</th><th>Qty in Store</th><th>Completed</th></tr></thead>
+            <thead><tr><th><input type="checkbox" onclick="App.toggleAllStageChecks(this)" style="cursor:pointer;"></th><th>Batch No</th><th>JMREF</th><th>Part</th><th>Qty in Store</th><th>Completed</th></tr></thead>
             <tbody>${rows}</tbody>
           </table>
         </div>

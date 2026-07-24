@@ -55,6 +55,7 @@ const TrimmingModule = (() => {
       const inputQty = getInputQty(b.id);
       const isRecheck = !!(b.recheckCount && b.recheckCount > 0 && b.currentStage === 'trimming');
       return `<tr>
+        <td><input type="checkbox" class="bulk-stage-check" value="${b.id}" style="cursor:pointer;" onclick="event.stopPropagation()"></td>
         <td class="font-semibold text-blue">${b.batchNo}${isRecheck ? ' <span class="badge badge-amber" style="font-size:10px;">RECHECK #' + (b.recheckIteration||1) + '</span>' : ''}</td>
         <td>${b.partNo||'—'}</td>
         <td><span class="badge badge-teal">${b.jmrefNo||'—'}</span></td>
@@ -70,7 +71,10 @@ const TrimmingModule = (() => {
     }).join('');
     return `<div class="card">
       <div class="card-header" style="flex-direction:row; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
-        <h3>Pending Batches</h3>
+        <div style="display:flex; align-items:center; gap:16px;">
+          <h3>Pending Batches</h3>
+          <button class="btn btn-secondary btn-sm" onclick="App.bulkPrintStageSelected()" style="padding:4px 12px; height:32px; display:flex; align-items:center; gap:6px;">🖨️ Bulk Print</button>
+        </div>
         <div style="display:flex; align-items:center; gap:8px;">
           <div class="search-input" style="max-width: 250px; margin: 0;">
             <span class="search-icon">&#128269;</span>
@@ -79,7 +83,7 @@ const TrimmingModule = (() => {
           <button class="btn btn-secondary btn-sm" onclick="Scanner.start('trim-pending-search', (val) => TrimmingModule.filterPending(val))" style="padding: 4px 8px; display: flex; align-items: center; justify-content: center; height: 32px;" title="Scan QR Code">📷</button>
         </div>
       </div>
-      <div class="table-wrap"><table class="data-table"><thead><tr><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Input Qty</th><th>Received</th><th>Actions</th></tr></thead><tbody>${rows || '<tr><td colspan="6" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody></table></div></div>`;
+      <div class="table-wrap"><table class="data-table"><thead><tr><th><input type="checkbox" onclick="App.toggleAllStageChecks(this)" style="cursor:pointer;"></th><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Input Qty</th><th>Received</th><th>Actions</th></tr></thead><tbody>${rows || '<tr><td colspan="7" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody></table></div></div>`;
   }
   function historyTab() {
     let recs = DB.StageRecords.byStage('trimming');

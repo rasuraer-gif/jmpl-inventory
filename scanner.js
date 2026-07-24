@@ -53,6 +53,17 @@ const Scanner = (() => {
 
     modal.classList.remove('hidden');
     
+    // Clear and focus manual input
+    const manualInp = document.getElementById('scanner-manual-input');
+    if (manualInp) {
+      manualInp.value = '';
+      setTimeout(() => manualInp.focus(), 150);
+    }
+    
+    // Reset viewfinder HTML in case it had fallback notice from a previous run
+    qrRegion.innerHTML = '';
+    qrRegion.style.background = '#000';
+
     // Clear any previous instances
     if (html5QrcodeScanner) {
       try { html5QrcodeScanner.clear(); } catch(e) {}
@@ -98,8 +109,10 @@ const Scanner = (() => {
         (error) => {}
       ).catch(fallbackErr => {
         console.error("Camera scanner initialization failed completely:", fallbackErr);
-        showToast('Camera access blocked or unavailable: ' + fallbackErr.message, 'error');
-        stop();
+        showToast('Camera unavailable. You can enter batch number manually.', 'warning');
+        
+        // Render a user-friendly notice in the viewfinder instead of closing the modal
+        qrRegion.innerHTML = `<div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:180px; padding:20px; color:#f43f5e; font-weight:700; text-align:center; font-size:13px; box-sizing:border-box;">⚠️ Camera Unavailable<span style="font-weight:400; font-size:11.5px; color:var(--text-secondary); margin-top:8px; display:block; line-height:1.4;">Camera access is blocked or unavailable. Please type the batch number manually below.</span></div>`;
       });
     });
   }
@@ -109,14 +122,20 @@ const Scanner = (() => {
     if (modal) modal.classList.add('hidden');
 
     if (html5QrcodeScanner) {
-      html5QrcodeScanner.stop().then(() => {
-        html5QrcodeScanner.clear();
-        html5QrcodeScanner = null;
-      }).catch(err => {
-        console.warn("Error stopping scanner:", err);
+      const isScanning = html5QrcodeScanner.isScanning;
+      if (isScanning) {
+        html5QrcodeScanner.stop().then(() => {
+          html5QrcodeScanner.clear();
+          html5QrcodeScanner = null;
+        }).catch(err => {
+          console.warn("Error stopping scanner:", err);
+          try { html5QrcodeScanner.clear(); } catch(e) {}
+          html5QrcodeScanner = null;
+        });
+      } else {
         try { html5QrcodeScanner.clear(); } catch(e) {}
         html5QrcodeScanner = null;
-      });
+      }
     }
   }
 
@@ -135,6 +154,5 @@ const Scanner = (() => {
     }
     stop();
   }
-
   return { start, stop, submitManual };
 })();

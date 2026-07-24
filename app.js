@@ -210,6 +210,113 @@ function printBarcode(batchId) {
 }
 window.printBarcode = printBarcode;
 
+function bulkPrintBarcodes(ids) {
+  if (!ids || !ids.length) {
+    showToast('Please select at least one batch to print', 'warning');
+    return;
+  }
+
+  const printWindow = window.open('', '_blank', 'width=600,height=800');
+  if (!printWindow) {
+    showToast('Popup blocked! Please allow popups for printing.', 'warning');
+    return;
+  }
+
+  const STAGE_LABELS = {
+    production: 'Moulding',
+    cryogenic: 'Cryogenic',
+    deflashing: 'Manual DE Flashing',
+    trimming: 'Trimming',
+    'post-curing': 'Post Curing',
+    'waiting-visual': 'Visual Inspection',
+    visual: 'Visual Inspection',
+    gauge: 'Gauge Inspection',
+    quality: 'QC Final',
+    store: 'Store'
+  };
+
+  let labelsHtml = '';
+  ids.forEach((batchId, idx) => {
+    const batch = DB.Batches.find(batchId);
+    if (!batch) return;
+    const formattedDate = batch.productionDate ? formatDate(batch.productionDate) : formatDate(batch.createdAt);
+    const part = DB.Master.find(batch.partId) || DB.Master.all().find(p => p.partNo === batch.partNo || p.jmrefNo === batch.jmrefNo) || {};
+    let mouldType = '—';
+    let processFlow = '—';
+    if (batch.mouldNo && part.moulds) {
+      const m = part.moulds.find(x => x.mouldNo === Number(batch.mouldNo));
+      if (m) {
+        mouldType = m.mouldType || '—';
+        processFlow = m.processFlow || '—';
+      }
+    }
+
+    const detailRowsHtml = batch.isStockUpload ? `
+      <div class="detail-row" style="display: flex; justify-content: space-between; margin-bottom: 8px; line-height: 1.3;"><span class="label" style="font-weight: 800; text-transform: uppercase; font-size: 18px;">JMREF:</span><span class="value" style="font-weight: 800; font-size: 20px; white-space: nowrap;">${batch.jmrefNo || '—'}</span></div>
+      <div class="detail-row" style="display: flex; justify-content: space-between; margin-bottom: 8px; line-height: 1.3;"><span class="label" style="font-weight: 800; text-transform: uppercase; font-size: 18px;">Part No:</span><span class="value" style="font-weight: 800; font-size: 20px; white-space: nowrap;">${batch.partNo || '—'}</span></div>
+      <div class="detail-row" style="display: flex; justify-content: space-between; margin-bottom: 8px; line-height: 1.3;"><span class="label" style="font-weight: 800; text-transform: uppercase; font-size: 18px;">Stage:</span><span class="value" style="font-weight: 800; font-size: 20px; white-space: nowrap;">${STAGE_LABELS[batch.currentStage] || batch.currentStage} (Stock)</span></div>
+      <div class="detail-row" style="display: flex; justify-content: space-between; margin-bottom: 8px; line-height: 1.3;"><span class="label" style="font-weight: 800; text-transform: uppercase; font-size: 18px;">Qty:</span><span class="value" style="font-weight: 800; font-size: 20px; white-space: nowrap;">${Number(batch.initialQty).toLocaleString('en-IN')}</span></div>
+      <div class="detail-row" style="display: flex; justify-content: space-between; margin-bottom: 8px; line-height: 1.3;"><span class="label" style="font-weight: 800; text-transform: uppercase; font-size: 18px;">Date:</span><span class="value" style="font-weight: 800; font-size: 20px; white-space: nowrap;">${formattedDate}</span></div>
+    ` : `
+      <div class="detail-row" style="display: flex; justify-content: space-between; margin-bottom: 8px; line-height: 1.3;"><span class="label" style="font-weight: 800; text-transform: uppercase; font-size: 18px;">JMREF:</span><span class="value" style="font-weight: 800; font-size: 20px; white-space: nowrap;">${batch.jmrefNo || '—'}</span></div>
+      <div class="detail-row" style="display: flex; justify-content: space-between; margin-bottom: 8px; line-height: 1.3;"><span class="label" style="font-weight: 800; text-transform: uppercase; font-size: 18px;">Part No:</span><span class="value" style="font-weight: 800; font-size: 20px; white-space: nowrap;">${batch.partNo || '—'}</span></div>
+      <div class="detail-row" style="display: flex; justify-content: space-between; margin-bottom: 8px; line-height: 1.3;"><span class="label" style="font-weight: 800; text-transform: uppercase; font-size: 18px;">Prod Date:</span><span class="value" style="font-weight: 800; font-size: 20px; white-space: nowrap;">${formattedDate}</span></div>
+      <div class="detail-row" style="display: flex; justify-content: space-between; margin-bottom: 8px; line-height: 1.3;"><span class="label" style="font-weight: 800; text-transform: uppercase; font-size: 18px;">Mould No:</span><span class="value" style="font-weight: 800; font-size: 20px; white-space: nowrap;">${batch.mouldNo != null ? batch.mouldNo : '—'}</span></div>
+      <div class="detail-row" style="display: flex; justify-content: space-between; margin-bottom: 8px; line-height: 1.3;"><span class="label" style="font-weight: 800; text-transform: uppercase; font-size: 18px;">Mould Type:</span><span class="value" style="font-weight: 800; font-size: 20px; white-space: nowrap;">${mouldType}</span></div>
+    `;
+
+    labelsHtml += `
+      <div class="label-container" style="${idx > 0 ? 'page-break-before: always;' : ''} width: 3.8in; height: 5.8in; border: 3px solid #000; display: flex; flex-direction: column; align-items: center; justify-content: space-between; box-sizing: border-box; padding: 16px; margin: 0 auto;">
+        <div class="company-title" style="font-size: 17px; font-weight: 900; letter-spacing: 0.5px; border-bottom: 3px solid #000; padding-bottom: 6px; width: 100%; text-align: center; text-transform: uppercase; white-space: nowrap;">JANANI MOULDINGS PVT. LTD.</div>
+        <div class="qr-wrapper" style="margin: 12px 0; display: flex; align-items: center; justify-content: center; position: relative; width: 100%; height: 200px;">
+          <div style="position: absolute; left: 0; top: 50%; transform: translateY(-50%); writing-mode: vertical-rl; font-size: 15px; font-weight: 900; text-transform: uppercase; color: #000; letter-spacing: 0.5px; white-space: nowrap; height: 180px; display: flex; align-items: center; justify-content: center; text-align: center; border-right: 1px dashed #000; padding-right: 8px;">
+            ${processFlow}
+          </div>
+          <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(batch.batchNo)}" style="width: 200px; height: 200px; display: block;" />
+          <div style="position: absolute; right: 0; top: 50%; transform: translateY(-50%); writing-mode: vertical-rl; font-size: 15px; font-weight: 900; text-transform: uppercase; color: #000; letter-spacing: 0.5px; white-space: nowrap; height: 180px; display: flex; align-items: center; justify-content: center; text-align: center; border-left: 1px dashed #000; padding-left: 8px;">
+            IB: ${batch.internalBatchNo || '—'}
+          </div>
+        </div>
+        <div class="batch-no-display" style="font-size: 20px; font-weight: 900; letter-spacing: 0.5px; margin-bottom: 12px; border: 3px solid #000; padding: 6px 12px; border-radius: 4px; background: #f3f4f6; text-align: center; white-space: nowrap; max-width: 100%; box-sizing: border-box; overflow: hidden; text-overflow: clip;">${batch.batchNo}</div>
+        <div class="details" style="width: 100%; border-top: 3px solid #000; padding-top: 12px; font-size: 18px;">
+          ${detailRowsHtml}
+        </div>
+      </div>
+    `;
+  });
+
+  printWindow.document.write(`
+    <html>
+    <head>
+      <title>Bulk Print Labels</title>
+      <style>
+        @page { size: 4in 6in; margin: 0; }
+        body { margin: 0; padding: 0; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background: #fff; color: #000; }
+      </style>
+    </head>
+    <body>
+      ${labelsHtml}
+      <script>
+        let printed = false;
+        function triggerPrint() {
+          if (printed) return;
+          printed = true;
+          setTimeout(function() {
+            window.print();
+            window.close();
+          }, 500);
+        }
+        window.onload = function() {
+          setTimeout(triggerPrint, 2500);
+        };
+      <\/script>
+    </body>
+    </html>
+  `);
+  printWindow.document.close();
+}
+window.bulkPrintBarcodes = bulkPrintBarcodes;
+
 // Close modal on overlay click
 document.addEventListener('click', e => {
   if (e.target.classList.contains('modal-overlay')) closeAllModals();
@@ -926,7 +1033,23 @@ const App = (() => {
     modal.classList.remove('hidden');
   }
 
-  return { navigate, init, toggleReportsMenu, openChangePasswordModal, changePassword, runQuickScan, showBatchGenealogy, get current() { return currentModule; }, changeDashboardMonth: (val) => { dashboardMonth = val; renderDashboard(); } };
+  function toggleAllStageChecks(chk) {
+    const list = document.querySelectorAll('.bulk-stage-check');
+    list.forEach(el => {
+      if (!el.disabled) el.checked = chk.checked;
+    });
+  }
+
+  function bulkPrintStageSelected() {
+    const checked = Array.from(document.querySelectorAll('.bulk-stage-check:checked')).map(el => el.value);
+    if (!checked.length) {
+      showToast('Please select at least one batch to print', 'warning');
+      return;
+    }
+    window.bulkPrintBarcodes(checked);
+  }
+
+  return { navigate, init, toggleReportsMenu, openChangePasswordModal, changePassword, runQuickScan, showBatchGenealogy, get current() { return currentModule; }, changeDashboardMonth: (val) => { dashboardMonth = val; renderDashboard(); }, toggleAllStageChecks, bulkPrintStageSelected };
 })();
 
 // ── Login Page ─────────────────────────────────────────────
