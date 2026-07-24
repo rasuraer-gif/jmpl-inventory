@@ -159,7 +159,8 @@ const DeflashingModule = (() => {
 
   function processModal() {
     const vendors = DB.Vendors.byDept('deflashing');
-    const vendorOpts = vendors.map(v=>`<option value="${v.id}">${v.name}</option>`).join('');
+    const shanthi = vendors.find(v => v.name.toLowerCase().includes('shanthi') || v.name.toLowerCase().includes('flash'));
+    const vendorOpts = vendors.map(v => `<option value="${v.id}" ${shanthi && v.id === shanthi.id ? 'selected' : ''}>${v.name}</option>`).join('');
     return `<div class="modal-overlay hidden" id="de-process-modal">
       <div class="modal modal-sm">
         <div class="modal-header"><h3>Process DE Flashing</h3><button class="modal-close" onclick="document.getElementById('de-process-modal').classList.add('hidden')">&#x2715;</button></div>
@@ -260,12 +261,19 @@ const DeflashingModule = (() => {
     if (dest === 'trimming' || dest === 'deflashing') {
       vendorGroup.classList.remove('hidden');
       const vendors = DB.Vendors.byDept(dest);
+      
+      let defaultVendorId = '';
+      if (dest === 'deflashing') {
+        const shanthi = vendors.find(v => v.name.toLowerCase().includes('shanthi') || v.name.toLowerCase().includes('flash'));
+        if (shanthi) defaultVendorId = shanthi.id;
+      }
+
       if (vendors.length === 1) {
         vendorSelect.innerHTML = `<option value="${vendors[0].id}" selected>${vendors[0].name}</option>`;
         vendorSelect.value = vendors[0].id;
       } else {
-        vendorSelect.innerHTML = '<option value="">Select vendor...</option>' + vendors.map(v => `<option value="${v.id}">${v.name}</option>`).join('');
-        vendorSelect.value = '';
+        vendorSelect.innerHTML = '<option value="">Select vendor...</option>' + vendors.map(v => `<option value="${v.id}" ${v.id === defaultVendorId ? 'selected' : ''}>${v.name}</option>`).join('');
+        vendorSelect.value = defaultVendorId || '';
       }
     } else {
       vendorGroup.classList.add('hidden');

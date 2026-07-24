@@ -225,11 +225,12 @@ const ProductionModule = (() => {
                 <label class="form-label">Subcontractor <span class="required">*</span></label>
                 <select id="prod-sub" class="form-control"><option value="">Select subcontractor...</option>${subOpts}</select>
               </div>
-              <div class="form-group hidden" id="prod-sub-vendor-group" style="flex:1;">
-                <label class="form-label">Vendor <span class="required">*</span></label>
-                <select id="prod-sub-vendor" class="form-control"><option value="">Select vendor...</option></select>
-              </div>
             </div>
+          </div>
+
+          <div class="form-group hidden" id="prod-sub-vendor-group" style="margin-top: 12px; margin-bottom: 12px;">
+            <label class="form-label">Vendor <span class="required">*</span></label>
+            <select id="prod-sub-vendor" class="form-control"><option value="">Select vendor...</option></select>
           </div>
 
           <div class="form-group"><label class="form-label">Notes</label><textarea id="prod-notes" class="form-control" rows="2" placeholder="Optional notes"></textarea></div>
@@ -517,12 +518,19 @@ const ProductionModule = (() => {
     if (dest === 'trimming' || dest === 'deflashing') {
       vendorGroup.classList.remove('hidden');
       const vendors = DB.Vendors.byDept(dest);
+      
+      let defaultVendorId = '';
+      if (dest === 'deflashing') {
+        const shanthi = vendors.find(v => v.name.toLowerCase().includes('shanthi') || v.name.toLowerCase().includes('flash'));
+        if (shanthi) defaultVendorId = shanthi.id;
+      }
+
       if (vendors.length === 1) {
         vendorSelect.innerHTML = `<option value="${vendors[0].id}" selected>${vendors[0].name}</option>`;
         vendorSelect.value = vendors[0].id;
       } else {
-        vendorSelect.innerHTML = '<option value="">Select vendor...</option>' + vendors.map(v => `<option value="${v.id}">${v.name}</option>`).join('');
-        vendorSelect.value = '';
+        vendorSelect.innerHTML = '<option value="">Select vendor...</option>' + vendors.map(v => `<option value="${v.id}" ${v.id === defaultVendorId ? 'selected' : ''}>${v.name}</option>`).join('');
+        vendorSelect.value = defaultVendorId || '';
       }
     } else {
       vendorGroup.classList.add('hidden');
@@ -958,17 +966,22 @@ const ProductionModule = (() => {
     const vendorSelect = document.getElementById('prod-sub-vendor');
     if (!vendorGroup || !vendorSelect) return;
     
-    const type = document.querySelector('[name=prod-type]:checked')?.value || 'inhouse';
-    
-    if (type === 'subcontractor' && (dest === 'trimming' || dest === 'deflashing' || dest === 'waiting-visual')) {
+    if (dest === 'trimming' || dest === 'deflashing') {
       vendorGroup.classList.remove('hidden');
-      const vendors = DB.Vendors.byDept(dest === 'waiting-visual' ? 'visual' : dest);
+      const vendors = DB.Vendors.byDept(dest);
+      
+      let defaultVendorId = '';
+      if (dest === 'deflashing') {
+        const shanthi = vendors.find(v => v.name.toLowerCase().includes('shanthi') || v.name.toLowerCase().includes('flash'));
+        if (shanthi) defaultVendorId = shanthi.id;
+      }
+
       if (vendors.length === 1) {
         vendorSelect.innerHTML = `<option value="${vendors[0].id}" selected>${vendors[0].name}</option>`;
         vendorSelect.value = vendors[0].id;
       } else {
-        vendorSelect.innerHTML = '<option value="">Select vendor...</option>' + vendors.map(v => `<option value="${v.id}">${v.name}</option>`).join('');
-        vendorSelect.value = '';
+        vendorSelect.innerHTML = '<option value="">Select vendor...</option>' + vendors.map(v => `<option value="${v.id}" ${v.id === defaultVendorId ? 'selected' : ''}>${v.name}</option>`).join('');
+        vendorSelect.value = defaultVendorId || '';
       }
     } else {
       vendorGroup.classList.add('hidden');
@@ -1011,9 +1024,9 @@ const ProductionModule = (() => {
     const dest = document.getElementById('prod-sub-destination').value;
     
     let vendorId = '';
-    if (type === 'subcontractor') {
+    if (dest === 'trimming' || dest === 'deflashing') {
       vendorId = document.getElementById('prod-sub-vendor')?.value || '';
-      if ((dest === 'trimming' || dest === 'deflashing' || dest === 'waiting-visual') && !vendorId) {
+      if (!vendorId) {
         showToast('Please select a vendor for the selected destination', 'error');
         return;
       }
@@ -1059,12 +1072,12 @@ const ProductionModule = (() => {
         inputQty: qty,
         outputQty: qty,
         lossQty: 0,
-        vendorId: type === 'subcontractor' ? (vendorId || '') : '',
+        vendorId: vendorId || '',
         movedTo: dest,
         movedFrom: 'production',
         date: prodDate,
         recordedBy: session?.userId,
-        notes: (type === 'subcontractor' ? 'Subcontractor' : 'In-house') + ' batch directly moved to destination: ' + dest
+        notes: notes || (type === 'subcontractor' ? 'Subcontractor initial batch' : 'In-house initial batch with subcontractor dispatch')
       });
     }
 
