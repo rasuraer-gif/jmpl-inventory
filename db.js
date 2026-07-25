@@ -53,6 +53,7 @@ const DB = (() => {
     mouldMaintenance: [],
     tasks: []
   };
+  let localBackupData = {};
 
   // Helper to load localStorage cache into memory on startup
   function loadLocalCache() {
@@ -61,9 +62,13 @@ const DB = (() => {
         const data = localStorage.getItem(PREFIX + key);
         if (data) {
           cache[key] = JSON.parse(data);
+          localBackupData[key] = JSON.parse(data);
+        } else {
+          localBackupData[key] = [];
         }
       } catch (e) {
         console.error(`Error reading local cache for ${key}:`, e);
+        localBackupData[key] = [];
       }
     }
   }
@@ -92,6 +97,7 @@ const DB = (() => {
       runInternalBatchMigration();
       runMouldMasterMigration();
       runUserDeduplicationMigration();
+      runVisualMigration();
       isInitialized = true;
       return;
     }
@@ -103,6 +109,7 @@ const DB = (() => {
       runInternalBatchMigration();
       runMouldMasterMigration();
       runUserDeduplicationMigration();
+      runVisualMigration();
       isInitialized = true;
       return;
     }
@@ -198,8 +205,8 @@ const DB = (() => {
     let hasLocalData = false;
 
     try {
-      const localMaster = JSON.parse(localStorage.getItem(PREFIX + 'master')) || [];
-      const localBatches = JSON.parse(localStorage.getItem(PREFIX + 'batches')) || [];
+      const localMaster = localBackupData.master || [];
+      const localBatches = localBackupData.batches || [];
       if (localMaster.length > 0 || localBatches.length > 0) {
         hasLocalData = true;
       }
@@ -215,7 +222,7 @@ const DB = (() => {
         try {
           const collections = Object.keys(cache);
           for (const table of collections) {
-            const localData = JSON.parse(localStorage.getItem(PREFIX + table)) || [];
+            const localData = localBackupData[table] || [];
             if (localData.length > 0) {
               console.log(`Migrating table "${table}" (${localData.length} records)...`);
               const batch = db.batch();

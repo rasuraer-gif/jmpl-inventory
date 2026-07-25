@@ -232,6 +232,7 @@ const MasterModule = (() => {
           <option value="Cryogenic" ${m.mouldType === 'Cryogenic' ? 'selected' : ''}>Cryogenic</option>
           <option value="Flash Free" ${m.mouldType === 'Flash Free' ? 'selected' : ''}>Flash Free</option>
           <option value="Normal" ${m.mouldType === 'Normal' ? 'selected' : ''}>Normal</option>
+          ${m.mouldType && m.mouldType !== 'Yet to be assigned' && m.mouldType !== 'Cryogenic' && m.mouldType !== 'Flash Free' && m.mouldType !== 'Normal' ? `<option value="${m.mouldType}" selected>${m.mouldType}</option>` : ''}
         </select>
       </div>
       <div style="width: 70px;">
@@ -623,13 +624,18 @@ const MasterModule = (() => {
         const cav = cavitiesList[i] != null && !isNaN(cavitiesList[i]) ? cavitiesList[i] : (cavitiesList[0] != null && !isNaN(cavitiesList[0]) ? cavitiesList[0] : null);
         
         let mType = 'Yet to be assigned';
-        if (mouldTypes[i] && mouldTypes[i].trim() !== '') {
-          const t = mouldTypes[i].trim();
+        const rawType = mouldTypes[i] !== undefined ? mouldTypes[i] : mouldTypes[0];
+        if (rawType && rawType.trim() !== '') {
+          const t = rawType.trim();
           const lowerT = t.toLowerCase();
-          if (lowerT === 'cryogenic') mType = 'Cryogenic';
-          else if (lowerT === 'flash free') mType = 'Flash Free';
-          else if (lowerT === 'normal') mType = 'Normal';
-          else mType = 'Yet to be assigned';
+          if (lowerT === 'cryogenic' || lowerT === 'cryo') mType = 'Cryogenic';
+          else if (lowerT === 'flash free' || lowerT === 'flashfree' || lowerT === 'ff') mType = 'Flash Free';
+          else if (lowerT === 'normal' || lowerT === 'std') mType = 'Normal';
+          else if (lowerT.includes('yet') || lowerT.includes('assign')) mType = 'Yet to be assigned';
+          else {
+            // Capitalize first letter of each word
+            mType = t.replace(/\b\w/g, c => c.toUpperCase());
+          }
         }
 
         moulds.push({

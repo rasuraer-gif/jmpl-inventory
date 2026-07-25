@@ -1444,34 +1444,34 @@ const ProductionModule = (() => {
       }
 
       labelsHtml += `
-        <div class="label-container" style="${idx > 0 ? 'page-break-before: always;' : ''} width: 60mm; height: 40mm; padding: 1mm 1.5mm; box-sizing: border-box; display: flex; flex-direction: column; justify-content: space-between; overflow: hidden; background: #fff; color: #000;">
-          <div class="company-title" style="font-size: 8.5px; font-weight: 900; letter-spacing: 0.3px; border-bottom: 1.5px solid #000; padding-bottom: 1.5px; width: 100%; text-align: center; text-transform: uppercase; white-space: nowrap; margin-bottom: 1.5px;">JANANI MOULDINGS PVT. LTD.</div>
-          <div class="content-row" style="display: flex; flex-direction: row; align-items: center; justify-content: space-between; height: calc(100% - 13px); width: 100%;">
-            <div class="qr-column" style="display: flex; flex-direction: column; align-items: center; justify-content: center; width: 22mm;">
-              <img class="qr-image" src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(batch.batchNo)}" style="width: 19mm; height: 19mm; display: block;" />
-              <div class="batch-display" style="font-size: 7px; font-weight: 900; text-align: center; border: 1px solid #000; padding: 0.5px 2px; border-radius: 2px; background: #eee; width: 21mm; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; box-sizing: border-box;">${batch.batchNo}</div>
+        <div class="label-container" style="${idx > 0 ? 'page-break-before: always;' : ''} width: 40mm; height: 60mm; padding: 1.5mm; border: 1.5px solid #000; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: space-between; overflow: hidden; background: #fff; color: #000;">
+          <div class="company-title" style="font-size: 8px; font-weight: bold; letter-spacing: 0.2px; border-bottom: 1.5px solid #000; padding-bottom: 1.5px; width: 100%; text-align: center; text-transform: uppercase; white-space: nowrap; margin-bottom: 1px;">JANANI MOULDINGS PVT. LTD.</div>
+          <div class="qr-wrapper" style="position: relative; display: flex; align-items: center; justify-content: center; width: 100%; height: 20mm; margin: 1mm 0;">
+            <div class="flow-text-left" style="position: absolute; left: 0; top: 50%; transform: translateY(-50%); writing-mode: vertical-rl; font-size: 6.5px; font-weight: bold; text-transform: uppercase; color: #000; letter-spacing: 0.2px; white-space: nowrap; height: 18mm; display: flex; align-items: center; justify-content: center; text-align: center; border-right: 0.5px dashed #000; padding-right: 2px;">${processFlow}</div>
+            <img class="qr-image" src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(batch.batchNo)}" style="width: 19mm; height: 19mm; display: block;" />
+            <div class="flow-text-right" style="position: absolute; right: 0; top: 50%; transform: translateY(-50%); writing-mode: vertical-rl; font-size: 6.5px; font-weight: bold; text-transform: uppercase; color: #000; letter-spacing: 0.2px; white-space: nowrap; height: 18mm; display: flex; align-items: center; justify-content: center; text-align: center; border-left: 0.5px dashed #000; padding-left: 2px;">IB: ${batch.internalBatchNo || '—'}</div>
+          </div>
+          <div class="batch-no-display" style="font-size: 7.5px; font-weight: bold; letter-spacing: 0.2px; margin-bottom: 1.5px; border: 1px solid #000; padding: 1px 3px; border-radius: 2px; background: #f3f4f6; text-align: center; white-space: nowrap; max-width: 100%; box-sizing: border-box; overflow: hidden; text-overflow: ellipsis;">${batch.batchNo}</div>
+          <div class="details" style="width: 100%; border-top: 1.5px solid #000; padding-top: 2px; font-size: 7px; display: flex; flex-direction: column; gap: 1px;">
+            <div class="detail-row" style="display: flex; justify-content: space-between; line-height: 1.25; border-bottom: 0.5px dashed #ccc; padding-bottom: 0.5px; margin-bottom: 0.5px;">
+              <span class="label" style="font-weight: bold; text-transform: uppercase; font-size: 7px; color: #333;">JMREF:</span>
+              <span class="value" style="font-weight: bold; font-size: 7.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #000;">${batch.jmrefNo}</span>
             </div>
-            <div class="details-column" style="flex: 1; margin-left: 2.5mm; display: flex; flex-direction: column; justify-content: space-between; height: 100%; padding-top: 0.5px;">
-              <div class="detail-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 7.5px; line-height: 1.15; border-bottom: 0.5px dashed #ccc; padding-bottom: 0.5px; margin-bottom: 0.5px;">
-                <span class="label-text" style="font-weight: 800; text-transform: uppercase; color: #333;">JMREF:</span>
-                <span class="value-text" style="font-weight: 900; color: #000; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${batch.jmrefNo}</span>
-              </div>
-              <div class="detail-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 7.5px; line-height: 1.15; border-bottom: 0.5px dashed #ccc; padding-bottom: 0.5px; margin-bottom: 0.5px;">
-                <span class="label-text" style="font-weight: 800; text-transform: uppercase; color: #333;">Part No:</span>
-                <span class="value-text" style="font-weight: 900; color: #000; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${batch.partNo || '—'}</span>
-              </div>
-              <div class="detail-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 7.5px; line-height: 1.15; border-bottom: 0.5px dashed #ccc; padding-bottom: 0.5px; margin-bottom: 0.5px;">
-                <span class="label-text" style="font-weight: 800; text-transform: uppercase; color: #333;">Date:</span>
-                <span class="value-text" style="font-weight: 900; color: #000; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${formattedDate}</span>
-              </div>
-              <div class="detail-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 7.5px; line-height: 1.15; border-bottom: 0.5px dashed #ccc; padding-bottom: 0.5px; margin-bottom: 0.5px;">
-                <span class="label-text" style="font-weight: 800; text-transform: uppercase; color: #333;">Mould:</span>
-                <span class="value-text" style="font-weight: 900; color: #000; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">M#${batch.mouldNo || '—'} (${mouldType})</span>
-              </div>
-              <div class="detail-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 7.5px; line-height: 1.15; border-bottom: none; padding-bottom: 0; margin-bottom: 0;">
-                <span class="label-text" style="font-weight: 800; text-transform: uppercase; color: #333;">IB/Flow:</span>
-                <span class="value-text" style="font-weight: 900; color: #000; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 6.5px;" title="${processFlow}">IB:${batch.internalBatchNo || '—'} / ${processFlow}</span>
-              </div>
+            <div class="detail-row" style="display: flex; justify-content: space-between; line-height: 1.25; border-bottom: 0.5px dashed #ccc; padding-bottom: 0.5px; margin-bottom: 0.5px;">
+              <span class="label" style="font-weight: bold; text-transform: uppercase; font-size: 7px; color: #333;">Part No:</span>
+              <span class="value" style="font-weight: bold; font-size: 7.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #000;">${batch.partNo || '—'}</span>
+            </div>
+            <div class="detail-row" style="display: flex; justify-content: space-between; line-height: 1.25; border-bottom: 0.5px dashed #ccc; padding-bottom: 0.5px; margin-bottom: 0.5px;">
+              <span class="label" style="font-weight: bold; text-transform: uppercase; font-size: 7px; color: #333;">Date:</span>
+              <span class="value" style="font-weight: bold; font-size: 7.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #000;">${formattedDate}</span>
+            </div>
+            <div class="detail-row" style="display: flex; justify-content: space-between; line-height: 1.25; border-bottom: 0.5px dashed #ccc; padding-bottom: 0.5px; margin-bottom: 0.5px;">
+              <span class="label" style="font-weight: bold; text-transform: uppercase; font-size: 7px; color: #333;">Mould:</span>
+              <span class="value" style="font-weight: bold; font-size: 7.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #000;">M#${batch.mouldNo || '—'} (${mouldType})</span>
+            </div>
+            <div class="detail-row" style="display: flex; justify-content: space-between; line-height: 1.25; border-bottom: none; padding-bottom: 0; margin-bottom: 0;">
+              <span class="label" style="font-weight: bold; text-transform: uppercase; font-size: 7px; color: #333;">Mould Type:</span>
+              <span class="value" style="font-weight: bold; font-size: 7.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #000;">${mouldType}</span>
             </div>
           </div>
         </div>
@@ -1483,8 +1483,8 @@ const ProductionModule = (() => {
       <head>
         <title>Bulk Print Labels</title>
         <style>
-          @page { size: 60mm 40mm; margin: 0; }
-          body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif; background: #fff; color: #000; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+          @page { size: 40mm 60mm; margin: 0; }
+          body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #fff; color: #000; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         </style>
       </head>
       <body>
