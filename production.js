@@ -900,7 +900,7 @@ const ProductionModule = (() => {
       if (qtyInput && partId && !isNaN(mouldNo)) {
         const part = DB.Master.find(partId);
         if (part) {
-          const partMould = part.moulds.find(m => m.mouldNo === mouldNo);
+          const partMould = part.moulds.find(m => Number(m.mouldNo) === Number(mouldNo));
           if (partMould && partMould.cavities != null && partMould.cavities !== '') {
             const cavities = parseInt(partMould.cavities, 10);
             if (!isNaN(cavities)) {
@@ -927,13 +927,13 @@ const ProductionModule = (() => {
 
     const part = DB.Master.find(partId);
     if (part && part.moulds) {
-      const m = part.moulds.find(x => x.mouldNo === mouldNo);
+      const m = part.moulds.find(x => Number(x.mouldNo) === Number(mouldNo));
       if (m) {
         typeInp.value = m.mouldType || '';
         flowInp.value = m.processFlow || '';
 
         // Dynamic lookup from Mould Tracking module
-        const trackedMould = DB.Moulds.all().find(tm => tm.jmrefNo === part.jmrefNo && tm.mouldNo === mouldNo);
+        const trackedMould = DB.Moulds.all().find(tm => tm.jmrefNo === part.jmrefNo && Number(tm.mouldNo) === Number(mouldNo));
         if (trackedMould) {
           const movements = DB.MouldMovements.byMould(trackedMould.id);
           const currentLocation = (movements && movements.length > 0) ? movements[0].toLocation : 'In-House Factory Floor';
@@ -1309,7 +1309,7 @@ const ProductionModule = (() => {
       mouldNoSelect.innerHTML = '<option value="">Select mould...</option>';
       if (part && part.moulds && part.moulds.length) {
         part.moulds.forEach(m => {
-          mouldNoSelect.innerHTML += `<option value="${m.mouldNo}" ${b.mouldNo === m.mouldNo ? 'selected' : ''}>Mould ${m.mouldNo} (${m.mouldType || 'Yet to be assigned'} - Cav: ${m.cavities || '—'})</option>`;
+          mouldNoSelect.innerHTML += `<option value="${m.mouldNo}" ${Number(b.mouldNo) === Number(m.mouldNo) ? 'selected' : ''}>Mould ${m.mouldNo} (${m.mouldType || 'Yet to be assigned'} - Cav: ${m.cavities || '—'})</option>`;
         });
       }
     }
@@ -1436,7 +1436,7 @@ const ProductionModule = (() => {
       let mouldType = '—';
       let processFlow = '—';
       if (batch.mouldNo && part.moulds) {
-        const m = part.moulds.find(x => x.mouldNo === Number(batch.mouldNo));
+        const m = part.moulds.find(x => Number(x.mouldNo) === Number(batch.mouldNo));
         if (m) {
           mouldType = m.mouldType || '—';
           processFlow = m.processFlow || '—';
@@ -1444,24 +1444,35 @@ const ProductionModule = (() => {
       }
 
       labelsHtml += `
-        <div class="label-container" style="${idx > 0 ? 'page-break-before: always;' : ''} width: 3.8in; height: 5.8in; border: 3px solid #000; display: flex; flex-direction: column; align-items: center; justify-content: space-between; box-sizing: border-box; padding: 16px; margin: 0 auto;">
-          <div class="company-title" style="font-size: 17px; font-weight: 900; letter-spacing: 0.5px; border-bottom: 3px solid #000; padding-bottom: 6px; width: 100%; text-align: center; text-transform: uppercase; white-space: nowrap;">JANANI MOULDINGS PVT. LTD.</div>
-          <div class="qr-wrapper" style="margin: 12px 0; display: flex; align-items: center; justify-content: center; position: relative; width: 100%; height: 200px;">
-            <div style="position: absolute; left: 0; top: 50%; transform: translateY(-50%); writing-mode: vertical-rl; font-size: 15px; font-weight: 900; text-transform: uppercase; color: #000; letter-spacing: 0.5px; white-space: nowrap; height: 180px; display: flex; align-items: center; justify-content: center; text-align: center; border-right: 1px dashed #000; padding-right: 8px;">
-              ${processFlow}
+        <div class="label-container" style="${idx > 0 ? 'page-break-before: always;' : ''} width: 60mm; height: 40mm; padding: 1mm 1.5mm; box-sizing: border-box; display: flex; flex-direction: column; justify-content: space-between; overflow: hidden; background: #fff; color: #000;">
+          <div class="company-title" style="font-size: 8.5px; font-weight: 900; letter-spacing: 0.3px; border-bottom: 1.5px solid #000; padding-bottom: 1.5px; width: 100%; text-align: center; text-transform: uppercase; white-space: nowrap; margin-bottom: 1.5px;">JANANI MOULDINGS PVT. LTD.</div>
+          <div class="content-row" style="display: flex; flex-direction: row; align-items: center; justify-content: space-between; height: calc(100% - 13px); width: 100%;">
+            <div class="qr-column" style="display: flex; flex-direction: column; align-items: center; justify-content: center; width: 22mm;">
+              <img class="qr-image" src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(batch.batchNo)}" style="width: 19mm; height: 19mm; display: block;" />
+              <div class="batch-display" style="font-size: 7px; font-weight: 900; text-align: center; border: 1px solid #000; padding: 0.5px 2px; border-radius: 2px; background: #eee; width: 21mm; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; box-sizing: border-box;">${batch.batchNo}</div>
             </div>
-            <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(batch.batchNo)}" style="width: 200px; height: 200px; display: block;" />
-            <div style="position: absolute; right: 0; top: 50%; transform: translateY(-50%); writing-mode: vertical-rl; font-size: 15px; font-weight: 900; text-transform: uppercase; color: #000; letter-spacing: 0.5px; white-space: nowrap; height: 180px; display: flex; align-items: center; justify-content: center; text-align: center; border-left: 1px dashed #000; padding-left: 8px;">
-              IB: ${batch.internalBatchNo || '—'}
+            <div class="details-column" style="flex: 1; margin-left: 2.5mm; display: flex; flex-direction: column; justify-content: space-between; height: 100%; padding-top: 0.5px;">
+              <div class="detail-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 7.5px; line-height: 1.15; border-bottom: 0.5px dashed #ccc; padding-bottom: 0.5px; margin-bottom: 0.5px;">
+                <span class="label-text" style="font-weight: 800; text-transform: uppercase; color: #333;">JMREF:</span>
+                <span class="value-text" style="font-weight: 900; color: #000; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${batch.jmrefNo}</span>
+              </div>
+              <div class="detail-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 7.5px; line-height: 1.15; border-bottom: 0.5px dashed #ccc; padding-bottom: 0.5px; margin-bottom: 0.5px;">
+                <span class="label-text" style="font-weight: 800; text-transform: uppercase; color: #333;">Part No:</span>
+                <span class="value-text" style="font-weight: 900; color: #000; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${batch.partNo || '—'}</span>
+              </div>
+              <div class="detail-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 7.5px; line-height: 1.15; border-bottom: 0.5px dashed #ccc; padding-bottom: 0.5px; margin-bottom: 0.5px;">
+                <span class="label-text" style="font-weight: 800; text-transform: uppercase; color: #333;">Date:</span>
+                <span class="value-text" style="font-weight: 900; color: #000; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${formattedDate}</span>
+              </div>
+              <div class="detail-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 7.5px; line-height: 1.15; border-bottom: 0.5px dashed #ccc; padding-bottom: 0.5px; margin-bottom: 0.5px;">
+                <span class="label-text" style="font-weight: 800; text-transform: uppercase; color: #333;">Mould:</span>
+                <span class="value-text" style="font-weight: 900; color: #000; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">M#${batch.mouldNo || '—'} (${mouldType})</span>
+              </div>
+              <div class="detail-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 7.5px; line-height: 1.15; border-bottom: none; padding-bottom: 0; margin-bottom: 0;">
+                <span class="label-text" style="font-weight: 800; text-transform: uppercase; color: #333;">IB/Flow:</span>
+                <span class="value-text" style="font-weight: 900; color: #000; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 6.5px;" title="${processFlow}">IB:${batch.internalBatchNo || '—'} / ${processFlow}</span>
+              </div>
             </div>
-          </div>
-          <div class="batch-no-display" style="font-size: 20px; font-weight: 900; letter-spacing: 0.5px; margin-bottom: 12px; border: 3px solid #000; padding: 6px 12px; border-radius: 4px; background: #f3f4f6; text-align: center; white-space: nowrap; max-width: 100%; box-sizing: border-box; overflow: hidden; text-overflow: clip;">${batch.batchNo}</div>
-          <div class="details" style="width: 100%; border-top: 3px solid #000; padding-top: 12px; font-size: 18px;">
-            <div class="detail-row" style="display: flex; justify-content: space-between; margin-bottom: 8px; line-height: 1.3;"><span class="label" style="font-weight: 800; text-transform: uppercase; font-size: 18px;">JMREF:</span><span class="value" style="font-weight: 800; font-size: 20px; white-space: nowrap;">${batch.jmrefNo}</span></div>
-            <div class="detail-row" style="display: flex; justify-content: space-between; margin-bottom: 8px; line-height: 1.3;"><span class="label" style="font-weight: 800; text-transform: uppercase; font-size: 18px;">Part No:</span><span class="value" style="font-weight: 800; font-size: 20px; white-space: nowrap;">${batch.partNo || '—'}</span></div>
-            <div class="detail-row" style="display: flex; justify-content: space-between; margin-bottom: 8px; line-height: 1.3;"><span class="label" style="font-weight: 800; text-transform: uppercase; font-size: 18px;">Prod Date:</span><span class="value" style="font-weight: 800; font-size: 20px; white-space: nowrap;">${formattedDate}</span></div>
-            <div class="detail-row" style="display: flex; justify-content: space-between; margin-bottom: 8px; line-height: 1.3;"><span class="label" style="font-weight: 800; text-transform: uppercase; font-size: 18px;">Mould No:</span><span class="value" style="font-weight: 800; font-size: 20px; white-space: nowrap;">${batch.mouldNo != null ? batch.mouldNo : '—'}</span></div>
-            <div class="detail-row" style="display: flex; justify-content: space-between; margin-bottom: 8px; line-height: 1.3;"><span class="label" style="font-weight: 800; text-transform: uppercase; font-size: 18px;">Mould Type:</span><span class="value" style="font-weight: 800; font-size: 20px; white-space: nowrap;">${mouldType}</span></div>
           </div>
         </div>
       `;
@@ -1472,8 +1483,8 @@ const ProductionModule = (() => {
       <head>
         <title>Bulk Print Labels</title>
         <style>
-          @page { size: 4in 6in; margin: 0; }
-          body { margin: 0; padding: 0; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background: #fff; color: #000; }
+          @page { size: 60mm 40mm; margin: 0; }
+          body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif; background: #fff; color: #000; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         </style>
       </head>
       <body>

@@ -683,7 +683,7 @@ const MouldTrackingModule = (() => {
 
     const part = DB.Master.all().find(p => p.jmrefNo === jmrefNo);
     if (part && part.moulds) {
-      const m = part.moulds.find(x => x.mouldNo === mouldNo);
+      const m = part.moulds.find(x => Number(x.mouldNo) === Number(mouldNo));
       if (m) {
         typeInp.value = m.mouldType || '';
       } else {

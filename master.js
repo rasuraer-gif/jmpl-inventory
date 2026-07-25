@@ -219,11 +219,11 @@ const MasterModule = (() => {
     div.innerHTML = `
       <div style="width: 85px;">
         <select class="form-control mould-no">
-          <option value="1" ${m.mouldNo === 1 ? 'selected' : ''}>Mould 1</option>
-          <option value="2" ${m.mouldNo === 2 ? 'selected' : ''}>Mould 2</option>
-          <option value="3" ${m.mouldNo === 3 ? 'selected' : ''}>Mould 3</option>
-          <option value="4" ${m.mouldNo === 4 ? 'selected' : ''}>Mould 4</option>
-          <option value="5" ${m.mouldNo === 5 ? 'selected' : ''}>Mould 5</option>
+          <option value="1" ${Number(m.mouldNo) === 1 ? 'selected' : ''}>Mould 1</option>
+          <option value="2" ${Number(m.mouldNo) === 2 ? 'selected' : ''}>Mould 2</option>
+          <option value="3" ${Number(m.mouldNo) === 3 ? 'selected' : ''}>Mould 3</option>
+          <option value="4" ${Number(m.mouldNo) === 4 ? 'selected' : ''}>Mould 4</option>
+          <option value="5" ${Number(m.mouldNo) === 5 ? 'selected' : ''}>Mould 5</option>
         </select>
       </div>
       <div style="width: 110px;">
