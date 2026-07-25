@@ -495,11 +495,11 @@ const MasterModule = (() => {
 
     if (parts && parts.length > 0) {
       rows = parts.map(p => {
-        const mouldNos = (p.moulds || []).map(m => m.mouldNo).join(', ');
-        const mouldTypes = (p.moulds || []).map(m => m.mouldType || 'Yet to be assigned').join(', ');
-        const cavities = (p.moulds || []).map(m => m.cavities || '').join(', ');
+        const mouldNos = (p.moulds || []).map(m => m.mouldNo).join('; ');
+        const mouldTypes = (p.moulds || []).map(m => m.mouldType || 'Yet to be assigned').join('; ');
+        const cavities = (p.moulds || []).map(m => m.cavities || '').join('; ');
         const processFlows = (p.moulds || []).map(m => m.processFlow || 'Cryogenic').join(' ; ');
-        const firstProcesses = (p.moulds || []).map(m => m.firstProcess || 'Cryogenic').join(', ');
+        const firstProcesses = (p.moulds || []).map(m => m.firstProcess || 'Cryogenic').join('; ');
 
         return [
           p.partNo || '',
@@ -525,7 +525,7 @@ const MasterModule = (() => {
     } else {
       rows = [
         ['OR-101', 'JMREF-2026-101', 'O-Ring 101 Description', '1234567890', 'CC-70', '12.50', '8', '140', '100', '2.0', '150', '3.5', '5000', '1', 'Cryogenic', '4', 'Cryogenic', 'Cryogenic'],
-        ['OR-102', 'JMREF-2026-102', 'O-Ring 102 Description', '0987654321', 'CC-80', '18.00', '10', '150', '110', '2.5', '180', '4.2', '8000', '1, 2', 'Cryogenic, Yet to be assigned', '4, 2', 'Cryogenic, Visual ; Cryogenic, Gauge, Visual', 'Cryogenic, Cryogenic']
+        ['OR-102', 'JMREF-2026-102', 'O-Ring 102 Description', '0987654321', 'CC-80', '18.00', '10', '150', '110', '2.5', '180', '4.2', '8000', '1; 2', 'Cryogenic; Yet to be assigned', '4; 2', 'Cryogenic, Visual ; Cryogenic, Gauge, Visual', 'Cryogenic; Cryogenic']
       ];
     }
 
@@ -611,19 +611,30 @@ const MasterModule = (() => {
       const processFlowsStr = normRow['process flows'] || normRow['process flow'] || 'Cryogenic';
       const firstProcessesStr = normRow['first processes'] || normRow['first process'] || 'Cryogenic';
 
-      const mouldNos = String(mouldNosStr).split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
-      const mouldTypes = String(mouldTypesStr).split(',').map(s => s.trim());
-      const cavitiesList = String(cavitiesStr).split(',').map(s => parseInt(s.trim(), 10));
+      const mouldNos = String(mouldNosStr).split(/[;,]/).map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
+      const mouldTypes = String(mouldTypesStr).split(/[;,]/).map(s => s.trim());
+      const cavitiesList = String(cavitiesStr).split(/[;,]/).map(s => parseInt(s.trim(), 10));
       const processFlows = String(processFlowsStr).split(';').map(s => s.trim());
-      const firstProcesses = String(firstProcessesStr).split(',').map(s => s.trim());
+      const firstProcesses = String(firstProcessesStr).split(/[;,]/).map(s => s.trim());
 
       const moulds = [];
       const numMoulds = Math.max(mouldNos.length, 1);
       for (let i = 0; i < numMoulds; i++) {
         const cav = cavitiesList[i] != null && !isNaN(cavitiesList[i]) ? cavitiesList[i] : (cavitiesList[0] != null && !isNaN(cavitiesList[0]) ? cavitiesList[0] : null);
+        
+        let mType = 'Yet to be assigned';
+        if (mouldTypes[i] && mouldTypes[i].trim() !== '') {
+          const t = mouldTypes[i].trim();
+          const lowerT = t.toLowerCase();
+          if (lowerT === 'cryogenic') mType = 'Cryogenic';
+          else if (lowerT === 'flash free') mType = 'Flash Free';
+          else if (lowerT === 'normal') mType = 'Normal';
+          else mType = 'Yet to be assigned';
+        }
+
         moulds.push({
           mouldNo: mouldNos[i] || (i + 1),
-          mouldType: mouldTypes[i] || mouldTypes[0] || 'Yet to be assigned',
+          mouldType: mType,
           cavities: cav,
           processFlow: processFlows[i] || processFlows[0] || 'Cryogenic',
           firstProcess: firstProcesses[i] || firstProcesses[0] || 'Cryogenic'
