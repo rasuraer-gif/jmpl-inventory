@@ -1339,7 +1339,7 @@ function renderDashboard() {
   const rejected  = DB.RejectionTracker.all();
   const rechecks  = DB.RecheckTracker.all();
 
-  const active    = batches.filter(b => b.status === 'active' && (b.productionDate || b.createdAt || '').slice(0, 7) === thisMonth).length;
+  const active    = batches.filter(b => b.status === 'active').length;
   const completed = batches.filter(b => b.status === 'completed' && (b.completedAt || b.createdAt || '').slice(0, 7) === thisMonth).length;
   const rejectedCount = batches.filter(b => b.status === 'rejected' && (b.updatedAt || b.createdAt || '').slice(0, 7) === thisMonth).length;
   const totalLoss = losses.filter(l => (l.date || l.createdAt || '').slice(0, 7) === thisMonth).reduce((s, l) => s + (l.lossQty || 0), 0);

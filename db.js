@@ -249,7 +249,7 @@ const DB = (() => {
     let migratedRecordsCount = 0;
 
     cache.batches.forEach(b => {
-      if (b.currentStage === 'visual' && b.status === 'active') {
+      if (b.currentStage === 'visual' && b.status === 'active' && (!b.createdAt || b.createdAt < '2026-07-25T00:00:00Z')) {
         b.currentStage = 'waiting-visual';
         b.updatedAt = new Date().toISOString();
         migratedBatchesCount++;
