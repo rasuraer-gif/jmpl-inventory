@@ -794,11 +794,31 @@ const ReportsModule = (() => {
 
   function renderPendingBatches(filters) {
     const { pendingStage, pendingTimeframe } = filters;
-    const batches = DB.Batches.all().filter(b => b.status === 'active');
+    const batches = DB.Batches.all().filter(b => {
+      if (pendingStage === 'store') {
+        return b.status === 'completed' && b.currentStage === 'store';
+      }
+      return b.status === 'active';
+    });
     const stageRecs = DB.StageRecords.all();
     const master = DB.Master.all();
     const today = new Date();
     today.setHours(0,0,0,0);
+
+    function parseLocalDate(dateStr) {
+      if (!dateStr) return new Date();
+      const clean = dateStr.slice(0, 10).trim();
+      const parts = clean.split(/[-/]/);
+      if (parts.length === 3) {
+        if (parts[0].length === 4) {
+          return new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+        } else {
+          return new Date(Number(parts[2]), Number(parts[1]) - 1, Number(parts[0]));
+        }
+      }
+      const d = new Date(clean);
+      return isNaN(d.getTime()) ? new Date() : d;
+    }
 
     const dataRows = [];
     const headers = ['#', 'Batch No', 'JMREF No', 'Part No', 'Current Stage', 'Current Qty', 'Date Received', 'Days Pending'];
@@ -812,13 +832,12 @@ const ReportsModule = (() => {
 
       if (recs.length > 0) {
         entryDateStr = recs[recs.length - 1].date || recs[recs.length - 1].createdAt || '';
-      } else {
+      }
+      if (!entryDateStr) {
         entryDateStr = b.productionDate || b.createdAt || '';
       }
 
-      if (!entryDateStr) return;
-
-      const entryDate = new Date(entryDateStr.slice(0, 10));
+      const entryDate = parseLocalDate(entryDateStr);
       entryDate.setHours(0,0,0,0);
       const diffTime = today - entryDate;
       const days = Math.max(0, Math.round(diffTime / (1000 * 60 * 60 * 24)));

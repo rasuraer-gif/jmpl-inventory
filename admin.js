@@ -656,6 +656,17 @@ const AdminModule = (() => {
               <button class="btn btn-teal" onclick="document.getElementById('db-restore-file').click()">📤 Upload Backup JSON</button>
             </div>
           </div>
+
+          <div style="display:flex; justify-content:space-between; align-items:center; border:1px solid var(--border); padding:16px; border-radius:8px; flex-wrap:wrap; gap:12px; margin-top: 12px;">
+            <div>
+              <h4 class="font-bold" style="font-size:14px; margin-bottom:4px; color:var(--accent-red);">Restore / Overwrite Live Cloud Database</h4>
+              <p class="text-xs text-muted" style="max-width:480px;">Upload a JSON database backup and restore it directly to the **Live Online Firestore DB**. <strong style="color:var(--accent-red);">WARNING: This will completely overwrite all current cloud database records.</strong></p>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <input type="file" id="db-restore-live-file" accept=".json" style="display:none;" onchange="AdminModule.triggerBackupImportLive(this)">
+              <button class="btn btn-red" onclick="document.getElementById('db-restore-live-file').click()">🔥 Restore to Online DB</button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -757,6 +768,48 @@ const AdminModule = (() => {
       } else {
         showToast('Database restore failed: ' + res.error, 'error');
       }
+    };
+    reader.readAsText(file);
+  }
+
+  function triggerBackupImportLive(input) {
+    if (!input.files || !input.files[0]) return;
+    const file = input.files[0];
+    
+    const confirmRestore = confirm(
+      `⚠️ WARNING: RESTORE TO ONLINE DATABASE ⚠️\n\nYou are about to restore the backup file "${file.name}" to the LIVE cloud Firestore database.\n\nThis will completely delete all existing data in your live cloud database and overwrite it with the backup contents.\n\nThis action CANNOT be undone.\n\nAre you absolutely sure you want to proceed?`
+    );
+    
+    if (!confirmRestore) {
+      input.value = '';
+      return;
+    }
+    
+    const finalConfirm = prompt(
+      `To confirm this destructive action, please type the word "RESTORE" in capital letters below:`
+    );
+    
+    if (finalConfirm !== 'RESTORE') {
+      showToast('Restore cancelled. Confirmation word was incorrect.', 'warning');
+      input.value = '';
+      return;
+    }
+    
+    showToast('Starting online restore, please do not close the browser...', 'info');
+    
+    const reader = new FileReader();
+    reader.onload = async function(e) {
+      const res = await DB.restoreToOnlineDB(e.target.result);
+      if (res.ok) {
+        showToast('Live Cloud Database restored successfully!', 'success');
+        localStorage.setItem('jmpl_db_is_local_backup', 'false');
+        setTimeout(() => {
+          window.location.reload();
+        }, 1500);
+      } else {
+        showToast('Online Database restore failed: ' + res.error, 'error');
+      }
+      input.value = '';
     };
     reader.readAsText(file);
   }
@@ -1013,5 +1066,5 @@ const AdminModule = (() => {
     renderTab('tasks');
   }
 
-  return { render, openAddUser, editUser, saveUser, toggleUser, onRoleChange, openAddSub, editSub, saveSub, toggleSub, openAddVendor, editVendor, saveVendor, toggleVendor, openAddOp, editOp, saveOp, toggleOp, openAddInspector, editInspector, saveInspector, toggleInspector, clearTransactionData, toggleDatabaseMode, triggerBackupExport, triggerBackupImport, viewTaskDetails, openCreateTask, createTask };
+  return { render, openAddUser, editUser, saveUser, toggleUser, onRoleChange, openAddSub, editSub, saveSub, toggleSub, openAddVendor, editVendor, saveVendor, toggleVendor, openAddOp, editOp, saveOp, toggleOp, openAddInspector, editInspector, saveInspector, toggleInspector, clearTransactionData, toggleDatabaseMode, triggerBackupExport, triggerBackupImport, triggerBackupImportLive, viewTaskDetails, openCreateTask, createTask };
 })();

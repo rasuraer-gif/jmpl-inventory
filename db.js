@@ -927,13 +927,85 @@ const DB = (() => {
     }
   }
 
+  async function restoreToOnlineDB(jsonStr) {
+    if (!db) {
+      return { ok: false, error: "Database not connected to Cloud Firestore." };
+    }
+    
+    try {
+      const data = JSON.parse(jsonStr);
+      const collections = Object.keys(cache);
+      
+      // Validate backup arrays
+      for (const table of collections) {
+        if (data[table] !== undefined && !Array.isArray(data[table])) {
+          return { ok: false, error: `Invalid backup format: "${table}" must be an array.` };
+        }
+      }
+      
+      for (const table of collections) {
+        if (!Array.isArray(data[table])) continue;
+        
+        console.log(`Restoring table "${table}" to Firestore...`);
+        
+        // Delete existing docs in Firestore
+        const snapshot = await db.collection(table).get();
+        let batch = db.batch();
+        let writeCount = 0;
+        
+        for (const doc of snapshot.docs) {
+          batch.delete(doc.ref);
+          writeCount++;
+          if (writeCount >= 400) {
+            await batch.commit();
+            batch = db.batch();
+            writeCount = 0;
+          }
+        }
+        if (writeCount > 0) {
+          await batch.commit();
+        }
+        
+        // Write new docs in Firestore
+        batch = db.batch();
+        writeCount = 0;
+        const localData = data[table];
+        
+        for (const item of localData) {
+          const docId = item.id || genId();
+          const docRef = db.collection(table).doc(docId);
+          const docData = { ...item };
+          delete docData.id;
+          batch.set(docRef, docData);
+          writeCount++;
+          if (writeCount >= 400) {
+            await batch.commit();
+            batch = db.batch();
+            writeCount = 0;
+          }
+        }
+        if (writeCount > 0) {
+          await batch.commit();
+        }
+        
+        cache[table] = localData;
+        localStorage.setItem('jmpl_' + table, JSON.stringify(localData));
+      }
+      
+      return { ok: true };
+    } catch (e) {
+      console.error("Cloud restore failed:", e);
+      return { ok: false, error: e.message };
+    }
+  }
+
   return {
-  init, onSyncStateChange, genId, seedDefaults, clearTable,
+    init, onSyncStateChange, genId, seedDefaults, clearTable,
     Users, Master, Subcontractors, Vendors, Operators, Inspectors,
     Batches, StageRecords, LossTracker, RejectionTracker,
     RecheckTracker, StockUploads, Sales, StoreInventory,
     ProductionRecords, MonthlyPlans, ProductionSchedules,
-    Moulds, MouldMovements, MouldMaintenance, Tasks, exportBackupJSON, importBackupJSON,
+    Moulds, MouldMovements, MouldMaintenance, Tasks, exportBackupJSON, importBackupJSON, restoreToOnlineDB,
     raw: { getAll, setAll, insert, update, remove, findById, findWhere }
   };
 })();

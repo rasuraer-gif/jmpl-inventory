@@ -493,16 +493,15 @@ const VisualModule = (() => {
 
     const defectSection = document.getElementById('vis-defect-section');
     if (defectSection) {
-      if (lossQty > 0) {
-        defectSection.classList.remove('hidden');
-      } else {
-        defectSection.classList.add('hidden');
-        document.getElementById('vis-defect-airtraps').value = '0';
-        document.getElementById('vis-defect-flash').value = '0';
-        document.getElementById('vis-defect-mould').value = '0';
-        document.getElementById('vis-defect-dimension').value = '0';
-        document.getElementById('vis-defect-others').value = '0';
-      }
+      // Keep it hidden from the UI by always keeping the "hidden" class
+      defectSection.classList.add('hidden');
+      
+      // Auto-assign lossQty to 'others' so validation passes without user intervention
+      document.getElementById('vis-defect-airtraps').value = '0';
+      document.getElementById('vis-defect-flash').value = '0';
+      document.getElementById('vis-defect-mould').value = '0';
+      document.getElementById('vis-defect-dimension').value = '0';
+      document.getElementById('vis-defect-others').value = String(lossQty);
     }
   }
   function process() {
