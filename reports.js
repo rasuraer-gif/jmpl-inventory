@@ -134,14 +134,12 @@ const ReportsModule = (() => {
       return `<th${color ? ' style="color:' + color + ';"' : ''}>${h}</th>`;
     }).join('');
 
-    const tbodyRows = dataRows.map(r => {
-      // Fixed info cols
+    let tbodyRows = dataRows.map(r => {
       const infoCols = `
         <td class="font-semibold text-blue">${r[0]}</td>
         <td><span class="badge badge-teal">${r[1]}</span></td>
         <td class="text-muted">${r[2]}</td>`;
 
-      // Stage qty cols (index 3 to 3+stageLen-1)
       const stageCols = r.slice(3, 3 + stageLen).map((v, i) => {
         const isStore = i === stageLen - 1;
         const cls = v > 0
@@ -150,7 +148,6 @@ const ReportsModule = (() => {
         return `<td class="${cls}">${v > 0 ? formatNum(v) : '—'}</td>`;
       }).join('');
 
-      // Summary cols
       const totalWip   = r[3 + stageLen];
       const storeAvail = r[3 + stageLen + 1];
       const summaryCols = `
@@ -159,6 +156,29 @@ const ReportsModule = (() => {
 
       return `<tr>${infoCols}${stageCols}${summaryCols}</tr>`;
     }).join('');
+
+    const totals = Array(stageLen + 2).fill(0);
+    dataRows.forEach(r => {
+      for (let i = 3; i < r.length; i++) {
+        totals[i - 3] += (r[i] || 0);
+      }
+    });
+
+    const totalRowHtml = `
+      <tr class="font-bold text-danger">
+        <td colspan="3" style="text-align:right;">TOTAL:</td>
+        ${totals.map((t, idx) => {
+          let style = '';
+          const isStoreAvail = idx === stageLen + 1;
+          const isTotalWip = idx === stageLen;
+          if (isStoreAvail) style = ' style="color:var(--accent-green);"';
+          else if (isTotalWip) style = ' style="color:var(--accent-teal);"';
+          return `<td${style}>${t > 0 ? formatNum(t) : '0'}</td>`;
+        }).join('')}
+      </tr>
+    `;
+    tbodyRows += totalRowHtml;
+    dataRows.push(['', '', 'TOTAL:', ...totals]);
 
     const html = `
       <div class="table-wrap">
@@ -281,13 +301,15 @@ const ReportsModule = (() => {
         r.pressNo||batch.pressNo||'-', 
         r.noOfLifts||0, 
         typeStr, 
-        (r.date||'').slice(0,10)
       ];
     });
+    const totalLifts = records.reduce((s, r) => s + (r.noOfLifts||0), 0);
+    const summaryRow = ['', '', '', 'TOTAL:', '', '', totalLifts, '', ''];
+    dataRows.push(summaryRow);
 
     const html = `<div class="table-wrap"><table class="data-table">
       <thead><tr>${headers.map(th).join('')}</tr></thead>
-      <tbody>${dataRows.map(r=>`<tr>${r.map(v=>td(v)).join('')}</tr>`).join('')}</tbody>
+      <tbody>${dataRows.map((r,i)=>`<tr class="${i===dataRows.length-1?'font-bold text-danger':''}">${r.map(v=>td(v)).join('')}</tr>`).join('')}</tbody>
     </table></div>`;
     return { html, headers, dataRows };
   }
@@ -368,6 +390,22 @@ const ReportsModule = (() => {
           <td><span class="stage-chip ${b.currentStage}">${STAGE_LABELS[b.currentStage] || b.currentStage}</span></td>
         </tr>`;
     }).join('');
+
+    const totalAllocated = filtered.reduce((sum, b) => {
+      const recs = stageRecords.filter(r => r.batchId === b.id && r.movedTo === 'waiting-visual');
+      const qty = recs.length ? (recs[recs.length - 1].outputQty || 0) : (b.initialQty || 0);
+      return sum + qty;
+    }, 0);
+
+    const totalRowHtml = `
+      <tr class="font-bold text-danger">
+        <td colspan="4" style="text-align:right;">TOTAL:</td>
+        <td>${formatNum(totalAllocated)}</td>
+        <td colspan="6"></td>
+      </tr>
+    `;
+    const finalHtmlRows = htmlRows + totalRowHtml;
+    dataRows.push(['', '', '', 'TOTAL:', totalAllocated, '', '', '', '', '', '']);
     
     const html = `
       <div class="table-wrap">
@@ -388,7 +426,7 @@ const ReportsModule = (() => {
             </tr>
           </thead>
           <tbody>
-            ${htmlRows}
+            ${finalHtmlRows}
           </tbody>
         </table>
       </div>`;
@@ -399,34 +437,47 @@ const ReportsModule = (() => {
   // ── Generic Stage Loss Report ──────────────────────────────
   function renderStageLoss(stage, filters, extraCols=[]) {
     const { from, to, jmref } = filters;
-    let losses = DB.LossTracker.byStage(stage);
-    if (jmref) losses = losses.filter(l => l.jmrefNo?.toLowerCase().includes(jmref.toLowerCase()));
-    losses = filterByDateRange(losses, 'date', from, to);
-    if (!losses.length) return emptyState();
-
-    const stageRecs = DB.StageRecords.all();
-    const headers = ['#','Batch No','JMREF','Part No','Input Qty','Output Qty','Loss Qty','% Loss','Date', ...extraCols];
-    const dataRows = losses.map((l, i) => {
-      const batch = DB.Batches.find(l.batchId) || {};
-      const sr = stageRecs.find(r => r.batchId === l.batchId && r.stage === stage);
-      const extra = extraCols.map(col => {
-        if (col === 'Inspector') return sr?.inspectorName || '-';
-        if (col === 'Recheck #') return l.iterationNo || '-';
-        return '-';
+    let records = DB.StageRecords.all().filter(r => r.stage === stage);
+    
+    if (jmref) {
+      const q = jmref.toLowerCase();
+      records = records.filter(r => {
+        const batch = DB.Batches.find(r.batchId) || {};
+        return (batch.jmrefNo || '').toLowerCase().includes(q) ||
+               (batch.batchNo || '').toLowerCase().includes(q) ||
+               (batch.partNo || '').toLowerCase().includes(q);
       });
-      const input = sr?.inputQty || 0;
-      const loss = l.lossQty || 0;
-      const pct = input ? ((loss / input) * 100).toFixed(1) + '%' : '0.0%';
-      return [i+1, batch.batchNo||'', l.jmrefNo||'', l.partNo||'', input, sr?.outputQty||'', loss, pct, (l.date||'').slice(0,10), ...extra];
+    }
+    
+    records = filterByDateRange(records, 'date', from, to);
+    if (!records.length) return emptyState();
+
+    // Sort chronologically (oldest to newest) so that cumulative data reads naturally
+    records.sort((a, b) => {
+      const dateA = a.createdAt || a.date || '';
+      const dateB = b.createdAt || b.date || '';
+      return dateA.localeCompare(dateB);
     });
 
-    const totalLoss = losses.reduce((s, l) => s + (l.lossQty||0), 0);
-    const totalInput = losses.reduce((s, l) => {
-      const sr = stageRecs.find(r => r.batchId === l.batchId && r.stage === stage);
-      return s + (sr?.inputQty || 0);
-    }, 0);
+    const headers = ['#','Batch No','JMREF','Part No','Input Qty','Output Qty','Loss Qty','% Loss','Date', ...extraCols];
+    const dataRows = records.map((r, i) => {
+      const batch = DB.Batches.find(r.batchId) || {};
+      const extra = extraCols.map(col => {
+        if (col === 'Inspector') return r.inspectorName || '-';
+        if (col === 'Recheck #') return r.iterationNo || '-';
+        return '-';
+      });
+      const input = r.inputQty || 0;
+      const loss = r.lossQty || 0;
+      const pct = input ? ((loss / input) * 100).toFixed(1) + '%' : '0.0%';
+      return [i+1, batch.batchNo||'', batch.jmrefNo||'', batch.partNo||'', input, r.outputQty||'', loss, pct, (r.date||'').slice(0,10), ...extra];
+    });
+
+    const totalLoss = records.reduce((s, r) => s + (r.lossQty||0), 0);
+    const totalInput = records.reduce((s, r) => s + (r.inputQty || 0), 0);
+    const totalOutput = records.reduce((s, r) => s + (r.outputQty || 0), 0);
     const totalPct = totalInput ? ((totalLoss / totalInput) * 100).toFixed(1) + '%' : '0.0%';
-    const summaryRow = ['','','','','','TOTAL LOSS', totalLoss, totalPct, '', ...extraCols.map(()=>'')];
+    const summaryRow = ['', '', '', 'TOTAL:', totalInput, totalOutput, totalLoss, totalPct, '', ...extraCols.map(()=>'')];
     dataRows.push(summaryRow);
     const html = `<div class="table-wrap"><table class="data-table">
       <thead><tr>${headers.map(th).join('')}</tr></thead>
@@ -477,9 +528,13 @@ const ReportsModule = (() => {
       ];
     });
 
+    const totalReprocessQty = recs.reduce((s, r) => s + (r.reprocessQty||0), 0);
+    const summaryRow = ['', '', '', 'TOTAL:', totalReprocessQty, '', '', ''];
+    dataRows.push(summaryRow);
+
     const html = `<div class="table-wrap"><table class="data-table">
       <thead><tr>${headers.map(th).join('')}</tr></thead>
-      <tbody>${dataRows.map(r=>`<tr>${r.map(v=>td(v)).join('')}</tr>`).join('')}</tbody>
+      <tbody>${dataRows.map((r,i)=>`<tr class="${i===dataRows.length-1?'font-bold text-danger':''}">${r.map(v=>td(v)).join('')}</tr>`).join('')}</tbody>
     </table></div>`;
     
     return { html, headers, dataRows };
@@ -515,9 +570,13 @@ const ReportsModule = (() => {
       }
       return [i+1, batch.batchNo||'', batch.jmrefNo||'', batch.partNo||'', STAGE_LABELS[r.stage]||r.stage, r.qty||'', r.reason||'', user.name||'-', dateTimeStr];
     });
+    const totalQty = rejections.reduce((s, r) => s + (r.qty||0), 0);
+    const summaryRow = ['', '', '', 'TOTAL:', '', totalQty, '', '', ''];
+    dataRows.push(summaryRow);
+
     const html = `<div class="table-wrap"><table class="data-table">
       <thead><tr>${headers.map(th).join('')}</tr></thead>
-      <tbody>${dataRows.map(r=>`<tr>${r.map(v=>td(v)).join('')}</tr>`).join('')}</tbody>
+      <tbody>${dataRows.map((r,i)=>`<tr class="${i===dataRows.length-1?'font-bold text-danger':''}">${r.map(v=>td(v)).join('')}</tr>`).join('')}</tbody>
     </table></div>`;
     return { html, headers, dataRows };
   }
@@ -538,9 +597,16 @@ const ReportsModule = (() => {
       const pct = totalBefore ? ((r.lossQty / totalBefore) * 100).toFixed(1) + '%' : '0.0%';
       return [i+1, batch.batchNo||'', batch.jmrefNo||'', STAGE_LABELS[r.toStage]||r.toStage, r.qty||0, r.lossQty||0, pct, r.recheckNo||1, user.name||'-', (r.date||'').slice(0,10)];
     });
+    const totalQty = rechecks.reduce((s, r) => s + (r.qty||0), 0);
+    const totalLoss = rechecks.reduce((s, r) => s + (r.lossQty||0), 0);
+    const totalBefore = totalQty + totalLoss;
+    const totalPct = totalBefore ? ((totalLoss / totalBefore) * 100).toFixed(1) + '%' : '0.0%';
+    const summaryRow = ['', '', '', 'TOTAL:', totalQty, totalLoss, totalPct, '', '', ''];
+    dataRows.push(summaryRow);
+
     const html = `<div class="table-wrap"><table class="data-table">
       <thead><tr>${headers.map(th).join('')}</tr></thead>
-      <tbody>${dataRows.map(r=>`<tr>${r.map(v=>td(v)).join('')}</tr>`).join('')}</tbody>
+      <tbody>${dataRows.map((r,i)=>`<tr class="${i===dataRows.length-1?'font-bold text-danger':''}">${r.map(v=>td(v)).join('')}</tr>`).join('')}</tbody>
     </table></div>`;
     return { html, headers, dataRows };
   }
@@ -620,6 +686,18 @@ const ReportsModule = (() => {
         </tr>`;
     }).join('');
 
+    const totalRowHtml = `
+      <tr class="font-bold text-danger">
+        <td colspan="3" style="text-align:right;">TOTAL:</td>
+        <td>${formatNum(totalQty)}</td>
+        <td></td>
+        <td>${formatNum(totalVal)}</td>
+        <td colspan="3"></td>
+      </tr>
+    `;
+    const finalHtmlRows = htmlRows + totalRowHtml;
+    dataRows.push(['', '', 'TOTAL:', totalQty, '', totalVal, '', '', '']);
+
     const html = `
       <div style="display:flex; gap:16px; margin-bottom: 20px; flex-wrap:wrap;">
         <div class="stat-card green" style="flex:1; min-width: 140px;"><div class="stat-label">Total Store Stock</div><div class="stat-value green">${formatNum(totalQty)}</div></div>
@@ -653,7 +731,7 @@ const ReportsModule = (() => {
             </tr>
           </thead>
           <tbody>
-            ${htmlRows}
+            ${finalHtmlRows}
           </tbody>
         </table>
       </div>`;
@@ -763,6 +841,17 @@ const ReportsModule = (() => {
         </tr>`;
     }).join('');
 
+    const totalQty = filteredAging.reduce((s, i) => s + i.qty, 0);
+    const totalRowHtml = `
+      <tr class="font-bold text-danger">
+        <td colspan="5" style="text-align:right;">TOTAL:</td>
+        <td>${formatNum(totalQty)}</td>
+        <td colspan="2"></td>
+      </tr>
+    `;
+    const finalHtmlRows = htmlRows ? (htmlRows + totalRowHtml) : '';
+    dataRows.push(['', '', '', '', 'TOTAL:', totalQty, '', '']);
+
     const html = `
       ${searchHtml}
       <div style="display:flex; gap:16px; margin-bottom: 20px; flex-wrap:wrap;">
@@ -784,7 +873,7 @@ const ReportsModule = (() => {
             </tr>
           </thead>
           <tbody>
-            ${htmlRows || '<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}
+            ${finalHtmlRows || '<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}
           </tbody>
         </table>
       </div>`;
@@ -913,10 +1002,21 @@ const ReportsModule = (() => {
         </tr>`;
     }).join('');
 
+    const totalQty = dataRows.reduce((s, r) => s + r.qty, 0);
+    const totalRowHtml = `
+      <tr class="font-bold text-danger">
+        <td colspan="5" style="text-align:right;">TOTAL:</td>
+        <td>${formatNum(totalQty)}</td>
+        <td colspan="2"></td>
+      </tr>
+    `;
+    const finalHtmlRows = htmlRows ? (htmlRows + totalRowHtml) : '';
+    rows.push(['', '', '', '', 'TOTAL:', totalQty, '', '']);
+
     const html = `
       <div style="display:flex; gap:16px; margin-bottom: 20px; flex-wrap:wrap;">
         <div class="stat-card blue" style="flex:1; min-width: 140px;"><div class="stat-label">Pending Batches</div><div class="stat-value blue">${dataRows.length}</div></div>
-        <div class="stat-card amber" style="flex:1; min-width: 140px;"><div class="stat-label">Total Pending Quantity</div><div class="stat-value amber">${formatNum(dataRows.reduce((s,r)=>s+r.qty,0))}</div></div>
+        <div class="stat-card amber" style="flex:1; min-width: 140px;"><div class="stat-label">Total Pending Quantity</div><div class="stat-value amber">${formatNum(totalQty)}</div></div>
       </div>
       <div class="table-wrap">
         <table class="data-table">
@@ -933,7 +1033,7 @@ const ReportsModule = (() => {
             </tr>
           </thead>
           <tbody>
-            ${htmlRows || '<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-muted);">No pending batches found matching the filters</td></tr>'}
+            ${finalHtmlRows || '<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-muted);">No pending batches found matching the filters</td></tr>'}
           </tbody>
         </table>
       </div>`;

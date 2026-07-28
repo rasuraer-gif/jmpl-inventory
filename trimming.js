@@ -169,6 +169,7 @@ const TrimmingModule = (() => {
           <div class="form-group"><label class="form-label">Destination <span class="required">*</span></label>
             <select id="trim-destination" class="form-control">
               <option value="waiting-visual">Waiting for Visual inspection</option>
+              <option value="visual">Visual Inspection</option>
               <option value="post-curing">Post Curing</option>
             </select>
           </div>

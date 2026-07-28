@@ -2,7 +2,12 @@
 // admin.js — Admin Panel Module
 // ============================================================
 const AdminModule = (() => {
-  const PERMS = ['master','mould-tracking','production','cryogenic','deflashing','trimming','post-curing','waiting-visual','visual','gauge','quality','store','stock','monthly-plan','prod-sched','replenishment','report_inventory','report_sales','report_production','report_cryogenic','report_deflashing','report_trimming','report_post_curing','report_waiting_visual','report_visual','report_gauge','report_rejected','report_recheck','report_reprocess','ai-agent'];
+  const PERMS = [
+    'master','mould-tracking','production','cryogenic','deflashing','trimming','post-curing','waiting-visual','visual','gauge','quality','store',
+    'stock','monthly-plan','prod-sched','replenishment','task-tracking','print-batch','ai-agent',
+    'report_inventory','report_sales','report_production','report_cryogenic','report_deflashing','report_trimming','report_post_curing','report_waiting_visual','report_visual','report_gauge','report_rejected','report_recheck','report_reprocess',
+    'report_slob','report_aging','report_pending_batches','report_qty_gain','report_qty_loss','report_op_efficiency','report_mould_lifecycle','report_cycle_time','report_wip_valuation','report_sub_vs_inhouse'
+  ];
   const PERM_LABELS = {
     master: 'Inventory Master',
     'mould-tracking': 'Mould Tracking',
@@ -20,6 +25,9 @@ const AdminModule = (() => {
     'monthly-plan': 'Monthly Plan',
     'prod-sched': 'Production Schedule',
     replenishment: 'Replenishment Planner',
+    'task-tracking': 'Task Tracking',
+    'print-batch': 'Print Label',
+    'ai-agent': 'AI Assistant',
     report_inventory: 'Report: Inventory',
     report_sales: 'Report: Sales',
     report_production: 'Report: Production',
@@ -33,7 +41,16 @@ const AdminModule = (() => {
     report_rejected: 'Report: Rejected Batches',
     report_recheck: 'Report: QF Recheck',
     report_reprocess: 'Report: Reprocessed Items',
-    'ai-agent': 'AI Assistant'
+    report_slob: 'Report: SLOB',
+    report_aging: 'Report: Aging WIP',
+    report_pending_batches: 'Report: Pending Batches',
+    report_qty_gain: 'Report: Qty Gain',
+    report_qty_loss: 'Report: Qty Loss',
+    report_op_efficiency: 'Report: Op & Insp Efficiency',
+    report_mould_lifecycle: 'Report: Mould Lifecycle',
+    report_cycle_time: 'Report: Cycle Time & Bottlenecks',
+    report_wip_valuation: 'Report: WIP Valuation',
+    report_sub_vs_inhouse: 'Report: Subcontractor vs In-House'
   };
   let activeTab = 'users';
 
@@ -54,6 +71,7 @@ const AdminModule = (() => {
           <button class="tab-btn ${activeTab==='vendor'?'active':''}" data-tab="vendor">🤝 Vendors</button>
           <button class="tab-btn ${activeTab==='op'?'active':''}" data-tab="op">👷 Operators</button>
           <button class="tab-btn ${activeTab==='insp'?'active':''}" data-tab="insp">🔍 Inspectors</button>
+          <button class="tab-btn ${activeTab==='batches'?'active':''}" data-tab="batches">📦 Batches</button>
           <button class="tab-btn ${activeTab==='tasks'?'active':''}" data-tab="tasks">📋 Tasks</button>
           <button class="tab-btn ${activeTab==='system'?'active':''}" data-tab="system">⚙️ Maintenance</button>
         </div>
@@ -80,6 +98,7 @@ const AdminModule = (() => {
     if (tab === 'vendor') el.innerHTML = vendorTab();
     if (tab === 'op')     el.innerHTML = opTab();
     if (tab === 'insp')   el.innerHTML = inspectorTab();
+    if (tab === 'batches') el.innerHTML = batchesTab();
     if (tab === 'tasks')  el.innerHTML = tasksTab();
     if (tab === 'system') el.innerHTML = systemTab();
   }
@@ -1066,5 +1085,124 @@ const AdminModule = (() => {
     renderTab('tasks');
   }
 
-  return { render, openAddUser, editUser, saveUser, toggleUser, onRoleChange, openAddSub, editSub, saveSub, toggleSub, openAddVendor, editVendor, saveVendor, toggleVendor, openAddOp, editOp, saveOp, toggleOp, openAddInspector, editInspector, saveInspector, toggleInspector, clearTransactionData, toggleDatabaseMode, triggerBackupExport, triggerBackupImport, triggerBackupImportLive, viewTaskDetails, openCreateTask, createTask };
+  function batchesTab() {
+    return `
+      <div class="card animate-in">
+        <div class="card-header">
+          <h3>📦 Manage Batch Stages</h3>
+        </div>
+        <div class="card-body">
+          <div class="form-group">
+            <input type="text" id="admin-batch-search" class="form-control" placeholder="Search by Batch No or JM Ref No..." oninput="AdminModule.filterAdminBatches(this.value)">
+          </div>
+          <div class="table-responsive">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Batch Number</th>
+                  <th>JM Ref No</th>
+                  <th>Part No</th>
+                  <th>Current Stage</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="admin-batch-table-body">
+                ${renderAdminBatchRows('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderAdminBatchRows(query) {
+    const batches = DB.Batches.all();
+    const filtered = query
+      ? batches.filter(b => 
+          (b.batchNo && b.batchNo.toLowerCase().includes(query.toLowerCase())) ||
+          (b.jmrefNo && b.jmrefNo.toLowerCase().includes(query.toLowerCase()))
+        )
+      : batches;
+      
+    filtered.sort((a, b) => {
+      const dateA = a.createdAt || '';
+      const dateB = b.createdAt || '';
+      return dateB.localeCompare(dateA);
+    });
+
+    if (filtered.length === 0) {
+      return `<tr><td colspan="5" style="text-align:center;" class="text-muted">No batches found</td></tr>`;
+    }
+
+    const ADMIN_STAGES = {
+      production: 'Moulding',
+      cryogenic: 'Cryogenic',
+      deflashing: 'Manual DE Flashing',
+      trimming: 'Trimming',
+      'post-curing': 'Post Curing',
+      'waiting-visual': 'Waiting for Visual',
+      visual: 'Visual Inspection',
+      gauge: 'Gauge Inspection',
+      quality: 'QC Final',
+      store: 'Store'
+    };
+
+    return filtered.map(b => {
+      const options = Object.entries(ADMIN_STAGES).map(([val, label]) => {
+        const selected = b.currentStage === val ? 'selected' : '';
+        return `<option value="${val}" ${selected}>${label}</option>`;
+      }).join('');
+
+      return `
+        <tr>
+          <td class="font-semibold">${b.batchNo || 'N/A'}</td>
+          <td class="text-muted">${b.jmrefNo || 'N/A'}</td>
+          <td>${b.partNo || 'N/A'}</td>
+          <td>
+            <select id="admin-stage-select-${b.id}" class="form-control form-control-sm" style="padding:4px 8px; font-size:12px; max-width:200px;">
+              ${options}
+            </select>
+          </td>
+          <td>
+            <button class="btn btn-primary btn-xs" onclick="AdminModule.saveBatchStage('${b.id}')">💾 Save</button>
+          </td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  function filterAdminBatches(query) {
+    const tbody = document.getElementById('admin-batch-table-body');
+    if (tbody) {
+      tbody.innerHTML = renderAdminBatchRows(query);
+    }
+  }
+
+  function saveBatchStage(batchId) {
+    const select = document.getElementById(`admin-stage-select-${batchId}`);
+    if (!select) return;
+    const newStage = select.value;
+    
+    const batch = DB.Batches.find(batchId);
+    if (!batch) {
+      showToast('Batch not found', 'error');
+      return;
+    }
+    
+    const status = newStage === 'store' ? 'completed' : 'active';
+    
+    try {
+      DB.Batches.update(batchId, { currentStage: newStage, status: status });
+      showToast('Batch stage updated successfully', 'success');
+      
+      const searchInput = document.getElementById('admin-batch-search');
+      filterAdminBatches(searchInput ? searchInput.value : '');
+    } catch (e) {
+      console.error(e);
+      showToast('Failed to update stage: ' + e.message, 'error');
+    }
+  }
+
+  return { render, openAddUser, editUser, saveUser, toggleUser, onRoleChange, openAddSub, editSub, saveSub, toggleSub, openAddVendor, editVendor, saveVendor, toggleVendor, openAddOp, editOp, saveOp, toggleOp, openAddInspector, editInspector, saveInspector, toggleInspector, clearTransactionData, toggleDatabaseMode, triggerBackupExport, triggerBackupImport, triggerBackupImportLive, viewTaskDetails, openCreateTask, createTask, filterAdminBatches, saveBatchStage };
 })();

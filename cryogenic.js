@@ -157,6 +157,8 @@ const CryogenicModule = (() => {
             <select id="cryo-destination" class="form-control" onchange="CryogenicModule.onDestinationChange()">
               <option value="trimming">Trimming</option>
               <option value="post-curing">Post Curing</option>
+              <option value="waiting-visual">Waiting for Visual inspection</option>
+              <option value="visual">Visual Inspection</option>
             </select>
           </div>
           <div class="form-group hidden" id="cryo-vendor-group">

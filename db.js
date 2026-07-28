@@ -57,8 +57,13 @@ const DB = (() => {
 
   // Helper to load localStorage cache into memory on startup
   function loadLocalCache() {
+    const isLocalBackup = localStorage.getItem('jmpl_db_is_local_backup') === 'true';
     for (const key of Object.keys(cache)) {
       try {
+        if (!isLocalBackup) {
+          // If we are online, clear the old localStorage cache to prevent stale reads on startup
+          localStorage.removeItem('jmpl_' + key);
+        }
         const data = localStorage.getItem(PREFIX + key);
         if (data) {
           cache[key] = JSON.parse(data);
@@ -117,7 +122,18 @@ const DB = (() => {
     try {
       // Initialize Firebase App
       firebase.initializeApp(JMPL_CONFIG.firebaseConfig);
-      db = firebase.firestore();
+      
+      const firestoreInstance = firebase.firestore();
+      
+      // Clear persistence to wipe out any old cached offline writes from the browser
+      try {
+        await firestoreInstance.clearPersistence();
+        console.log("Firestore offline persistence cleared successfully.");
+      } catch (err) {
+        console.warn("Failed to clear Firestore persistence:", err);
+      }
+      
+      db = firestoreInstance;
 
       // Enable offline persistence in Firestore (handles cache sync and offline queue)
       try {
@@ -182,14 +198,9 @@ const DB = (() => {
       await Promise.all(initPromises);
       console.log("JMPL Database fully synchronized with Firestore.");
 
-      // 4. Prompt for migration if local data exists but Cloud DB is empty
-      await checkAndMigrate();
-      runVisualMigration();
-      runMouldMigration();
-      runInternalBatchMigration();
-      runMouldMasterMigration();
-      runUserDeduplicationMigration();
-
+      // We do NOT run automatic schema migrations or checkAndMigrate on the live cloud DB anymore
+      // to prevent stale client caches from overwriting newer cloud data on startup.
+      // Schema migrations are preserved for offline fallback/sandbox modes only.
     } catch (e) {
       console.error("Failed to initialize Firebase database:", e);
     }
