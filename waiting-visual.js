@@ -70,6 +70,7 @@ const WaitingVisualModule = (() => {
           <td class="font-semibold text-blue">${b.batchNo}</td>
           <td>${b.partNo||'—'}</td>
           <td><span class="badge badge-teal">${b.jmrefNo||'—'}</span></td>
+          <td>${formatDate(b.productionDate || b.createdAt)}</td>
           <td class="font-semibold">${formatNum(inputQty)}</td>
           <td>
             ${b.rackNo ? `
@@ -110,9 +111,9 @@ const WaitingVisualModule = (() => {
         <div class="table-wrap">
           <table class="data-table">
             <thead>
-              <tr><th><input type="checkbox" onclick="App.toggleAllStageChecks(this)" style="cursor:pointer;"></th><th>Batch</th><th>Part No</th><th>JMREF</th><th>WIP Qty</th><th>Rack Location</th><th>Actions</th></tr>
+              <tr><th><input type="checkbox" onclick="App.toggleAllStageChecks(this)" style="cursor:pointer;"></th><th>Batch</th><th>Part No</th><th>JMREF</th><th>Production Date</th><th>WIP Qty</th><th>Rack Location</th><th>Actions</th></tr>
             </thead>
-            <tbody>${rows || '<tr><td colspan="7" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody>
+            <tbody>${rows || '<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody>
           </table>
         </div>
       </div>`;
@@ -306,7 +307,7 @@ const WaitingVisualModule = (() => {
     document.getElementById('wv-allocate-qty').value = b.rackQty || inputQty;
     document.getElementById('wv-allocate-bag-no').value = b.bagNo || '';
     
-    const isStock = b.isStockUpload || (b.batchNo && b.batchNo.includes('-REC-'));
+    const isStock = b.batchNo && b.batchNo.includes('-REC-');
     const stockFields = document.getElementById('wv-allocate-stock-fields');
     if (stockFields) {
       if (isStock) {
@@ -367,7 +368,7 @@ const WaitingVisualModule = (() => {
     if (!bagNo) { showToast('Bag No is required', 'error'); return; }
 
     const b = _activeBatch;
-    const isStock = b.isStockUpload || (b.batchNo && b.batchNo.includes('-REC-'));
+    const isStock = b.batchNo && b.batchNo.includes('-REC-');
     const session = Auth.getSession();
 
     if (isStock) {
@@ -556,7 +557,7 @@ const WaitingVisualModule = (() => {
     document.getElementById('wv-process-batch-id').value = batchId;
     document.getElementById('wv-process-input-qty').value = inputQty;
 
-    const isStock = b.isStockUpload || (b.batchNo && b.batchNo.includes('-REC-'));
+    const isStock = b.batchNo && b.batchNo.includes('-REC-');
     const stockFields = document.getElementById('wv-stock-fields');
     if (stockFields) {
       if (isStock) {
@@ -618,7 +619,7 @@ const WaitingVisualModule = (() => {
   }
 
   function calcLoss() {
-    const isStock = _activeBatch && (_activeBatch.isStockUpload || (_activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-')));
+    const isStock = _activeBatch && _activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-');
     if (!isStock) {
       const out = parseInt(document.getElementById('wv-output-qty').value)||0;
       document.getElementById('wv-loss-qty').value = Math.max(0, _wvInputQty - out);
@@ -636,7 +637,7 @@ const WaitingVisualModule = (() => {
     const batch = DB.Batches.find(batchId);
     const dateStr = new Date().toISOString().slice(0,10);
 
-    const isStock = _activeBatch && (_activeBatch.isStockUpload || (_activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-')));
+    const isStock = _activeBatch && _activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-');
     if (isStock) {
       const trNo = (document.getElementById('wv-trno')?.value || '').trim();
       const shift = document.getElementById('wv-shift-move')?.value || 'day';

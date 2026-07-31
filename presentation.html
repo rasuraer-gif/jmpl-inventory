@@ -1,0 +1,795 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JMPL Process Flow & Batch Tracking Presentation</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #090b11;
+      --card-bg: #131722;
+      --card-border: rgba(255, 255, 255, 0.08);
+      --primary: #6366f1;
+      --primary-glow: rgba(99, 102, 241, 0.15);
+      --accent-teal: #14b8a6;
+      --accent-teal-glow: rgba(20, 184, 166, 0.15);
+      --accent-amber: #f59e0b;
+      --accent-red: #ef4444;
+      --text-main: #f3f4f6;
+      --text-muted: #9ca3af;
+      --transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text-main);
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      overflow: hidden;
+      height: 100vh;
+      width: 100vw;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+    }
+
+    /* Background Glow Effects */
+    .glow-sphere {
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(140px);
+      z-index: 1;
+      opacity: 0.4;
+      pointer-events: none;
+    }
+    .glow-1 {
+      top: -10%;
+      left: -10%;
+      width: 50vw;
+      height: 50vw;
+      background: radial-gradient(circle, var(--primary) 0%, transparent 70%);
+    }
+    .glow-2 {
+      bottom: -10%;
+      right: -10%;
+      width: 45vw;
+      height: 45vw;
+      background: radial-gradient(circle, var(--accent-teal) 0%, transparent 70%);
+    }
+
+    /* Slider Container */
+    .presentation-container {
+      position: relative;
+      width: 92vw;
+      height: 84vh;
+      background: rgba(19, 23, 34, 0.7);
+      border: 1px solid var(--card-border);
+      border-radius: 24px;
+      backdrop-filter: blur(20px);
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+    }
+
+    /* Slide Deck wrapper */
+    .slides-wrapper {
+      flex: 1;
+      position: relative;
+    }
+
+    .slide {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      opacity: 0;
+      transform: translateX(60px);
+      transition: var(--transition);
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      padding: 48px 64px;
+      justify-content: center;
+    }
+
+    .slide.active {
+      opacity: 1;
+      transform: translateX(0);
+      pointer-events: all;
+    }
+
+    .slide.prev {
+      transform: translateX(-60px);
+    }
+
+    /* Typography & Titles */
+    h1, h2, h3, h4 {
+      font-family: 'Outfit', sans-serif;
+      font-weight: 700;
+    }
+
+    .slide-header {
+      margin-bottom: 28px;
+    }
+
+    .slide-category {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 3px;
+      color: var(--accent-teal);
+      font-weight: 700;
+      margin-bottom: 8px;
+      display: inline-block;
+    }
+
+    .slide-title {
+      font-size: 38px;
+      font-weight: 800;
+      background: linear-gradient(135deg, #fff 30%, #a5b4fc 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      line-height: 1.2;
+    }
+
+    .slide-content {
+      font-size: 15.5px;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    /* Controls Footer */
+    .presentation-footer {
+      height: 80px;
+      border-top: 1px solid var(--card-border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 48px;
+      background: rgba(10, 12, 18, 0.5);
+      z-index: 20;
+    }
+
+    .nav-buttons {
+      display: flex;
+      gap: 16px;
+    }
+
+    .nav-btn {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--card-border);
+      color: var(--text-main);
+      padding: 10px 24px;
+      border-radius: 12px;
+      cursor: pointer;
+      font-family: inherit;
+      font-weight: 600;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transition: var(--transition);
+    }
+
+    .nav-btn:hover:not(:disabled) {
+      background: var(--primary-glow);
+      border-color: var(--primary);
+      color: #fff;
+      transform: translateY(-2px);
+    }
+
+    .nav-btn:disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
+    }
+
+    .progress-bar-container {
+      flex: 1;
+      height: 6px;
+      background: rgba(255, 255, 255, 0.05);
+      margin: 0 48px;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--primary), var(--accent-teal));
+      width: 0%;
+      border-radius: 3px;
+      transition: var(--transition);
+    }
+
+    .slide-counter {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-muted);
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Layout Grids */
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 40px;
+      align-items: center;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 24px;
+    }
+
+    /* Slide specific styles */
+    /* Slide 1 - Title slide */
+    .title-slide {
+      text-align: center;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .title-slide .slide-category {
+      background: var(--primary-glow);
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      padding: 6px 16px;
+      border-radius: 30px;
+      color: #a5b4fc;
+      margin-bottom: 24px;
+    }
+
+    .title-slide h1 {
+      font-size: 54px;
+      font-weight: 900;
+      margin-bottom: 16px;
+      background: linear-gradient(135deg, #ffffff 40%, #818cf8 80%, #2dd4bf 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      letter-spacing: -1px;
+    }
+
+    .title-slide p {
+      font-size: 18px;
+      max-width: 650px;
+      margin-bottom: 32px;
+    }
+
+    /* Card styling */
+    .info-card {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 24px;
+      transition: var(--transition);
+    }
+
+    .info-card:hover {
+      background: rgba(255, 255, 255, 0.04);
+      border-color: rgba(255, 255, 255, 0.15);
+      transform: translateY(-4px);
+    }
+
+    .info-card h3 {
+      color: #fff;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .info-card h3 span {
+      background: var(--primary-glow);
+      color: var(--primary);
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    /* Slide 2: Interactive Diagram */
+    .pipeline-container {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      justify-content: space-between;
+    }
+
+    .nodes-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: relative;
+      margin: 30px 0;
+      padding: 0 10px;
+    }
+
+    .nodes-row::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: rgba(255, 255, 255, 0.05);
+      z-index: 5;
+      transform: translateY(-50%);
+    }
+
+    .pipeline-node {
+      position: relative;
+      z-index: 10;
+      background: var(--card-bg);
+      border: 2px solid var(--card-border);
+      width: 70px;
+      height: 70px;
+      border-radius: 50%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 20px;
+      transition: var(--transition);
+    }
+
+    .pipeline-node:hover, .pipeline-node.selected {
+      border-color: var(--accent-teal);
+      background: var(--accent-teal-glow);
+      box-shadow: 0 0 20px var(--accent-teal-glow);
+      transform: scale(1.15);
+    }
+
+    .pipeline-node .node-label {
+      position: absolute;
+      top: 80px;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      white-space: nowrap;
+      text-align: center;
+      transition: var(--transition);
+    }
+
+    .pipeline-node:hover .node-label, .pipeline-node.selected .node-label {
+      color: #fff;
+    }
+
+    .details-panel {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 24px;
+      margin-top: 50px;
+      min-height: 140px;
+      transition: var(--transition);
+      position: relative;
+    }
+
+    .details-title {
+      font-size: 20px;
+      color: #fff;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .details-title .stage-badge {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      background: var(--accent-teal-glow);
+      color: var(--accent-teal);
+      border: 1px solid rgba(20, 184, 166, 0.3);
+      padding: 4px 10px;
+      border-radius: 20px;
+    }
+
+    /* Formula box styling */
+    .formula-box {
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px dashed rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      padding: 16px;
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 14px;
+      color: #818cf8;
+      text-align: center;
+      margin: 16px 0;
+      letter-spacing: 1px;
+      font-weight: 700;
+    }
+
+    /* Keyboard Shortcuts Indicator */
+    .shortcuts-tip {
+      position: absolute;
+      top: 24px;
+      right: 24px;
+      font-size: 12px;
+      color: var(--text-muted);
+      background: rgba(255, 255, 255, 0.03);
+      padding: 6px 12px;
+      border-radius: 20px;
+      border: 1px solid var(--card-border);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      pointer-events: none;
+    }
+    .key-cap {
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.2);
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 700;
+    }
+
+    /* Grid layout details */
+    .list-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .list-bullet {
+      background: var(--accent-teal-glow);
+      color: var(--accent-teal);
+      min-width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 700;
+      margin-top: 2px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="glow-sphere glow-1"></div>
+  <div class="glow-sphere glow-2"></div>
+
+  <div class="presentation-container">
+    <div class="shortcuts-tip">
+      <span>Use Keyboard</span>
+      <span class="key-cap">←</span>
+      <span class="key-cap">→</span>
+      <span>or Click below</span>
+    </div>
+
+    <!-- Slides Wrapper -->
+    <div class="slides-wrapper">
+      
+      <!-- Slide 1: Welcome -->
+      <div class="slide active" id="slide-1">
+        <div class="title-slide">
+          <span class="slide-category">System Architecture & Overview</span>
+          <h1>JMPL Inventory Tracking System</h1>
+          <p>A comprehensive walkthrough of the end-to-end Rubber O-Ring manufacturing lifecycle, batch configuration, stage movement, and bulk Excel verification pipeline.</p>
+          <div style="display:flex; gap:16px;">
+            <button class="nav-btn" onclick="nextSlide()" style="background:var(--primary); border-color:var(--primary); color:#fff; box-shadow:0 10px 20px -5px rgba(99,102,241,0.4);">
+              Begin Walkthrough ➔
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Slide 2: Complete Process Flow Pipeline -->
+      <div class="slide" id="slide-2">
+        <div class="slide-header">
+          <span class="slide-category">Process Flow</span>
+          <h2 class="slide-title">Manufacturing Pipeline Lifecycle</h2>
+        </div>
+        <div class="slide-content pipeline-container">
+          <p class="mb-4">Interact with each stage below to explore details of the sequential process routing, tracking batches from initial moulding to completed store inventory:</p>
+          
+          <div class="nodes-row">
+            <div class="pipeline-node selected" onclick="selectStage(0, this)">1<span class="node-label">Moulding</span></div>
+            <div class="pipeline-node" onclick="selectStage(1, this)">2<span class="node-label">Cryo</span></div>
+            <div class="pipeline-node" onclick="selectStage(2, this)">3<span class="node-label">Deflashing</span></div>
+            <div class="pipeline-node" onclick="selectStage(3, this)">4<span class="node-label">Trimming</span></div>
+            <div class="pipeline-node" onclick="selectStage(4, this)">5<span class="node-label">Post Curing</span></div>
+            <div class="pipeline-node" onclick="selectStage(5, this)">6<span class="node-label">Visual</span></div>
+            <div class="pipeline-node" onclick="selectStage(6, this)">7<span class="node-label">Gauge</span></div>
+            <div class="pipeline-node" onclick="selectStage(7, this)">8<span class="node-label">Store</span></div>
+          </div>
+
+          <div class="details-panel" id="stage-details-box">
+            <div class="details-title" id="stage-title">Moulding / Production <span class="stage-badge">Stage 1</span></div>
+            <p id="stage-desc" class="text-muted">The starting manufacturing stage. Raw compound rubber is moulded using designated part moulds (Mould 1 through Mould 5). Yield is calculated by lifts completed multiplied by cavities. Batches can be run In-House or dispatched to Subcontractors.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Slide 3: Batch Creation & Numbering Logic -->
+      <div class="slide" id="slide-3">
+        <div class="slide-header">
+          <span class="slide-category">Identity & Tracking</span>
+          <h2 class="slide-title">Batch Number Generation & Allocation</h2>
+        </div>
+        <div class="slide-content grid-2">
+          <div>
+            <div class="list-item">
+              <span class="list-bullet">1</span>
+              <div>
+                <strong style="color:#fff;">Production Batch Formula</strong>
+                <p>Batches are assigned a unique, traceable ID structured exactly like production batch creation:</p>
+              </div>
+            </div>
+            <div class="formula-box">
+              [JMREF No] - [TR No] - [DD] - [Shift] - [Type] - [Press No]
+            </div>
+            <div class="list-item">
+              <span class="list-bullet">2</span>
+              <div>
+                <strong style="color:#fff;">Internal Batch No (IB)</strong>
+                <p>A auto-generated, sequential integer matching sequence (e.g. <code>IB: 1045</code>) generated globally across all stages.</p>
+              </div>
+            </div>
+            <div class="list-item">
+              <span class="list-bullet">3</span>
+              <div>
+                <strong style="color:#fff;">Properties Tracked</strong>
+                <p>Part Number, Description, Mould Type, and Process Flow mapped dynamically based on the JMREF No and Mould No.</p>
+              </div>
+            </div>
+          </div>
+          <div class="info-card">
+            <h3 style="color:var(--accent-teal);"><span style="background:var(--accent-teal-glow);">ℹ️</span> Code Breakdown</h3>
+            <p style="font-size:13.5px; margin-top:12px; font-family:monospace; background:rgba(0,0,0,0.2); padding:12px; border-radius:8px; border:1px solid rgba(255,255,255,0.05); line-height: 1.5;">
+              dayStr = Date.split('-')[2]<br>
+              shiftCode = Shift === 'night' ? 'N' : 'D'<br>
+              typeCode = ProdType === 'subcontractor' ? 'S' : 'I'<br>
+              batchNo = `${jmrefNo}-${trNo}-${dayStr}-${shiftCode}-${typeCode}-${pressNo}`
+            </p>
+            <p style="margin-top: 12px; font-size:14px;">Ensures complete traceability of shift, machine (press), manufacturing date, vendor/subcontractor, and tooling reference.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Slide 4: Stage Routing & Loss Calculations -->
+      <div class="slide" id="slide-4">
+        <div class="slide-header">
+          <span class="slide-category">Movement Control</span>
+          <h2 class="slide-title">Process &amp; Move Stage Calculations</h2>
+        </div>
+        <div class="slide-content grid-3">
+          <div class="info-card">
+            <h3><span>➔</span> Output Defaulting</h3>
+            <p class="text-sm text-muted mt-2">When moving a batch to the next stage, the <strong>Output Quantity</strong> is pre-filled to match the input quantity by default. This makes operations faster and cleaner while keeping the input fully editable.</p>
+          </div>
+          <div class="info-card">
+            <h3><span>⚠️</span> Yield Loss Tracker</h3>
+            <p class="text-sm text-muted mt-2">Any difference between input and output is automatically calculated and saved as a loss record: <br><code>Loss Qty = Input Qty - Output Qty</code>. Triggers automatic entries in the Loss Database.</p>
+          </div>
+          <div class="info-card">
+            <h3><span>🔄</span> Sub-Batch Spills</h3>
+            <p class="text-sm text-muted mt-2">Allows partial quantities to split into secondary sub-batches to be processed under different operators/subcontractors, maintaining sequence lineages through parent reference ids.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Slide 5: Batch-wise Excel Bulk Upload -->
+      <div class="slide" id="slide-5">
+        <div class="slide-header">
+          <span class="slide-category">Reconciliation & Import</span>
+          <h2 class="slide-title">Batch-wise Excel Bulk Import</h2>
+        </div>
+        <div class="slide-content grid-2">
+          <div>
+            <p style="margin-bottom:20px;">The new bulk upload feature enables importing multi-row manufacturing entries from a standardized Excel spreadsheet, complete with automated database mappings and validation safeguards:</p>
+            <div class="list-item">
+              <span class="list-bullet">✓</span>
+              <div><strong style="color:#fff;">Auto-Derivations:</strong> Part No, Description, Mould Type, Process Flow, Batch No, and Internal Batch No are automatically populated based on JMREF No & Mould No.</div>
+            </div>
+            <div class="list-item">
+              <span class="list-bullet">✓</span>
+              <div><strong style="color:#fff;">Database Validation:</strong> Verifies JMREF No exists in Master, Operator and Subcontractors match active registers, and confirms the generated batch number is not a duplicate.</div>
+            </div>
+          </div>
+          <div class="info-card">
+            <h4 style="margin-bottom:12px; color:#fff;">Import Steps Workflow:</h4>
+            <div style="font-size:13.5px; display:flex; flex-direction:column; gap:8px;">
+              <div style="display:flex; gap:10px;"><b style="color:var(--accent-teal);">1.</b> Upload Excel spreadsheet in the Bulk Upload tab.</div>
+              <div style="display:flex; gap:10px;"><b style="color:var(--accent-teal);">2.</b> Preview validation preview panel (errors flagged in red).</div>
+              <div style="display:flex; gap:10px;"><b style="color:var(--accent-teal);">3.</b> Confirm (blocks import if active errors exist).</div>
+              <div style="display:flex; gap:10px;"><b style="color:var(--accent-teal);">4.</b> Redirects to Success table to select and bulk print barcode labels.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Slide 6: Label Printing & Packaging -->
+      <div class="slide" id="slide-6">
+        <div class="slide-header">
+          <span class="slide-category">Traceability Labeling</span>
+          <h2 class="slide-title">QR Barcodes &amp; Label Printing</h2>
+        </div>
+        <div class="slide-content grid-2">
+          <div class="info-card">
+            <h3 style="color:#fff;">Label Anatomy (40mm x 60mm)</h3>
+            <div style="display:flex; flex-direction:column; gap:8px; margin-top:16px; font-size:14px;">
+              <div style="display:flex; justify-content:space-between; border-bottom:1px dashed rgba(255,255,255,0.05); padding-bottom:4px;">
+                <span>Company Header</span><span style="color:#fff;">JANANI MOULDINGS PVT. LTD.</span>
+              </div>
+              <div style="display:flex; justify-content:space-between; border-bottom:1px dashed rgba(255,255,255,0.05); padding-bottom:4px;">
+                <span>Traceable QR Code</span><span style="color:var(--accent-teal);">Contains unique Batch No</span>
+              </div>
+              <div style="display:flex; justify-content:space-between; border-bottom:1px dashed rgba(255,255,255,0.05); padding-bottom:4px;">
+                <span>Internal Batch No (IB)</span><span style="color:var(--primary);">Sequenced tracking code</span>
+              </div>
+              <div style="display:flex; justify-content:space-between; border-bottom:1px dashed rgba(255,255,255,0.05); padding-bottom:4px;">
+                <span>Workflow Details</span><span>JMREF, Part No, Destination Stage, Qty, Date</span>
+              </div>
+            </div>
+          </div>
+          <div>
+            <p style="margin-bottom:16px;">Following confirmation of a single batch creation or bulk Excel import, the system generates label queues to allow instant thermal barcode printing:</p>
+            <div class="list-item">
+              <span class="list-bullet">🖨️</span>
+              <div>
+                <strong style="color:#fff;">Bulk Print Labels:</strong> Select multiple batches from the history dashboard or import success page, and click "Bulk Print" to stream printable labels to the browser spool.
+              </div>
+            </div>
+            <div class="list-item">
+              <span class="list-bullet">📷</span>
+              <div>
+                <strong style="color:#fff;">QR Code Scanning:</strong> Integrated scanner reads the printed QR code labels instantly, redirecting shop floor users directly to the Move Stage forms.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Presentation Footer Controls -->
+    <div class="presentation-footer">
+      <div class="slide-counter">Slide <span id="current-slide-num">1</span> of <span id="total-slides-num">6</span></div>
+      
+      <div class="progress-bar-container">
+        <div class="progress-bar-fill" id="progress-fill"></div>
+      </div>
+      
+      <div class="nav-buttons">
+        <button class="nav-btn" id="prev-btn" onclick="prevSlide()" disabled>▰ Previous</button>
+        <button class="nav-btn" id="next-btn" onclick="nextSlide()">Next ▰</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentSlide = 1;
+    const totalSlides = 6;
+
+    const stagesData = [
+      {
+        title: "Moulding / Production",
+        badge: "Stage 1",
+        desc: "The starting manufacturing stage. Raw compound rubber is moulded using designated part moulds (Mould 1 through Mould 5). Yield is calculated by lifts completed multiplied by cavities. Batches can be run In-House or dispatched to Subcontractors."
+      },
+      {
+        title: "Cryogenic Deflashing",
+        badge: "Stage 2",
+        desc: "Moulded O-rings undergo liquid nitrogen tumbling to freeze and remove excess rubber flash from outer edges. Highly efficient, cold-temperature tumbling method."
+      },
+      {
+        title: "Manual DE Flashing",
+        badge: "Stage 3",
+        desc: "Manual flash removal and trimming for custom moulds or parts requiring precision detailing that cryogenic tumbling cannot clear. Sent to designated deflashing vendors."
+      },
+      {
+        title: "Trimming",
+        badge: "Stage 4",
+        desc: "Rotary machine or manual knife edge trimming to finish concentric sealing profiles, cutting/sealing joint flashings cleanly. Dispatched to registered trimming vendors."
+      },
+      {
+        title: "Post Curing",
+        badge: "Stage 5",
+        desc: "Oven baking stage. Batches are loaded into heating chambers for set temperatures and durations to fully cure the vulcanized rubber structure, aligning material tensile strength."
+      },
+      {
+        title: "Visual Inspection",
+        badge: "Stage 6",
+        desc: "Primary quality sorting. Operators examine curing, cracks, flash residue, or sizing defects under magnifying lighting to isolate defectives."
+      },
+      {
+        title: "Gauge Inspection",
+        badge: "Stage 7",
+        desc: "Metrology and dimensional verification. Outer diameter, inner diameter, and thickness are checked using precision gauges to verify tolerances."
+      },
+      {
+        title: "Store / FG Inventory",
+        badge: "Stage 8",
+        desc: "Finished Goods storing. Batches are packaged, labeled, and placed in storage racks. FIFO stock allocation filters available store inventory for delivery and dispatch."
+      }
+    ];
+
+    function selectStage(index, node) {
+      document.querySelectorAll('.pipeline-node').forEach(n => n.classList.remove('selected'));
+      node.classList.add('selected');
+      
+      const data = stagesData[index];
+      document.getElementById('stage-title').innerHTML = `${data.title} <span class="stage-badge">${data.badge}</span>`;
+      document.getElementById('stage-desc').innerText = data.desc;
+    }
+
+    function updateControls() {
+      document.getElementById('current-slide-num').innerText = currentSlide;
+      document.getElementById('progress-fill').style.width = ((currentSlide - 1) / (totalSlides - 1)) * 100 + '%';
+      
+      document.getElementById('prev-btn').disabled = currentSlide === 1;
+      
+      const nextBtn = document.getElementById('next-btn');
+      if (currentSlide === totalSlides) {
+        nextBtn.innerText = "Finish ▰";
+      } else {
+        nextBtn.innerText = "Next ▰";
+      }
+    }
+
+    function nextSlide() {
+      if (currentSlide < totalSlides) {
+        document.getElementById(`slide-${currentSlide}`).classList.remove('active');
+        document.getElementById(`slide-${currentSlide}`).classList.add('prev');
+        currentSlide++;
+        document.getElementById(`slide-${currentSlide}`).classList.remove('prev');
+        document.getElementById(`slide-${currentSlide}`).classList.add('active');
+        updateControls();
+      } else {
+        // Reset to slide 1
+        document.getElementById(`slide-${currentSlide}`).classList.remove('active');
+        for(let i=1; i<totalSlides; i++) {
+          document.getElementById(`slide-${i}`).classList.remove('prev');
+        }
+        currentSlide = 1;
+        document.getElementById(`slide-${currentSlide}`).classList.add('active');
+        updateControls();
+      }
+    }
+
+    function prevSlide() {
+      if (currentSlide > 1) {
+        document.getElementById(`slide-${currentSlide}`).classList.remove('active');
+        currentSlide--;
+        document.getElementById(`slide-${currentSlide}`).classList.remove('prev');
+        document.getElementById(`slide-${currentSlide}`).classList.add('active');
+        updateControls();
+      }
+    }
+
+    // Keyboard navigation
+    document.addEventListener('keydown', function(event) {
+      if (event.key === 'ArrowRight' || event.key === ' ') {
+        nextSlide();
+      } else if (event.key === 'ArrowLeft') {
+        prevSlide();
+      }
+    });
+
+    // Initialize progress bar
+    updateControls();
+  </script>
+</body>
+</html>

@@ -479,9 +479,9 @@ const ProductionModule = (() => {
       if (lossGroup) lossGroup.style.display = 'none';
     } else {
       document.getElementById('move-batch-info').innerHTML = `<strong>${b.batchNo}</strong> &mdash; ${b.jmrefNo} &mdash; ${b.partNo}<br><span class="text-muted text-sm">Initial Qty: <strong>${formatNum(_moveInputQty)}</strong></span>`;
-      document.getElementById('move-output-qty').value = '';
+      document.getElementById('move-output-qty').value = _moveInputQty;
       document.getElementById('move-output-qty').placeholder = "Quantity moved to next stage";
-      document.getElementById('move-loss-qty').value = '';
+      document.getElementById('move-loss-qty').value = '0';
       if (lossGroup) lossGroup.style.display = 'block';
     }
     document.getElementById('move-destination').value = 'cryogenic';

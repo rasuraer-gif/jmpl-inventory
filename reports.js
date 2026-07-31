@@ -336,10 +336,9 @@ const ReportsModule = (() => {
       );
     }
     
-    // Filter by date range (using stage entry date or batch creation date)
+    // Filter by date range (using production date)
     filtered = filtered.filter(b => {
-      const recs = stageRecords.filter(r => r.batchId === b.id && r.movedTo === 'waiting-visual');
-      const dateStr = recs.length ? (recs[recs.length - 1].date || recs[recs.length - 1].createdAt || '') : (b.createdAt || '');
+      const dateStr = b.productionDate || b.createdAt || '';
       const d = dateStr.slice(0, 10);
       if (from && d < from) return false;
       if (to && d > to) return false;
@@ -348,12 +347,13 @@ const ReportsModule = (() => {
     
     if (!filtered.length) return emptyState();
     
-    const headers = ['#', 'Batch No', 'JMREF No', 'Part No', 'Allocated Qty', 'Rack No', 'Location', 'Box No', 'Additional Details', 'Stage Entry Date', 'Current Stage'];
+    const headers = ['#', 'Batch No', 'JMREF No', 'Part No', 'Allocated Qty', 'Rack No', 'Location', 'Box No', 'Additional Details', 'Production Date', 'Stage Entry Date', 'Current Stage'];
     
     const dataRows = filtered.map((b, i) => {
       const recs = stageRecords.filter(r => r.batchId === b.id && r.movedTo === 'waiting-visual');
       const qty = recs.length ? (recs[recs.length - 1].outputQty || 0) : (b.initialQty || 0);
-      const dateStr = recs.length ? (recs[recs.length - 1].date || recs[recs.length - 1].createdAt || '') : (b.createdAt || '');
+      const entryDateStr = recs.length ? (recs[recs.length - 1].date || recs[recs.length - 1].createdAt || '') : (b.createdAt || '');
+      const prodDateStr = b.productionDate || b.createdAt || '';
       
       return [
         i + 1,
@@ -365,7 +365,8 @@ const ReportsModule = (() => {
         b.rackLocation || '—',
         b.boxNo || '—',
         b.rackNotes || '—',
-        dateStr.slice(0, 10),
+        prodDateStr.slice(0, 10),
+        entryDateStr.slice(0, 10),
         STAGE_LABELS[b.currentStage] || b.currentStage
       ];
     });
@@ -373,7 +374,8 @@ const ReportsModule = (() => {
     const htmlRows = filtered.map((b, i) => {
       const recs = stageRecords.filter(r => r.batchId === b.id && r.movedTo === 'waiting-visual');
       const qty = recs.length ? (recs[recs.length - 1].outputQty || 0) : (b.initialQty || 0);
-      const dateStr = recs.length ? (recs[recs.length - 1].date || recs[recs.length - 1].createdAt || '') : (b.createdAt || '');
+      const entryDateStr = recs.length ? (recs[recs.length - 1].date || recs[recs.length - 1].createdAt || '') : (b.createdAt || '');
+      const prodDateStr = b.productionDate || b.createdAt || '';
       
       return `
         <tr>
@@ -386,7 +388,8 @@ const ReportsModule = (() => {
           <td><strong>${b.rackLocation || '—'}</strong></td>
           <td>${b.boxNo || '—'}</td>
           <td class="text-sm text-muted">${b.rackNotes || '—'}</td>
-          <td>${formatDate(dateStr.slice(0,10))}</td>
+          <td>${formatDate(prodDateStr.slice(0,10))}</td>
+          <td>${formatDate(entryDateStr.slice(0,10))}</td>
           <td><span class="stage-chip ${b.currentStage}">${STAGE_LABELS[b.currentStage] || b.currentStage}</span></td>
         </tr>`;
     }).join('');
@@ -401,11 +404,11 @@ const ReportsModule = (() => {
       <tr class="font-bold text-danger">
         <td colspan="4" style="text-align:right;">TOTAL:</td>
         <td>${formatNum(totalAllocated)}</td>
-        <td colspan="6"></td>
+        <td colspan="7"></td>
       </tr>
     `;
     const finalHtmlRows = htmlRows + totalRowHtml;
-    dataRows.push(['', '', '', 'TOTAL:', totalAllocated, '', '', '', '', '', '']);
+    dataRows.push(['', '', '', 'TOTAL:', totalAllocated, '', '', '', '', '', '', '']);
     
     const html = `
       <div class="table-wrap">
@@ -421,6 +424,7 @@ const ReportsModule = (() => {
               <th>Location</th>
               <th>Box No</th>
               <th>Additional Details</th>
+              <th>Production Date</th>
               <th>Stage Entry Date</th>
               <th>Current Stage</th>
             </tr>

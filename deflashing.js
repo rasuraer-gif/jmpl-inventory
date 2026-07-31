@@ -10,6 +10,19 @@ const DeflashingModule = (() => {
     return lastRec.isRecheck ? lastRec.recheckQty : lastRec.outputQty;
   }
 
+  const STAGE_LABELS = { 
+    production: 'Production', 
+    cryogenic: 'Cryogenic', 
+    deflashing: 'Flash Removal', 
+    trimming: 'Trimming', 
+    'post-curing': 'Post Curing',
+    'waiting-visual': 'Waiting for Visual Inspection',
+    visual: 'Visual Inspection', 
+    gauge: 'Gauge Inspection', 
+    quality: 'Quality Final', 
+    store: 'Store' 
+  };
+
   let historySearch = '';
   let pendingSearch = '';
 
@@ -182,6 +195,7 @@ const DeflashingModule = (() => {
               <select id="de-destination" class="form-control" onchange="DeflashingModule.onDestinationChange()">
                 <option value="trimming">Trimming</option>
                 <option value="cryogenic">Cryogenic</option>
+                <option value="post-curing">Post Curing</option>
                 <option value="waiting-visual">Waiting for Visual inspection</option>
               </select>
             </div>

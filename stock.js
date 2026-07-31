@@ -7,17 +7,21 @@ const StockModule = (() => {
     cryogenic: 'Cryogenic', 
     deflashing: 'Manual DE Flashing', 
     trimming: 'Trimming', 
+    'post-curing': 'Post Curing',
+    'waiting-visual': 'Waiting for Visual',
     visual: 'Visual Inspection', 
     gauge: 'Gauge Inspection', 
     quality: 'Quality Final', 
     store: 'Store' 
   };
 
-  let activeTab = 'single'; // 'single', 'bulk', 'compare'
+  let activeTab = 'single'; // 'single', 'bulk', 'compare', 'batch_bulk', 'batch_confirm', 'batch_success'
   let parsedAdjustments = []; // Holds all parsed stage count adjustments
   let uniqueJmrefs = []; // Holds list of unique JMREF codes in the upload
   let currentJmrefIndex = 0; // Current wizard index in uniqueJmrefs
   let historySearch = '';
+  let parsedBatchUploads = []; // Holds parsed rows for batch upload
+  let lastCreatedBatchIds = []; // Holds IDs of batches created in the current session
 
   function getActualStock(partId, jmrefNo, stage) {
     const batches = DB.Batches.all();
@@ -45,14 +49,31 @@ const StockModule = (() => {
       renderCompareScreen(el);
       return;
     }
+    if (activeTab === 'batch_confirm') {
+      renderBatchConfirmScreen(el);
+      return;
+    }
+    if (activeTab === 'batch_success') {
+      renderBatchSuccessScreen(el);
+      return;
+    }
 
     const isAdmin = Auth.isAdmin();
     const master = DB.Master.all();
     const partOpts = master.map(m=>'<option value="' + m.id + '" data-jmref="' + m.jmrefNo + '">' + m.partNo + ' — ' + m.jmrefNo + '</option>').join('');
 
+    let activeFormHtml = '';
+    if (activeTab === 'single') {
+      activeFormHtml = renderSingleTab(partOpts);
+    } else if (activeTab === 'bulk') {
+      activeFormHtml = renderBulkTab();
+    } else if (activeTab === 'batch_bulk') {
+      activeFormHtml = renderBatchBulkTab();
+    }
+
     const formHtml = isAdmin ? `
       <div id="stock-upload-forms">
-        ${activeTab === 'single' ? renderSingleTab(partOpts) : renderBulkTab()}
+        ${activeFormHtml}
       </div>` : `
       <div class="card card-body" style="margin-bottom:24px;text-align:center;padding:32px;border-color:rgba(245,158,11,0.3);background:rgba(245,158,11,0.06);">
         <div style="font-size:36px;margin-bottom:12px;">⚠️</div>
@@ -69,7 +90,8 @@ const StockModule = (() => {
         
         <div class="tabs" id="stock-module-tabs">
           <button class="tab-btn ${activeTab==='single'?'active':''}" onclick="StockModule.switchTab('single')">Single Upload</button>
-          <button class="tab-btn ${activeTab==='bulk'?'active':''}" onclick="StockModule.switchTab('bulk')">📥 Bulk Upload (Excel)</button>
+          <button class="tab-btn ${activeTab==='bulk'?'active':''}" onclick="StockModule.switchTab('bulk')">📥 Reconciliation Upload (Excel)</button>
+          <button class="tab-btn ${activeTab==='batch_bulk'?'active':''}" onclick="StockModule.switchTab('batch_bulk')">📦 Batch-wise Bulk Upload</button>
         </div>
 
         ${formHtml}
@@ -1016,6 +1038,652 @@ const StockModule = (() => {
     }
   }
 
+  // Helper to extract values in a case-insensitive, space-flexible way
+  function getRowValue(row, possibleHeaders) {
+    for (const k of Object.keys(row)) {
+      const cleanK = k.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+      for (const h of possibleHeaders) {
+        const cleanH = h.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (cleanK === cleanH) {
+          return row[k];
+        }
+      }
+    }
+    return undefined;
+  }
+
+  // Helper to format Date from Excel
+  function formatExcelDate(val) {
+    if (!val) return '';
+    if (val instanceof Date) {
+      return val.toISOString().slice(0, 10);
+    }
+    if (typeof val === 'number') {
+      const date = new Date((val - 25569) * 86400 * 1000);
+      return date.toISOString().slice(0, 10);
+    }
+    if (typeof val === 'string') {
+      val = val.trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(val)) return val;
+      const match = val.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+      if (match) {
+        const d = match[1].padStart(2, '0');
+        const m = match[2].padStart(2, '0');
+        const y = match[3];
+        return `${y}-${m}-${d}`;
+      }
+      try {
+        const d = new Date(val);
+        if (!isNaN(d.getTime())) {
+          return d.toISOString().slice(0, 10);
+        }
+      } catch (e) {}
+    }
+    return '';
+  }
+
+  function renderBatchBulkTab() {
+    return `
+      <div class="card animate-in" style="margin-bottom:24px;">
+        <div class="card-header" style="justify-content:space-between; align-items:center;">
+          <h3>Batch-wise Bulk Upload</h3>
+          <span class="badge badge-blue">Admin Only — Excel Upload</span>
+        </div>
+        <div class="card-body">
+          <div style="margin-bottom: 20px; font-size: 13.5px; color: var(--text-secondary); line-height: 1.5;">
+            <p style="margin-bottom: 8px;">Upload an Excel sheet containing manufacturing batch entries to automatically create batches at their destination stages.</p>
+            <ul style="padding-left: 20px; list-style-type: disc; margin-bottom: 12px; display: flex; flex-direction: column; gap: 4px;">
+              <li>Mandatory columns: <strong>JMREF No</strong>, <strong>TRNO</strong>, <strong>Production Type</strong> (In-House / Subcontractor), <strong>Operator</strong> (required for In-House), <strong>Subcontractor</strong> (required for Subcontractor), <strong>Production Date</strong>, <strong>Quantity</strong>, <strong>Destination Stage</strong>.</li>
+              <li>Optional columns: <strong>Mould No</strong> (defaults to 1), <strong>Shift</strong> (defaults to Day), <strong>Press No</strong> (defaults to 1).</li>
+              <li>Details like Part No, Description, Mould Type, Process Flow, Batch No, and Internal Batch No will be automatically mapped based on the JMREF No and Mould No.</li>
+            </ul>
+            <button class="btn btn-ghost btn-sm" onclick="StockModule.downloadBatchTemplate()" style="padding: 6px 12px; margin-top: 4px;">📥 Download Batch Upload Excel Template</button>
+          </div>
+          
+          <div class="form-row">
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label">Select Excel File (.xlsx, .xls) <span class="required">*</span></label>
+              <input type="file" id="stock-batch-bulk-input" class="form-control" accept=".xlsx, .xls" onchange="StockModule.handleBatchFileSelect(event)">
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <!-- Spacer -->
+            </div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function downloadBatchTemplate() {
+    if (typeof XLSX === 'undefined') {
+      showToast('Excel library not loaded, please wait', 'warning');
+      return;
+    }
+    const headers = [
+      'JMREF No', 'TRNO', 'Production Type', 'Operator', 'Subcontractor', 
+      'Production Date', 'Quantity', 'Destination Stage', 'Mould No', 'Shift', 'Press No'
+    ];
+    const rows = [
+      ['JMREF-2026-101', 'TR-100', 'In-House', 'John Doe', '', '2026-07-29', '1000', 'Moulding', '1', 'Day', '1'],
+      ['JMREF-2026-102', 'TR-200', 'Subcontractor', '', 'Anil Polymers', '2026-07-29', '2000', 'Cryogenic', '1', 'Day', '1']
+    ];
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Batch Upload');
+    XLSX.writeFile(wb, 'JMPL_Batch_Upload_Template.xlsx');
+    showToast('Batch template downloaded', 'success');
+  }
+
+  function handleBatchFileSelect(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    if (typeof XLSX === 'undefined') {
+      showToast('Excel library not loaded. Refresh and try again.', 'error');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      try {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        const rawJson = XLSX.utils.sheet_to_json(worksheet);
+        
+        processBatchUploadedJson(rawJson);
+      } catch (err) {
+        console.error(err);
+        showToast('Error reading Excel: ' + err.message, 'error');
+      }
+    };
+    reader.readAsArrayBuffer(file);
+    event.target.value = ''; // Reset file input
+  }
+
+  function processBatchUploadedJson(rawJson) {
+    parsedBatchUploads = [];
+    const master = DB.Master.all();
+    const operators = DB.Operators.all();
+    const subcontractors = DB.Subcontractors.all();
+    const existingBatches = DB.Batches.all();
+    let nextIB = DB.Batches.nextInternalBatchNo();
+
+    if (rawJson.length === 0) {
+      showToast('Excel file is empty', 'warning');
+      return;
+    }
+
+    rawJson.forEach((row, index) => {
+      const rowNum = index + 2;
+      
+      const rowJmref = String(getRowValue(row, ['jmrefno', 'jmref', 'jmref number']) || '').trim();
+      const rowTrNo = String(getRowValue(row, ['trno', 'trnumber', 'tr number']) || '').trim();
+      const rowProdTypeRaw = String(getRowValue(row, ['productiontype', 'prodtype', 'type']) || '').trim().toLowerCase();
+      const rowOperator = String(getRowValue(row, ['operator', 'operatorid', 'operatorname']) || '').trim();
+      const rowSubcontractor = String(getRowValue(row, ['subcontractor', 'subcontractorid', 'subcontractorname']) || '').trim();
+      const rowProdDateRaw = getRowValue(row, ['productiondate', 'proddate', 'date']);
+      const rowQtyRaw = getRowValue(row, ['quantity', 'qty']);
+      const rowStageRaw = String(getRowValue(row, ['destinationstage', 'destination', 'stage']) || '').trim();
+      const rowMouldNoRaw = getRowValue(row, ['mouldno', 'mouldnumber', 'mould']);
+      const rowShiftRaw = String(getRowValue(row, ['shift']) || '').trim().toLowerCase();
+      const rowPressNoRaw = String(getRowValue(row, ['pressno', 'pressnumber', 'press']) || '').trim();
+
+      const errors = [];
+      const warnings = [];
+
+      // 1. JMREF No lookup
+      let part = null;
+      let partId = '';
+      let partNo = '';
+      let partDesc = '';
+      if (!rowJmref) {
+        errors.push("JMREF No is required");
+      } else {
+        part = master.find(p => p.jmrefNo.trim().toLowerCase() === rowJmref.toLowerCase());
+        if (!part) {
+          errors.push(`JMREF No "${rowJmref}" not found in Master Database`);
+        } else {
+          partId = part.id;
+          partNo = part.partNo;
+          partDesc = part.description;
+        }
+      }
+
+      // 2. Mould No
+      let mouldNo = 1;
+      if (rowMouldNoRaw != null && String(rowMouldNoRaw).trim() !== '') {
+        const parsedMould = parseInt(rowMouldNoRaw, 10);
+        if (isNaN(parsedMould) || parsedMould <= 0) {
+          warnings.push(`Invalid Mould No "${rowMouldNoRaw}", defaulting to Mould 1`);
+        } else {
+          mouldNo = parsedMould;
+        }
+      } else {
+        warnings.push("Mould No empty, defaulting to Mould 1");
+      }
+
+      // Mould details lookup
+      let mouldType = 'Normal';
+      let processFlow = '—';
+      if (part) {
+        const partMould = part.moulds ? part.moulds.find(m => Number(m.mouldNo) === Number(mouldNo)) : null;
+        if (partMould) {
+          mouldType = partMould.mouldType || 'Normal';
+          processFlow = partMould.processFlow || '—';
+        } else {
+          warnings.push(`Mould ${mouldNo} not configured in Master for JMREF ${rowJmref}`);
+        }
+      }
+
+      // 3. TR No
+      if (!rowTrNo) {
+        errors.push("TR No is required");
+      }
+
+      // 4. Production Type
+      let productionType = 'inhouse';
+      if (rowProdTypeRaw === 'subcontractor' || rowProdTypeRaw === 'sub') {
+        productionType = 'subcontractor';
+      } else if (rowProdTypeRaw && rowProdTypeRaw !== 'inhouse' && rowProdTypeRaw !== 'in-house') {
+        warnings.push(`Unknown Production Type "${rowProdTypeRaw}", defaulting to In-House`);
+      }
+
+      // 5. Operator (for In-House)
+      let operatorId = null;
+      let operatorName = '—';
+      if (productionType === 'inhouse') {
+        if (!rowOperator) {
+          errors.push("Operator is required for In-House production");
+        } else {
+          const op = operators.find(o => o.name.trim().toLowerCase() === rowOperator.toLowerCase());
+          if (op) {
+            operatorId = op.id;
+            operatorName = op.name;
+          } else {
+            errors.push(`Operator "${rowOperator}" not found in Database`);
+          }
+        }
+      }
+
+      // 6. Subcontractor (for Subcontractor)
+      let subcontractorId = null;
+      let subcontractorName = '—';
+      if (productionType === 'subcontractor') {
+        if (!rowSubcontractor) {
+          errors.push("Subcontractor is required for Subcontractor production");
+        } else {
+          const sub = subcontractors.find(s => s.name.trim().toLowerCase() === rowSubcontractor.toLowerCase());
+          if (sub) {
+            subcontractorId = sub.id;
+            subcontractorName = sub.name;
+          } else {
+            errors.push(`Subcontractor "${rowSubcontractor}" not found in Database`);
+          }
+        }
+      }
+
+      // 7. Production Date
+      let productionDate = '';
+      if (!rowProdDateRaw) {
+        errors.push("Production Date is required");
+      } else {
+        const formattedDate = formatExcelDate(rowProdDateRaw);
+        if (!formattedDate) {
+          errors.push(`Invalid Production Date format: "${rowProdDateRaw}"`);
+        } else {
+          productionDate = formattedDate;
+        }
+      }
+
+      // 8. Quantity
+      let quantity = 0;
+      if (rowQtyRaw == null) {
+        errors.push("Quantity is required");
+      } else {
+        const parsedQty = parseInt(rowQtyRaw, 10);
+        if (isNaN(parsedQty) || parsedQty <= 0) {
+          errors.push(`Quantity must be a positive number: "${rowQtyRaw}"`);
+        } else {
+          quantity = parsedQty;
+        }
+      }
+
+      // 9. Destination Stage
+      let stage = 'production';
+      let stageLabel = 'Moulding';
+      if (!rowStageRaw) {
+        warnings.push("Destination Stage empty, defaulting to Moulding");
+      } else {
+        const stageMappings = {
+          'production': 'production',
+          'moulding': 'production',
+          'moulding 1': 'production',
+          'mould 1': 'production',
+          'cryogenic': 'cryogenic',
+          'cryo': 'cryogenic',
+          'deflashing': 'deflashing',
+          'manual de flashing': 'deflashing',
+          'de flashing': 'deflashing',
+          'de-flashing': 'deflashing',
+          'trimming': 'trimming',
+          'post-curing': 'post-curing',
+          'post curing': 'post-curing',
+          'waiting-visual': 'waiting-visual',
+          'waiting visual': 'waiting-visual',
+          'waiting for visual': 'waiting-visual',
+          'visual': 'visual',
+          'visual inspection': 'visual',
+          'gauge': 'gauge',
+          'gauge inspection': 'gauge',
+          'quality': 'quality',
+          'quality final': 'quality',
+          'qc final': 'quality',
+          'store': 'store'
+        };
+
+        const cleanedStage = rowStageRaw.toLowerCase().replace(/[^a-z0-9]/g, ' ').trim();
+        let stageKey = stageMappings[cleanedStage];
+        if (!stageKey) {
+          // Sort keys descending by length to match the most specific/longest substring first
+          const sortedKeys = Object.keys(stageMappings).sort((a, b) => b.length - a.length);
+          for (const k of sortedKeys) {
+            if (cleanedStage.includes(k)) {
+              stageKey = stageMappings[k];
+              break;
+            }
+          }
+        }
+
+        if (!stageKey) {
+          errors.push(`Invalid Destination Stage "${rowStageRaw}"`);
+        } else {
+          stage = stageKey;
+          stageLabel = STAGE_LABELS[stageKey] || stageKey;
+        }
+      }
+
+      // 10. Shift
+      let shift = 'day';
+      if (rowShiftRaw === 'night' || rowShiftRaw === 'n') {
+        shift = 'night';
+      }
+
+      // 11. Press No
+      let pressNo = '1';
+      if (rowPressNoRaw) {
+        pressNo = rowPressNoRaw;
+      }
+
+      // Generate Batch No
+      let batchNo = '';
+      if (errors.length === 0) {
+        const dayStr = productionDate.split('-')[2] || '';
+        const shiftCode = shift === 'night' ? 'N' : 'D';
+        const typeCode = productionType === 'subcontractor' ? 'S' : 'I';
+        batchNo = `${rowJmref}-${rowTrNo}-${dayStr}-${shiftCode}-${typeCode}-${pressNo}`;
+
+        // Check if Batch No exists
+        const exists = existingBatches.some(b => b.batchNo === batchNo) || parsedBatchUploads.some(b => b.batchNo === batchNo);
+        if (exists) {
+          errors.push(`Batch No "${batchNo}" already exists in Database or current upload list`);
+        }
+      }
+
+      // Assign Internal Batch No sequentially
+      const internalBatchNo = errors.length === 0 ? nextIB++ : null;
+
+      parsedBatchUploads.push({
+        rowNum,
+        jmrefNo: rowJmref,
+        partId,
+        partNo,
+        description: partDesc,
+        mouldNo,
+        mouldType,
+        processFlow,
+        trNo: rowTrNo,
+        productionType,
+        operatorId,
+        operatorName,
+        subcontractorId,
+        subcontractorName,
+        productionDate,
+        quantity,
+        stage,
+        stageLabel,
+        shift,
+        pressNo,
+        batchNo,
+        internalBatchNo,
+        errors,
+        warnings
+      });
+    });
+
+    activeTab = 'batch_confirm';
+    render();
+  }
+
+  function renderBatchConfirmScreen(el) {
+    const hasErrors = parsedBatchUploads.some(b => b.errors.length > 0);
+    const totalRows = parsedBatchUploads.length;
+    const errorRows = parsedBatchUploads.filter(b => b.errors.length > 0).length;
+    const validRows = totalRows - errorRows;
+
+    const rowsHtml = parsedBatchUploads.map((row) => {
+      let statusHtml = '';
+      if (row.errors.length > 0) {
+        statusHtml = `<div style="color:var(--accent-red); font-size:11px; font-weight:bold;">❌ Row ${row.rowNum}:<br>${row.errors.join('<br>')}</div>`;
+      } else if (row.warnings.length > 0) {
+        statusHtml = `<div style="color:var(--accent-yellow); font-size:11px; font-weight:bold;">⚠️ Row ${row.rowNum}:<br>${row.warnings.join('<br>')}</div>`;
+      } else {
+        statusHtml = `<div style="color:var(--accent-teal); font-size:11px; font-weight:bold;">✅ Row ${row.rowNum}: Valid</div>`;
+      }
+
+      const rowStyle = row.errors.length > 0 ? 'style="background: rgba(239, 68, 68, 0.08); border-left: 3px solid var(--accent-red);"' : '';
+
+      return `
+        <tr ${rowStyle}>
+          <td>${statusHtml}</td>
+          <td class="font-bold" style="color:var(--primary); font-size:12px;">${row.batchNo || '—'}</td>
+          <td class="font-bold" style="color:var(--accent-teal); font-size:12px;">IB: ${row.internalBatchNo || '—'}</td>
+          <td>
+            <div><span class="badge badge-teal">${row.jmrefNo}</span></div>
+            <div style="font-size:11px; font-weight:600; margin-top:2px;">${row.partNo || '—'}</div>
+          </td>
+          <td>
+            <div style="font-size:11px;">Mould ${row.mouldNo}</div>
+            <div class="text-muted" style="font-size:10px;">${row.mouldType}</div>
+          </td>
+          <td class="text-muted" style="font-size:11px; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${row.processFlow}">${row.processFlow}</td>
+          <td class="font-bold">${formatNum(row.quantity)}</td>
+          <td><span class="badge badge-blue">${row.stageLabel}</span></td>
+          <td style="font-size:11px; white-space:nowrap;">${row.productionDate || '—'}</td>
+          <td>
+            <div style="font-size:11px; font-weight:600;">${row.productionType === 'inhouse' ? 'In-House' : 'Subcontractor'}</div>
+            <div class="text-muted" style="font-size:10px;">${row.productionType === 'inhouse' ? row.operatorName : row.subcontractorName}</div>
+          </td>
+        </tr>`;
+    }).join('');
+
+    const alertHtml = hasErrors ? `
+      <div class="card card-body" style="margin-bottom:20px; border-color:rgba(239,68,68,0.3); background:rgba(239,68,68,0.06); display:flex; align-items:center; gap:16px;">
+        <span style="font-size:24px;">❌</span>
+        <div>
+          <h4 style="margin:0 0 4px 0; color:var(--accent-red); font-weight:700;">Validation Errors Found (${errorRows} rows)</h4>
+          <p class="text-muted text-sm" style="margin:0;">Please fix the errors in your Excel sheet and upload again. You cannot confirm the import until all errors are resolved.</p>
+        </div>
+      </div>` : `
+      <div class="card card-body" style="margin-bottom:20px; border-color:rgba(16,185,129,0.3); background:rgba(16,185,129,0.06); display:flex; align-items:center; gap:16px;">
+        <span style="font-size:24px;">✅</span>
+        <div>
+          <h4 style="margin:0 0 4px 0; color:var(--accent-teal); font-weight:700;">All Rows Valid (${validRows} rows)</h4>
+          <p class="text-muted text-sm" style="margin:0;">Review the details below and click "Confirm and Create Batches" to complete the import.</p>
+        </div>
+      </div>`;
+
+    el.innerHTML = `
+      <div class="animate-in">
+        <div class="mb-6 flex justify-between items-center flex-wrap gap-4">
+          <div>
+            <h2 class="font-bold" style="font-size:20px;">Review Bulk Batch Import</h2>
+            <p class="text-sm text-muted mt-1">Verify batch details parsed from your Excel spreadsheet.</p>
+          </div>
+          <div class="flex gap-2">
+            <button class="btn btn-secondary" onclick="StockModule.cancelBatchConfirm()">Cancel</button>
+            <button class="btn btn-primary" id="btn-confirm-batches" ${hasErrors ? 'disabled style="opacity:0.5; cursor:not-allowed;"' : ''} onclick="StockModule.confirmBatchImport()">Confirm and Create Batches</button>
+          </div>
+        </div>
+
+        ${alertHtml}
+
+        <div class="card">
+          <div class="card-header">
+            <h3>Excel Row Mapping Preview</h3>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Validation Status</th>
+                  <th>Batch No</th>
+                  <th>Internal Batch No</th>
+                  <th>JMREF & Part</th>
+                  <th>Mould</th>
+                  <th>Process Flow</th>
+                  <th>Quantity</th>
+                  <th>Stage</th>
+                  <th>Prod Date</th>
+                  <th>Type & Op/Sub</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rowsHtml}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function confirmBatchImport() {
+    const hasErrors = parsedBatchUploads.some(b => b.errors.length > 0);
+    if (hasErrors) {
+      showToast('Cannot import Excel sheet with errors', 'error');
+      return;
+    }
+
+    const session = Auth.getSession();
+    const uploadedAt = new Date().toISOString();
+    lastCreatedBatchIds = [];
+
+    let nextIB = DB.Batches.nextInternalBatchNo();
+
+    parsedBatchUploads.forEach(row => {
+      const isCompleted = row.stage === 'store';
+      const batch = DB.Batches.insert({
+        batchNo: row.batchNo,
+        partId: row.partId,
+        partNo: row.partNo,
+        jmrefNo: row.jmrefNo,
+        description: row.description,
+        currentStage: row.stage,
+        status: isCompleted ? 'completed' : 'active',
+        initialQty: row.quantity,
+        isStockUpload: true,
+        productionType: row.productionType,
+        mouldNo: row.mouldNo,
+        operatorId: row.operatorId || null,
+        subcontractorId: row.subcontractorId || null,
+        shift: row.shift || 'day',
+        pressNo: row.pressNo || '1',
+        createdAt: uploadedAt,
+        productionDate: row.productionDate,
+        notes: 'Bulk Batch Excel Upload',
+        internalBatchNo: nextIB++
+      });
+
+      lastCreatedBatchIds.push(batch.id);
+
+      DB.StageRecords.insert({
+        batchId: batch.id,
+        stage: row.stage,
+        inputQty: row.quantity,
+        outputQty: isCompleted ? 0 : row.quantity,
+        lossQty: 0,
+        movedTo: isCompleted ? 'store' : row.stage,
+        movedFrom: 'Stock Upload',
+        date: row.productionDate,
+        recordedBy: session && session.userId,
+        notes: 'Bulk Excel Stock Batch Initialization'
+      });
+
+      DB.StockUploads.insert({
+        stage: row.stage,
+        partId: row.partId,
+        jmrefNo: row.jmrefNo,
+        qty: row.quantity,
+        uploadedAt: uploadedAt,
+        uploadedBy: session && session.userId,
+        notes: 'Bulk Excel Batch Upload',
+        batchNo: row.batchNo,
+        batchDbId: batch.id
+      });
+    });
+
+    showToast(`Successfully created ${parsedBatchUploads.length} stock batches`, 'success');
+    activeTab = 'batch_success';
+    render();
+  }
+
+  function renderBatchSuccessScreen(el) {
+    const batches = lastCreatedBatchIds.map(id => DB.Batches.find(id)).filter(Boolean);
+
+    const rowsHtml = batches.map((batch) => {
+      return `
+        <tr>
+          <td>
+            <input type="checkbox" class="success-batch-check" value="${batch.id}" style="cursor:pointer;" checked>
+          </td>
+          <td class="font-bold text-blue">${batch.batchNo}</td>
+          <td class="font-bold text-teal">IB: ${batch.internalBatchNo}</td>
+          <td>${batch.partNo}</td>
+          <td><span class="badge badge-teal">${batch.jmrefNo}</span></td>
+          <td class="font-semibold">${formatNum(batch.initialQty)}</td>
+          <td><span class="badge badge-blue">${STAGE_LABELS[batch.currentStage] || batch.currentStage}</span></td>
+          <td>${formatDate(batch.productionDate)}</td>
+        </tr>`;
+    }).join('');
+
+    el.innerHTML = `
+      <div class="animate-in">
+        <div class="card card-body" style="margin-bottom:24px; border-color:rgba(16,185,129,0.3); background:rgba(16,185,129,0.06); text-align:center; padding:32px;">
+          <div style="font-size:48px; margin-bottom:12px;">🎉</div>
+          <h3 style="color:var(--accent-teal); font-weight:700; margin-bottom:8px;">Import Complete!</h3>
+          <p class="text-muted text-sm" style="margin-bottom:20px;">Successfully created ${batches.length} manufacturing batches from the Excel upload.</p>
+          <div class="flex justify-center gap-3">
+            <button class="btn btn-primary" onclick="StockModule.printSuccessBatches()">🖨️ Bulk Print Selected Labels</button>
+            <button class="btn btn-secondary" onclick="StockModule.finishSuccessScreen()">Finish & View History</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header" style="justify-content:space-between; flex-direction:row; align-items:center;">
+            <h3>Created Batches List</h3>
+            <div>
+              <button class="btn btn-ghost btn-xs" onclick="StockModule.toggleSuccessAll(true)">Select All</button>
+              <button class="btn btn-ghost btn-xs" onclick="StockModule.toggleSuccessAll(false)">Deselect All</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th style="width:40px;">Print?</th>
+                  <th>Batch No</th>
+                  <th>Internal Batch No</th>
+                  <th>Part No</th>
+                  <th>JMREF</th>
+                  <th>Quantity</th>
+                  <th>Stage</th>
+                  <th>Prod Date</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rowsHtml}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function printSuccessBatches() {
+    const checked = Array.from(document.querySelectorAll('.success-batch-check:checked')).map(el => el.value);
+    window.bulkPrintBarcodes(checked);
+  }
+
+  function finishSuccessScreen() {
+    lastCreatedBatchIds = [];
+    parsedBatchUploads = [];
+    activeTab = 'single';
+    render();
+  }
+
+  function toggleSuccessAll(val) {
+    const list = document.querySelectorAll('.success-batch-check');
+    list.forEach(el => el.checked = val);
+  }
+
+  function cancelBatchConfirm() {
+    if (confirm('Cancel batch upload? All parsed data will be lost.')) {
+      parsedBatchUploads = [];
+      activeTab = 'batch_bulk';
+      render();
+    }
+  }
+
   return { 
     render, 
     upload, 
@@ -1032,6 +1700,19 @@ const StockModule = (() => {
     toggleAll,
     bulkPrintBarcodes,
     onPartChange,
-    onTypeChange
+    onTypeChange,
+    
+    // Batch-wise bulk upload methods
+    renderBatchBulkTab,
+    downloadBatchTemplate,
+    handleBatchFileSelect,
+    processBatchUploadedJson,
+    renderBatchConfirmScreen,
+    confirmBatchImport,
+    renderBatchSuccessScreen,
+    printSuccessBatches,
+    finishSuccessScreen,
+    toggleSuccessAll,
+    cancelBatchConfirm
   };
 })();
