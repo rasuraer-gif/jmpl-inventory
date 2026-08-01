@@ -240,7 +240,7 @@ const CryogenicModule = (() => {
     document.getElementById('cryo-batch-id').value = batchId;
     document.getElementById('cryo-input-qty').value = inputQty;
     
-    const isStock = b.isStockUpload || (b.batchNo && b.batchNo.includes('-REC-'));
+    const isStock = b.batchNo && b.batchNo.includes('-REC-');
     const stockFields = document.getElementById('cryo-stock-fields');
     if (stockFields) {
       if (isStock) {
@@ -324,7 +324,7 @@ const CryogenicModule = (() => {
     }
   }
   function calcLoss() {
-    const isStock = _activeBatch && (_activeBatch.isStockUpload || (_activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-')));
+    const isStock = _activeBatch && _activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-');
     if (!isStock) {
       const out = parseInt(document.getElementById('cryo-output-qty').value)||0;
       document.getElementById('cryo-loss-qty').value = Math.max(0, _cryoInputQty - out);
@@ -346,7 +346,7 @@ const CryogenicModule = (() => {
     let inputQty = _cryoInputQty;
     let lossQty = 0;
     
-    const isStock = _activeBatch && (_activeBatch.isStockUpload || (_activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-')));
+    const isStock = _activeBatch && _activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-');
     if (isStock) {
       const trNo = (document.getElementById('cryo-trno')?.value || '').trim();
       const shift = document.getElementById('cryo-shift-move')?.value || 'day';

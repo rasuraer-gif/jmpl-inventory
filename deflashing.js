@@ -307,7 +307,7 @@ const DeflashingModule = (() => {
     document.getElementById('de-batch-id').value = batchId;
     document.getElementById('de-input-qty').value = inputQty;
     
-    const isStock = b.isStockUpload || (b.batchNo && b.batchNo.includes('-REC-'));
+    const isStock = b.batchNo && b.batchNo.includes('-REC-');
     const stockFields = document.getElementById('de-stock-fields');
     if (stockFields) {
       if (isStock) {
@@ -370,7 +370,7 @@ const DeflashingModule = (() => {
     }
   }
   function calcLoss() {
-    const isStock = _activeBatch && (_activeBatch.isStockUpload || (_activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-')));
+    const isStock = _activeBatch && _activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-');
     if (!isStock) {
       const out = parseInt(document.getElementById('de-output-qty').value)||0;
       document.getElementById('de-loss-qty').value = Math.max(0, _deInputQty - out);
@@ -391,7 +391,7 @@ const DeflashingModule = (() => {
     const dateStr = new Date().toISOString().slice(0,10);
     const finalVendorId = (destination === 'trimming' || destination === 'deflashing') ? vendorId : '';
 
-    const isStock = _activeBatch && (_activeBatch.isStockUpload || (_activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-')));
+    const isStock = _activeBatch && _activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-');
     if (isStock) {
       const trNo = (document.getElementById('de-trno')?.value || '').trim();
       const shift = document.getElementById('de-shift-move')?.value || 'day';

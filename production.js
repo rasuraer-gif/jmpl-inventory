@@ -441,7 +441,7 @@ const ProductionModule = (() => {
     _moveInputQty = b.initialQty || 0;
     document.getElementById('move-batch-id').value = batchId;
     
-    const isStock = b.isStockUpload || (b.batchNo && b.batchNo.includes('-REC-'));
+    const isStock = b.batchNo && b.batchNo.includes('-REC-');
     const stockFields = document.getElementById('prod-stock-fields');
     if (stockFields) {
       if (isStock) {
@@ -549,7 +549,7 @@ const ProductionModule = (() => {
       document.getElementById('move-loss-qty').value = '0';
       return;
     }
-    const isStock = _activeBatch && (_activeBatch.isStockUpload || (_activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-')));
+    const isStock = _activeBatch && _activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-');
     if (!isStock) {
       const out = parseInt(document.getElementById('move-output-qty').value) || 0;
       const loss = Math.max(0, _moveInputQty - out);
@@ -575,7 +575,7 @@ const ProductionModule = (() => {
     const batch = DB.Batches.find(batchId);
     const dateStr = new Date().toISOString().slice(0,10);
 
-    const isStock = _activeBatch && (_activeBatch.isStockUpload || (_activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-')));
+    const isStock = _activeBatch && _activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-');
     if (isStock) {
       const trNo = (document.getElementById('move-trno')?.value || '').trim();
       const shift = document.getElementById('move-shift-move')?.value || 'day';

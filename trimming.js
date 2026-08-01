@@ -248,7 +248,7 @@ const TrimmingModule = (() => {
     document.getElementById('trim-batch-id').value = batchId;
     document.getElementById('trim-input-qty').value = inputQty;
     
-    const isStock = b.isStockUpload || (b.batchNo && b.batchNo.includes('-REC-'));
+    const isStock = b.batchNo && b.batchNo.includes('-REC-');
     const stockFields = document.getElementById('trim-stock-fields');
     if (stockFields) {
       if (isStock) {
@@ -316,7 +316,7 @@ const TrimmingModule = (() => {
     }
   }
   function calcLoss() {
-    const isStock = _activeBatch && (_activeBatch.isStockUpload || (_activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-')));
+    const isStock = _activeBatch && _activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-');
     if (!isStock) {
       const out = parseInt(document.getElementById('trim-output-qty').value)||0;
       document.getElementById('trim-loss-qty').value = Math.max(0, _trimInputQty - out);
@@ -336,7 +336,7 @@ const TrimmingModule = (() => {
     const batch = DB.Batches.find(batchId);
     const dateStr = new Date().toISOString().slice(0,10);
 
-    const isStock = _activeBatch && (_activeBatch.isStockUpload || (_activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-')));
+    const isStock = _activeBatch && _activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-');
     if (isStock) {
       const trNo = (document.getElementById('trim-trno')?.value || '').trim();
       const shift = document.getElementById('trim-shift-move')?.value || 'day';

@@ -372,7 +372,7 @@ const VisualModule = (() => {
     document.getElementById('vis-batch-id').value = batchId;
     document.getElementById('vis-input-qty').value = inputQty;
     
-    const isStock = b.isStockUpload || (b.batchNo && b.batchNo.includes('-REC-'));
+    const isStock = b.batchNo && b.batchNo.includes('-REC-');
     const stockFields = document.getElementById('vis-stock-fields');
     if (stockFields) {
       if (isStock) {
@@ -467,7 +467,7 @@ const VisualModule = (() => {
     }
   }
   function calcLoss() {
-    const isStock = _activeBatch && (_activeBatch.isStockUpload || (_activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-')));
+    const isStock = _activeBatch && _activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-');
     const out = parseInt(document.getElementById('vis-output-qty').value)||0;
     const rep = parseInt(document.getElementById('vis-reprocess-qty')?.value)||0;
 
@@ -529,7 +529,7 @@ const VisualModule = (() => {
 
     const session = Auth.getSession();
     const dateStr = new Date().toISOString().slice(0,10);
-    const isStock = _activeBatch && (_activeBatch.isStockUpload || (_activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-')));
+    const isStock = _activeBatch && _activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-');
 
     if (isStock) {
       const trNo = (document.getElementById('vis-trno')?.value || '').trim();

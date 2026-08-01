@@ -213,7 +213,7 @@ const GaugeModule = (() => {
     _activeBatch = b;
     document.getElementById('gauge-batch-id').value = batchId;
     
-    const isStock = b.isStockUpload || (b.batchNo && b.batchNo.includes('-REC-'));
+    const isStock = b.batchNo && b.batchNo.includes('-REC-');
     const stockFields = document.getElementById('gauge-stock-fields');
     if (stockFields) {
       if (isStock) {
@@ -274,7 +274,7 @@ const GaugeModule = (() => {
     }
   }
   function calcLoss() {
-    const isStock = _activeBatch && (_activeBatch.isStockUpload || (_activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-')));
+    const isStock = _activeBatch && _activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-');
     if (!isStock) {
       const out = parseInt(document.getElementById('gauge-output-qty').value)||0;
       document.getElementById('gauge-loss-qty').value = Math.max(0, _gaugeInputQty - out);
@@ -291,7 +291,7 @@ const GaugeModule = (() => {
     const batch = DB.Batches.find(batchId);
     const dateStr = new Date().toISOString().slice(0,10);
 
-    const isStock = _activeBatch && (_activeBatch.isStockUpload || (_activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-')));
+    const isStock = _activeBatch && _activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-');
     if (isStock) {
       const trNo = (document.getElementById('gauge-trno')?.value || '').trim();
       const shift = document.getElementById('gauge-shift-move')?.value || 'day';
