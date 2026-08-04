@@ -506,6 +506,13 @@ const VisualModule = (() => {
   }
   function process() {
     const batchId = document.getElementById('vis-batch-id').value;
+    const checkBatch = DB.Batches.find(batchId);
+    if (!checkBatch || checkBatch.currentStage !== 'visual' || checkBatch.status !== 'active') {
+      showToast('Error: This batch is no longer in the Visual Inspection stage or is inactive.', 'error');
+      document.getElementById('vis-process-modal').classList.add('hidden');
+      render();
+      return;
+    }
     const inspectorName = document.getElementById('vis-inspector').value.trim();
     const outputQty = parseInt(document.getElementById('vis-output-qty').value);
     const reprocessQty = parseInt(document.getElementById('vis-reprocess-qty').value)||0;

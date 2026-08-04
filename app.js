@@ -1090,14 +1090,50 @@ const App = (() => {
             <div class="table-wrap">
               <table class="data-table" style="font-size:12px;">
                 <thead>
-                  <tr><th>Stage</th><th>Input</th><th>Output</th><th>Loss</th><th>Date</th><th>Notes</th></tr>
+                  <tr><th>Activity / Route</th><th>Input</th><th>Output</th><th>Loss</th><th>Date</th><th>Notes</th></tr>
                 </thead>
                 <tbody>
-                  ${DB.StageRecords.all().filter(r => r.batchId === b.id).sort((x,y) => (x.createdAt||'').localeCompare(y.createdAt||'')).map(r => {
+                  ${(() => {
+                    const rawRecs = DB.StageRecords.all().filter(r => r.batchId === b.id).sort((x,y) => (x.createdAt||'').localeCompare(y.createdAt||''));
+                    const filteredRecs = [];
+                    rawRecs.forEach(r => {
+                      if (filteredRecs.length > 0) {
+                        const prev = filteredRecs[filteredRecs.length - 1];
+                        if (prev.stage === r.stage && prev.movedTo === r.movedTo && prev.movedFrom === r.movedFrom) {
+                          // Overwrite with the latest duplicate to ensure most recent notes/data are preserved
+                          filteredRecs[filteredRecs.length - 1] = r;
+                          return;
+                        }
+                      }
+                      filteredRecs.push(r);
+                    });
+                    return filteredRecs;
+                  })().map(r => {
                     const displayLoss = (r.stage === 'store') ? 0 : Math.max(0, (r.inputQty || 0) - (r.outputQty || 0));
+                    const stageNames = {
+                      production: 'Production',
+                      cryogenic: 'Cryogenic',
+                      deflashing: 'DE Flashing',
+                      trimming: 'Trimming',
+                      'post-curing': 'Post Curing',
+                      'waiting-visual': 'Waiting for Visual',
+                      visual: 'Visual',
+                      gauge: 'Gauge',
+                      quality: 'QC Final',
+                      store: 'Store',
+                      'Stock Upload': 'Stock Upload'
+                    };
+                    const fromLabel = stageNames[r.movedFrom] || r.movedFrom || stageNames[r.stage] || r.stage;
+                    const toLabel = stageNames[r.movedTo] || r.movedTo || stageNames[r.stage] || r.stage;
+                    let routeText = '';
+                    if (r.stage === 'store') {
+                      routeText = `Received in Store (from ${fromLabel})`;
+                    } else {
+                      routeText = (fromLabel === toLabel) ? fromLabel : `${fromLabel} ➔ ${toLabel}`;
+                    }
                     return `
                       <tr>
-                        <td class="font-semibold">${r.stage.toUpperCase()}</td>
+                        <td class="font-semibold" style="white-space: nowrap; color: var(--primary);">${routeText}</td>
                         <td>${formatNum(r.inputQty)}</td>
                         <td>${formatNum(r.outputQty)}</td>
                         <td class="text-danger">${formatNum(displayLoss)}</td>

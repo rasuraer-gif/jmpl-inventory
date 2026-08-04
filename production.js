@@ -559,6 +559,13 @@ const ProductionModule = (() => {
 
   function moveBatch() {
     const batchId = document.getElementById('move-batch-id').value;
+    const checkBatch = DB.Batches.find(batchId);
+    if (!checkBatch || checkBatch.currentStage !== 'production' || checkBatch.status !== 'active') {
+      showToast('Error: This batch is no longer in the Moulding stage or is inactive.', 'error');
+      document.getElementById('prod-move-modal').classList.add('hidden');
+      render();
+      return;
+    }
     const outputQty = parseInt(document.getElementById('move-output-qty').value);
     const destination = document.getElementById('move-destination').value;
     const vendorId = document.getElementById('move-vendor')?.value || '';

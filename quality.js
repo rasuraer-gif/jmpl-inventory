@@ -337,6 +337,13 @@ const QualityModule = (() => {
 
   function passBatch() {
     const batchId = document.getElementById('qf-pass-batch-id').value;
+    const checkBatch = DB.Batches.find(batchId);
+    if (!checkBatch || checkBatch.currentStage !== 'quality' || checkBatch.status !== 'active') {
+      showToast('Error: This batch is no longer in the QC Final stage or is inactive.', 'error');
+      document.getElementById('qf-pass-modal').classList.add('hidden');
+      render();
+      return;
+    }
     const outputQty = parseInt(document.getElementById('qf-pass-output').value);
     if (isNaN(outputQty) || outputQty < 0) { showToast('Enter a valid output quantity', 'error'); return; }
     
@@ -365,6 +372,13 @@ const QualityModule = (() => {
 
   function rejectBatch() {
     const batchId = document.getElementById('qf-reject-batch-id').value;
+    const checkBatch = DB.Batches.find(batchId);
+    if (!checkBatch || checkBatch.currentStage !== 'quality' || checkBatch.status !== 'active') {
+      showToast('Error: This batch is no longer in the QC Final stage or is inactive.', 'error');
+      document.getElementById('qf-reject-modal').classList.add('hidden');
+      render();
+      return;
+    }
     const inputQty = parseInt(document.getElementById('qf-reject-input-qty').value)||0;
     const reason = document.getElementById('qf-reject-reason').value.trim();
     const session = Auth.getSession();
@@ -396,6 +410,13 @@ const QualityModule = (() => {
 
   function sendRecheck() {
     const batchId = document.getElementById('qf-rc-batch-id').value;
+    const checkBatch = DB.Batches.find(batchId);
+    if (!checkBatch || checkBatch.currentStage !== 'quality' || checkBatch.status !== 'active') {
+      showToast('Error: This batch is no longer in the QC Final stage or is inactive.', 'error');
+      document.getElementById('qf-recheck-modal').classList.add('hidden');
+      render();
+      return;
+    }
     const toStage = document.getElementById('qf-rc-stage').value;
     const recheckQty = parseInt(document.getElementById('qf-rc-qty').value);
     if (!recheckQty || recheckQty < 1) { showToast('Enter a valid recheck quantity', 'error'); return; }

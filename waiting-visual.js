@@ -628,6 +628,13 @@ const WaitingVisualModule = (() => {
 
   function process() {
     const batchId = document.getElementById('wv-process-batch-id').value;
+    const checkBatch = DB.Batches.find(batchId);
+    if (!checkBatch || checkBatch.currentStage !== 'waiting-visual' || checkBatch.status !== 'active') {
+      showToast('Error: This batch is no longer in the Waiting for Visual stage or is inactive.', 'error');
+      document.getElementById('wv-process-modal').classList.add('hidden');
+      render();
+      return;
+    }
     const outputQty = parseInt(document.getElementById('wv-output-qty').value);
     const notes = document.getElementById('wv-notes').value.trim();
     if (isNaN(outputQty) || outputQty < 0) { showToast('Enter a valid output quantity', 'error'); return; }

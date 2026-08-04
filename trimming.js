@@ -324,6 +324,13 @@ const TrimmingModule = (() => {
   }
   function process() {
     const batchId = document.getElementById('trim-batch-id').value;
+    const checkBatch = DB.Batches.find(batchId);
+    if (!checkBatch || checkBatch.currentStage !== 'trimming' || checkBatch.status !== 'active') {
+      showToast('Error: This batch is no longer in the Trimming stage or is inactive.', 'error');
+      document.getElementById('trim-process-modal').classList.add('hidden');
+      render();
+      return;
+    }
     const vendorId = document.getElementById('trim-vendor').value;
     const outputQty = parseInt(document.getElementById('trim-output-qty').value);
     const destination = document.getElementById('trim-destination').value;

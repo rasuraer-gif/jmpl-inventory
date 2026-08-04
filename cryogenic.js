@@ -332,6 +332,13 @@ const CryogenicModule = (() => {
   }
   function process() {
     const batchId = document.getElementById('cryo-batch-id').value;
+    const checkBatch = DB.Batches.find(batchId);
+    if (!checkBatch || checkBatch.currentStage !== 'cryogenic' || checkBatch.status !== 'active') {
+      showToast('Error: This batch is no longer in the Cryogenic stage or is inactive.', 'error');
+      document.getElementById('cryo-process-modal').classList.add('hidden');
+      render();
+      return;
+    }
     const outputQty = parseInt(document.getElementById('cryo-output-qty').value);
     const destination = document.getElementById('cryo-destination').value;
     const vendorId = document.getElementById('cryo-vendor')?.value || '';

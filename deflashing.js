@@ -378,6 +378,13 @@ const DeflashingModule = (() => {
   }
   function process() {
     const batchId = document.getElementById('de-batch-id').value;
+    const checkBatch = DB.Batches.find(batchId);
+    if (!checkBatch || checkBatch.currentStage !== 'deflashing' || checkBatch.status !== 'active') {
+      showToast('Error: This batch is no longer in the DE Flashing stage or is inactive.', 'error');
+      document.getElementById('def-process-modal').classList.add('hidden');
+      render();
+      return;
+    }
     const vendorId = document.getElementById('de-vendor').value;
     const outputQty = parseInt(document.getElementById('de-output-qty').value);
     const destination = document.getElementById('de-destination').value;

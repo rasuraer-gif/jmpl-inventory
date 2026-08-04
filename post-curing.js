@@ -322,6 +322,13 @@ const PostCuringModule = (() => {
 
   function process() {
     const batchId = document.getElementById('pc-batch-id').value;
+    const checkBatch = DB.Batches.find(batchId);
+    if (!checkBatch || checkBatch.currentStage !== 'post-curing' || checkBatch.status !== 'active') {
+      showToast('Error: This batch is no longer in the Post Curing stage or is inactive.', 'error');
+      document.getElementById('pc-process-modal').classList.add('hidden');
+      render();
+      return;
+    }
     const outputQty = parseInt(document.getElementById('pc-output-qty').value);
     const notes = document.getElementById('pc-notes').value.trim();
     if (isNaN(outputQty) || outputQty < 0) { showToast('Enter a valid output quantity', 'error'); return; }

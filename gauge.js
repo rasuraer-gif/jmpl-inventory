@@ -282,6 +282,13 @@ const GaugeModule = (() => {
   }
   function process() {
     const batchId = document.getElementById('gauge-batch-id').value;
+    const checkBatch = DB.Batches.find(batchId);
+    if (!checkBatch || checkBatch.currentStage !== 'gauge' || checkBatch.status !== 'active') {
+      showToast('Error: This batch is no longer in the Gauge Inspection stage or is inactive.', 'error');
+      document.getElementById('gauge-process-modal').classList.add('hidden');
+      render();
+      return;
+    }
     const outputQty = parseInt(document.getElementById('gauge-output-qty').value);
     const notes = document.getElementById('gauge-notes').value.trim();
     if (isNaN(outputQty) || outputQty < 0) { showToast('Enter a valid output quantity', 'error'); return; }
