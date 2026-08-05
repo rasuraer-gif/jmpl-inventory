@@ -197,6 +197,7 @@ const DeflashingModule = (() => {
                 <option value="cryogenic">Cryogenic</option>
                 <option value="post-curing">Post Curing</option>
                 <option value="waiting-visual">Waiting for Visual inspection</option>
+                <option value="visual">Visual Inspection</option>
               </select>
             </div>
             <div class="form-group hidden" id="de-vendor-group" style="flex:1;">
