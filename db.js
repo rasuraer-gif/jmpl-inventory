@@ -125,12 +125,16 @@ const DB = (() => {
       const firestoreInstance = firebase.firestore();
       
       // Clear persistence to wipe out any old cached offline writes from the browser
+      // NOTE: Disabled clearPersistence on startup because it wipes IndexedDB cache, 
+      // defeating offline loading and forcing full-network fetches on every boot.
+      /*
       try {
         await firestoreInstance.clearPersistence();
         console.log("Firestore offline persistence cleared successfully.");
       } catch (err) {
         console.warn("Failed to clear Firestore persistence:", err);
       }
+      */
       
       db = firestoreInstance;
 
