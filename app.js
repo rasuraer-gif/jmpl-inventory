@@ -461,6 +461,9 @@ const NAV = [
   { id:'rpt-sub-vs-inhouse', label:'Subcontractor vs. In-House Comparison', icon:'🏢', module:'report_sub_vs_inhouse', section:'tools', parent:'reports', perm:'report_sub_vs_inhouse' },
   { id:'rpt-sub-pending', label:'Subcontractor Pending Batches', icon:'🏢', module:'report_sub_pending', section:'tools', parent:'reports', perm:'report_sub_pending' },
   { id:'rpt-sub-performance', label:'Subcontractor & Vendor Scorecard', icon:'🏢', module:'report_sub_performance', section:'tools', parent:'reports', perm:'report_sub_performance' },
+  { id:'rpt-store-aging', label:'Store FIFO Aging Report', icon:'⏳', module:'report_store_aging', section:'tools', parent:'reports', perm:'report_store_aging' },
+  { id:'rpt-daily-summary', label:'Daily Production & Scrap', icon:'📊', module:'report_daily_summary', section:'tools', parent:'reports', perm:'report_daily_summary' },
+  { id:'rpt-analytics', label:'Production & Quality Analytics', icon:'📈', module:'report_analytics', section:'tools', parent:'reports', perm:'report_analytics' },
 
   { id:'print-batch',  label:'Print Label',        icon:'🖨️', module:'print-batch',  section:'tools', perm:'print-batch' },
   { id:'ai-agent',   label:'AI Assistant',        icon:'🤖', module:'ai-agent',  section:'tools', perm:'ai-agent' },
@@ -524,6 +527,9 @@ const App = (() => {
     report_sub_vs_inhouse: () => ReportsModule?.render('sub-vs-inhouse'),
     report_sub_pending:    () => ReportsModule?.render('sub-pending'),
     report_sub_performance:() => ReportsModule?.render('sub-performance'),
+    report_store_aging: () => ReportsModule?.render('store-aging'),
+    report_daily_summary: () => ReportsModule?.render('daily-summary'),
+    report_analytics:  () => ReportsModule?.render('analytics'),
     'print-batch':     () => PrintBatchModule?.render(),
   };
 
@@ -565,6 +571,9 @@ const App = (() => {
     report_sub_vs_inhouse: 'Subcontractor vs. In-House Comparison',
     report_sub_pending:    'Subcontractor Pending Batches',
     report_sub_performance:'Subcontractor & Vendor Scorecard',
+    report_store_aging:'Finished-Goods FIFO Aging Report',
+    report_daily_summary:'Daily Production & Scrap Summary',
+    report_analytics:'Production & Quality Visual Analytics Dashboard',
   };
 
   function navigate(moduleId) {

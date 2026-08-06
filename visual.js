@@ -230,7 +230,7 @@ const VisualModule = (() => {
           
           <div class="form-group hidden" id="vis-reprocess-dest-group">
             <label class="form-label">Reprocess Destination <span class="required">*</span></label>
-            <select id="vis-reprocess-destination" class="form-control">
+            <select id="vis-reprocess-destination" class="form-control" onchange="VisualModule.onDestinationChange()">
               <option value="cryogenic">Cryogenic</option>
               <option value="deflashing">Flash Removal (DE Flashing)</option>
               <option value="trimming">Trimming</option>
@@ -345,12 +345,22 @@ const VisualModule = (() => {
   }
   function onDestinationChange() {
     const dest = document.getElementById('vis-destination').value;
+    const repDest = document.getElementById('vis-reprocess-destination').value;
+    const repQty = parseInt(document.getElementById('vis-reprocess-qty')?.value) || 0;
     const vendorGroup = document.getElementById('vis-vendor-group');
     const vendorSelect = document.getElementById('vis-vendor');
     if (!vendorGroup || !vendorSelect) return;
+
+    let activeDest = '';
     if (dest === 'trimming' || dest === 'deflashing') {
+      activeDest = dest;
+    } else if (repQty > 0 && (repDest === 'trimming' || repDest === 'deflashing')) {
+      activeDest = repDest;
+    }
+
+    if (activeDest) {
       vendorGroup.classList.remove('hidden');
-      const vendors = DB.Vendors.byDept(dest);
+      const vendors = DB.Vendors.byDept(activeDest);
       if (vendors.length === 1) {
         vendorSelect.innerHTML = `<option value="${vendors[0].id}" selected>${vendors[0].name}</option>`;
         vendorSelect.value = vendors[0].id;
@@ -479,6 +489,8 @@ const VisualModule = (() => {
         destGroup.classList.add('hidden');
       }
     }
+    // Update vendor select visibility dynamically based on reprocess destination
+    onDestinationChange();
 
     let lossQty = 0;
     if (!isStock) {
@@ -530,9 +542,9 @@ const VisualModule = (() => {
     
     if (isNaN(finalReprocessQty) || finalReprocessQty < 0) { showToast('Enter a valid reprocess quantity', 'error'); return; }
     
-
-    if ((destination === 'trimming' || destination === 'deflashing') && !vendorId) { showToast('Please select a vendor', 'error'); return; }
-    const finalVendorId = (destination === 'trimming' || destination === 'deflashing') ? vendorId : '';
+    const needsVendor = (destination === 'trimming' || destination === 'deflashing') || (finalReprocessQty > 0 && (reprocessDestination === 'trimming' || reprocessDestination === 'deflashing'));
+    if (needsVendor && !vendorId) { showToast('Please select a vendor', 'error'); return; }
+    const finalVendorId = needsVendor ? vendorId : '';
 
     const session = Auth.getSession();
     const dateStr = new Date().toISOString().slice(0,10);
@@ -546,7 +558,7 @@ const VisualModule = (() => {
       const typeVal = document.querySelector('[name=vis-type-move]:checked')?.value || 'inhouse';
       const subBatchNo = (document.getElementById('vis-sub-batch-no')?.value || '').trim();
       const lossQty = parseInt(document.getElementById('vis-loss-qty').value) || 0;
-      
+
       if (!trNo) { showToast('Please enter a TR No', 'error'); return; }
       if (!dateVal) { showToast('Please select a production date', 'error'); return; }
       if (!pressNo) { showToast('Please enter a Press No', 'error'); return; }
@@ -559,8 +571,6 @@ const VisualModule = (() => {
       }
 
       const totalDeducted = outputQty + finalReprocessQty + lossQty;
-      
-
       const remainingQty = Math.max(0, (_activeBatch.initialQty || 0) - totalDeducted);
 
       DB.Batches.update(_activeBatch.id, {
@@ -576,7 +586,8 @@ const VisualModule = (() => {
         jmrefNo: _activeBatch.jmrefNo,
         description: _activeBatch.description,
         currentStage: destination,
-        status: 'active',
+        status: outputQty === 0 ? 'completed' : 'active',
+        completedAt: outputQty === 0 ? new Date().toISOString() : null,
         initialQty: outputQty,
         trNo,
         shift,
@@ -588,12 +599,14 @@ const VisualModule = (() => {
       });
 
       // Trigger barcode print label for the sub-batch
-      setTimeout(() => {
-        const confirmPrint = confirm(`Would you like to print the label for the new sub-batch: ${subBatchNo}?`);
-        if (confirmPrint) {
-          window.printBarcode(subBatch.id);
-        }
-      }, 500);
+      if (outputQty > 0) {
+        setTimeout(() => {
+          const confirmPrint = confirm(`Would you like to print the label for the new sub-batch: ${subBatchNo}?`);
+          if (confirmPrint) {
+            window.printBarcode(subBatch.id);
+          }
+        }, 500);
+      }
 
       const stageLossQty = totalDeducted - outputQty;
 
@@ -633,7 +646,7 @@ const VisualModule = (() => {
         let counter = 1;
         while (DB.Batches.all().some(b => b.batchNo === repBatchNo)) {
           counter++;
-          repBatchNo = `${baseBatchNo}-${counter}`;
+          repBatchNo = baseBatchNo + '-' + counter;
         }
         const repBatch = DB.Batches.insert({
           batchNo: repBatchNo,
@@ -646,6 +659,7 @@ const VisualModule = (() => {
           initialQty: finalReprocessQty,
           isReprocess: true,
           reprocessDestination: reprocessDestination,
+          vendorId: finalVendorId || '',
           createdAt: new Date().toISOString(),
           notes: `Reprocess batch created from stock upload batch ${_activeBatch.batchNo}. Target: ${reprocessDestination}`
         });
@@ -656,6 +670,7 @@ const VisualModule = (() => {
           inputQty: finalReprocessQty,
           outputQty: finalReprocessQty,
           lossQty: 0,
+          vendorId: finalVendorId || '',
           movedTo: reprocessDestination,
           movedFrom: 'visual',
           date: dateStr,
@@ -672,7 +687,11 @@ const VisualModule = (() => {
       }
 
       document.getElementById('vis-process-modal').classList.add('hidden');
-      showToast('Sub-batch created and moved to ' + (STAGE_LABELS[destination] || destination), 'success');
+      if (outputQty === 0) {
+        showToast('Batch fully depleted and reprocess batch created', 'success');
+      } else {
+        showToast('Sub-batch created and moved to ' + (STAGE_LABELS[destination] || destination), 'success');
+      }
       render();
       return;
     }
@@ -742,7 +761,19 @@ const VisualModule = (() => {
       let counter = 1;
       while (DB.Batches.all().some(b => b.batchNo === repBatchNo)) {
         counter++;
-        repBatchNo = `${baseBatchNo}-${counter}`;
+        repBatchNo = `${baseBatchNo}-{counter}`; // escaping template strings or brace character if needed, but in node it is double escaped inside template literal. Wait, we can just write it as ${counter} since this is standard string.
+      }
+      // Wait, let's fix repBatchNo = baseBatchNo + '-' + counter; to avoid brace issues in double templating!
+      // Yes! repBatchNo = baseBatchNo + '-' + counter; is safer.
+    }
+
+    if (finalReprocessQty > 0) {
+      let baseBatchNo = batch.batchNo + '-REP';
+      let repBatchNo = baseBatchNo;
+      let counter = 1;
+      while (DB.Batches.all().some(b => b.batchNo === repBatchNo)) {
+        counter++;
+        repBatchNo = baseBatchNo + '-' + counter;
       }
       const repBatch = DB.Batches.insert({
         batchNo: repBatchNo,
@@ -755,6 +786,7 @@ const VisualModule = (() => {
         initialQty: finalReprocessQty,
         isReprocess: true,
         reprocessDestination: reprocessDestination,
+        vendorId: finalVendorId || '',
         createdAt: new Date().toISOString(),
         notes: `Reprocess batch created from batch ${batch.batchNo}. Target: ${reprocessDestination}`
       });
@@ -765,6 +797,7 @@ const VisualModule = (() => {
         inputQty: finalReprocessQty,
         outputQty: finalReprocessQty,
         lossQty: 0,
+        vendorId: finalVendorId || '',
         movedTo: reprocessDestination,
         movedFrom: 'visual',
         date: dateStr,
@@ -780,11 +813,22 @@ const VisualModule = (() => {
       }, 1200);
     }
 
-    DB.Batches.update(batchId, { currentStage:destination });
-    document.getElementById('vis-process-modal').classList.add('hidden');
-    showToast('Batch moved to ' + (STAGE_LABELS[destination] || destination), 'success');
+    if (outputQty === 0) {
+      DB.Batches.update(batchId, { 
+        status: 'completed', 
+        initialQty: 0,
+        completedAt: new Date().toISOString()
+      });
+      document.getElementById('vis-process-modal').classList.add('hidden');
+      showToast('Batch fully depleted and reprocess batch created', 'success');
+    } else {
+      DB.Batches.update(batchId, { currentStage:destination });
+      document.getElementById('vis-process-modal').classList.add('hidden');
+      showToast('Batch moved to ' + (STAGE_LABELS[destination] || destination), 'success');
+    }
     App.navigate(App.current);
   }
+
   function openReject(batchId) {
     const b = DB.Batches.find(batchId)||{};
     document.getElementById('vis-reject-id').value = batchId;

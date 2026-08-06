@@ -20,6 +20,7 @@ const DB = (() => {
   const PREFIX = localStorage.getItem('jmpl_db_is_local_backup') === 'true' ? 'jmpl_backup_' : 'jmpl_';
   let db = null;
   let isInitialized = false;
+  let isCloudSyncComplete = false;
   let syncStateListener = null;
   function onSyncStateChange(callback) {
     syncStateListener = callback;
@@ -60,10 +61,8 @@ const DB = (() => {
     const isLocalBackup = localStorage.getItem('jmpl_db_is_local_backup') === 'true';
     for (const key of Object.keys(cache)) {
       try {
-        if (!isLocalBackup) {
-          // If we are online, clear the old localStorage cache to prevent stale reads on startup
-          localStorage.removeItem('jmpl_' + key);
-        }
+        // Keep the local storage cache on startup to enable instant offline-first loading.
+        // Stale data is automatically overwritten once the background live sync completes.
         const data = localStorage.getItem(PREFIX + key);
         if (data) {
           cache[key] = JSON.parse(data);
@@ -194,9 +193,13 @@ const DB = (() => {
         });
       });
 
-      // Wait for all collections to load their initial state
-      await Promise.all(initPromises);
-      console.log("JMPL Database fully synchronized with Firestore.");
+      // Start the synchronization in the background without blocking the initial boot
+      Promise.all(initPromises).then(() => {
+        console.log("JMPL Database fully synchronized with Firestore.");
+        isCloudSyncComplete = true;
+        runUserDeduplicationMigration();
+        seedDefaults();
+      });
 
       // We do NOT run automatic schema migrations or checkAndMigrate on the live cloud DB anymore
       // to prevent stale client caches from overwriting newer cloud data on startup.
@@ -414,7 +417,7 @@ const DB = (() => {
 
   function runUserDeduplicationMigration() {
     const users = getAll('users');
-    const adminUsers = users.filter(u => u.role === 'admin' || u.username === 'admin');
+    const adminUsers = users.filter(u => u.username === 'admin');
     
     if (adminUsers.length > 1) {
       console.log(`[Migration] Found ${adminUsers.length} admin accounts. Consolidating into a single account.`);
@@ -562,6 +565,11 @@ const DB = (() => {
 
   // ── Seed default admin ────────────────────────────────────
   function seedDefaults() {
+    // If we are in online mode but initial cloud sync is not done yet, wait
+    if (typeof firebase !== 'undefined' && localStorage.getItem('jmpl_db_is_local_backup') !== 'true' && !isCloudSyncComplete) {
+      console.log("[Seeding] Postponing default seeding until initial cloud sync completes.");
+      return;
+    }
     const users = getAll('users');
     if (!users.find(u => u.username === 'admin')) {
       insert('users', {
@@ -572,6 +580,7 @@ const DB = (() => {
         permissions: ['admin','master','production','cryogenic','deflashing','trimming','post-curing','waiting-visual','visual','gauge','quality','store','stock','report_inventory','report_sales','report_production','report_cryogenic','report_deflashing','report_trimming','report_post_curing','report_waiting_visual','report_visual','report_gauge','report_rejected','report_recheck'],
         active: true
       });
+      console.log("[Seeding] Seeded default admin account.");
     }
   }
 
@@ -854,10 +863,42 @@ const DB = (() => {
     },
     allParts: () => {
       const master = getAll('master');
-      return master.map(m => ({
-        ...m,
-        available: StoreInventory.availableByJmref(m.jmrefNo)
-      }));
+      const batches = getAll('batches');
+      const stageRecords = getAll('stageRecords');
+      const sales = getAll('sales');
+
+      // 1. Map last inputQty of 'store' stage records by batchId
+      const storeQtyByBatchId = {};
+      stageRecords.forEach(r => {
+        if (r.stage === 'store') {
+          storeQtyByBatchId[r.batchId] = r.inputQty || 0;
+        }
+      });
+
+      // 2. Aggregate totalIn by jmrefNo for completed batches
+      const totalInByJmref = {};
+      batches.forEach(b => {
+        if (b.status === 'completed') {
+          const qty = storeQtyByBatchId[b.id] || 0;
+          totalInByJmref[b.jmrefNo] = (totalInByJmref[b.jmrefNo] || 0) + qty;
+        }
+      });
+
+      // 3. Aggregate totalSold by jmrefNo
+      const totalSoldByJmref = {};
+      sales.forEach(s => {
+        totalSoldByJmref[s.jmrefNo] = (totalSoldByJmref[s.jmrefNo] || 0) + (s.qty || 0);
+      });
+
+      // 4. Map parts with computed available quantities
+      return master.map(m => {
+        const totalIn = totalInByJmref[m.jmrefNo] || 0;
+        const totalSold = totalSoldByJmref[m.jmrefNo] || 0;
+        return {
+          ...m,
+          available: Math.max(0, totalIn - totalSold)
+        };
+      });
     },
   };
 

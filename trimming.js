@@ -279,7 +279,9 @@ const TrimmingModule = (() => {
 
     document.getElementById('trim-batch-info').innerHTML = `<strong>${b.batchNo}</strong> — ${b.jmrefNo}<br><span class="text-muted text-sm">Input Qty: <strong>${formatNum(inputQty)}</strong></span>${b.recheckCount?` <span class="badge badge-amber">Recheck #${b.recheckIteration}</span>`:''}`;
     const vendors = DB.Vendors.byDept('trimming');
-    if (vendors.length === 1) {
+    if (b.vendorId && vendors.some(v => v.id === b.vendorId)) {
+      document.getElementById('trim-vendor').value = b.vendorId;
+    } else if (vendors.length === 1) {
       document.getElementById('trim-vendor').value = vendors[0].id;
     } else {
       document.getElementById('trim-vendor').value = '';

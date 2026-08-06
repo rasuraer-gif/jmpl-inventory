@@ -156,6 +156,7 @@ const CryogenicModule = (() => {
           <div class="form-group"><label class="form-label">Destination <span class="required">*</span></label>
             <select id="cryo-destination" class="form-control" onchange="CryogenicModule.onDestinationChange()">
               <option value="trimming">Trimming</option>
+              <option value="deflashing">Flash Removal (DE Flashing)</option>
               <option value="post-curing">Post Curing</option>
               <option value="waiting-visual">Waiting for Visual inspection</option>
               <option value="visual">Visual Inspection</option>
@@ -307,7 +308,7 @@ const CryogenicModule = (() => {
     const vendorGroup = document.getElementById('cryo-vendor-group');
     const vendorSelect = document.getElementById('cryo-vendor');
     if (!vendorGroup || !vendorSelect) return;
-    if (dest === 'trimming') {
+    if (dest === 'trimming' || dest === 'deflashing') {
       vendorGroup.classList.remove('hidden');
       const vendors = DB.Vendors.byDept(dest);
       if (vendors.length === 1) {
@@ -345,8 +346,8 @@ const CryogenicModule = (() => {
     const notes = document.getElementById('cryo-notes').value.trim();
     const session = Auth.getSession();
     if (isNaN(outputQty) || outputQty < 0) { showToast('Enter a valid output quantity', 'error'); return; }
-    if (destination === 'trimming' && !vendorId) {
-      showToast('Please select a vendor for Trimming', 'error');
+    if ((destination === 'trimming' || destination === 'deflashing') && !vendorId) {
+      showToast('Please select a vendor for the selected destination', 'error');
       return;
     }
     

@@ -8,7 +8,7 @@ const ReportsModule = (() => {
 
   const MODULES = [
     'inventory','sales','production','cryogenic','deflashing',
-    'trimming','waiting-visual','visual','gauge','rejected','recheck','slob','aging','reprocess'
+    'trimming','waiting-visual','visual','gauge','rejected','recheck','slob','aging','reprocess','store-aging','daily-summary','analytics'
   ];
 
   const STAGE_LABELS = {
@@ -137,7 +137,7 @@ const ReportsModule = (() => {
     let tbodyRows = dataRows.map(r => {
       const infoCols = `
         <td class="font-semibold text-blue">${r[0]}</td>
-        <td><span class="badge badge-teal">${r[1]}</span></td>
+        <td><span class="badge badge-teal" style="cursor:pointer;" title="Click to view batches" onclick="ReportsModule.showPartBatches('${r[1]}', '${r[0]}')">${r[1]}</span></td>
         <td class="text-muted">${r[2]}</td>`;
 
       const stageCols = r.slice(3, 3 + stageLen).map((v, i) => {
@@ -2103,6 +2103,9 @@ const ReportsModule = (() => {
       'cycle-time': dateRange,
       'wip-valuation': '',
       'sub-vs-inhouse': dateRange,
+      'store-aging': jmrefFilter,
+      'daily-summary': dateRange,
+      'analytics': dateRange,
     };
     return filterMap[report] || '';
   }
@@ -2373,6 +2376,8 @@ const ReportsModule = (() => {
     switch(reportKey) {
       case 'reprocess':  result = renderReprocess(filters); break;
       case 'inventory':  result = renderInventory(filters); break;
+      case 'store-aging': result = renderStoreAging(filters); break;
+      case 'daily-summary': result = renderDailySummary(filters); break;
       case 'sales':      result = renderSales(filters); break;
       case 'production': result = renderProduction(filters); break;
       case 'cryogenic':  result = renderStageLoss('cryogenic', filters); break;
@@ -2396,6 +2401,7 @@ const ReportsModule = (() => {
       case 'cycle-time':      result = renderCycleTime(filters); break;
       case 'wip-valuation':   result = renderWipValuation(filters); break;
       case 'sub-vs-inhouse':  result = renderSubVsInhouse(filters); break;
+      case 'analytics':       result = renderAnalytics(filters); break;
       default: result = emptyState('Unknown report');
     }
 
@@ -2411,6 +2417,10 @@ const ReportsModule = (() => {
     // Store for export
     output.dataset.headers = JSON.stringify(result.headers);
     output.dataset.rows    = JSON.stringify(result.dataRows);
+
+    if (result.onRender) {
+      setTimeout(() => result.onRender(), 50);
+    }
   }
 
   // ── Report Configs ─────────────────────────────────────────
@@ -2439,7 +2449,10 @@ const ReportsModule = (() => {
     { key:'wip-valuation',  label:'💰 WIP Inventory Valuation',          desc:'Financial valuation of live inventory based on part sale prices' },
     { key:'sub-vs-inhouse', label:'🏢 Subcontractor vs. In-House Comparison', desc:'Yield, cycle time, and rejection comparison between manufacturing channels' },
     { key:'sub-pending', label:'🏢 Subcontractor Pending Batches', desc:'Batches of subcontractor parts currently in pending/WIP stages other than Store' },
-    { key:'sub-performance', label:'🏢 Subcontractor & Vendor Performance Scorecard', desc:'Detailed quality, speed, and WIP load scorecard for all subcontractors and process vendors' }
+    { key:'sub-performance', label:'🏢 Subcontractor & Vendor Performance Scorecard', desc:'Detailed quality, speed, and WIP load scorecard for all subcontractors and process vendors' },
+    { key:'store-aging', label:'⏳ Finished-Goods FIFO Aging Report', desc:'Available stock batches in the Store with FIFO-calculated remaining quantities and age' },
+    { key:'daily-summary', label:'📊 Daily Production & Scrap Summary', desc:'Daily overview of total pieces molded, completed, reprocessed, and scrap rates across all stages' },
+    { key:'analytics', label:'📈 Production & Quality Analytics', desc:'Interactive visual charts showing WIP bottlenecks, daily production yield trends, and top defective parts' }
   ];
 
   // ── Render ────────────────────────────────────────────────
@@ -2520,5 +2533,644 @@ const ReportsModule = (() => {
     }
   }
 
-  return { render, filterAging };
+  function renderAnalytics(filters) {
+    const { from, to } = filters;
+    
+    const today = new Date();
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(today.getDate() - 30);
+    
+    const fromDate = from || thirtyDaysAgo.toISOString().slice(0, 10);
+    const toDate = to || today.toISOString().slice(0, 10);
+
+    const master = DB.Master.all();
+    const batches = DB.Batches.all();
+    const stageRecords = DB.StageRecords.all();
+
+    const stages = ['production', 'cryogenic', 'deflashing', 'trimming', 'post-curing', 'waiting-visual', 'visual', 'gauge', 'quality'];
+    const wipCounts = stages.map(stage => {
+      const activeBatches = batches.filter(b => b.currentStage === stage && b.status === 'active');
+      return activeBatches.reduce((sum, b) => {
+        const incoming = stageRecords.filter(r => r.batchId === b.id && r.movedTo === stage);
+        if (incoming.length) {
+          return sum + (incoming[incoming.length - 1].outputQty || 0);
+        }
+        return sum + (b.initialQty || 0);
+      }, 0);
+    });
+
+    const dateList = [];
+    let curr = new Date(fromDate);
+    const end = new Date(toDate);
+    while (curr <= end) {
+      dateList.push(curr.toISOString().slice(0, 10));
+      curr.setDate(curr.getDate() + 1);
+    }
+
+    const dailyOutput = Array(dateList.length).fill(0);
+    const dailyScrap = Array(dateList.length).fill(0);
+
+    const rangeRecords = stageRecords.filter(r => r.date >= fromDate && r.date <= toDate);
+    rangeRecords.forEach(r => {
+      const idx = dateList.indexOf(r.date);
+      if (idx !== -1) {
+        if (r.stage === 'production') {
+          dailyOutput[idx] += (r.outputQty || 0);
+        }
+        dailyScrap[idx] += (r.lossQty || 0);
+      }
+    });
+
+    const partScrapMap = {};
+    rangeRecords.forEach(r => {
+      if ((r.lossQty || 0) <= 0) return;
+      const b = DB.Batches.find(r.batchId);
+      if (!b) return;
+      partScrapMap[b.jmrefNo || 'Unknown'] = (partScrapMap[b.jmrefNo || 'Unknown'] || 0) + r.lossQty;
+    });
+
+    const topDefects = Object.entries(partScrapMap)
+      .map(([jmrefNo, scrap]) => ({ jmrefNo, scrap }))
+      .sort((a, b) => b.scrap - a.scrap)
+      .slice(0, 5);
+
+    const html = `
+      <div class="animate-in" style="display:flex; flex-direction:column; gap:24px;">
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px;">
+          <div class="card" style="padding: 16px;">
+            <h3 style="font-size:14px; font-weight:700; color:var(--primary); margin-bottom:12px;">📊 WIP Inventory Bottlenecks (Active Pieces in Pipeline)</h3>
+            <div style="height: 300px; position: relative;">
+              <canvas id="chart-bottleneck"></canvas>
+            </div>
+          </div>
+          
+          <div class="card" style="padding: 16px;">
+            <h3 style="font-size:14px; font-weight:700; color:var(--primary); margin-bottom:12px;">🚫 Top 5 Defective Parts (Total Scrap Qty)</h3>
+            <div style="height: 300px; position: relative;">
+              <canvas id="chart-defects"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="padding: 16px; width: 100%;">
+          <h3 style="font-size:14px; font-weight:700; color:var(--primary); margin-bottom:12px;">📈 Daily Production Yield vs. Scrap Trend</h3>
+          <div style="height: 320px; position: relative;">
+            <canvas id="chart-trend"></canvas>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const headers = ['Metric/Part/Stage', 'Values'];
+    const dataRows = [
+      ['Date Range', `${fromDate} to ${toDate}`],
+      ['Top Defects', JSON.stringify(topDefects)],
+      ['WIP Counts', JSON.stringify(wipCounts)]
+    ];
+
+    const onRender = () => {
+      const ctxBottleneck = document.getElementById('chart-bottleneck')?.getContext('2d');
+      if (ctxBottleneck) {
+        new Chart(ctxBottleneck, {
+          type: 'doughnut',
+          data: {
+            labels: stages.map(s => STAGE_LABELS[s] || s),
+            datasets: [{
+              label: 'Pieces in WIP',
+              data: wipCounts,
+              backgroundColor: [
+                '#3b82f6', '#60a5fa', '#f59e0b', '#10b981', '#8b5cf6', '#ec4899', '#f43f5e', '#06b6d4', '#14b8a6'
+              ],
+              borderWidth: 1,
+              borderColor: 'var(--bg-card)'
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: {
+                position: 'right',
+                labels: { color: '#94a3b8', font: { size: 10 } }
+              }
+            }
+          }
+        });
+      }
+
+      const ctxDefects = document.getElementById('chart-defects')?.getContext('2d');
+      if (ctxDefects) {
+        new Chart(ctxDefects, {
+          type: 'bar',
+          data: {
+            labels: topDefects.map(d => d.jmrefNo),
+            datasets: [{
+              label: 'Scrap Quantity',
+              data: topDefects.map(d => d.scrap),
+              backgroundColor: '#ef4444',
+              borderRadius: 6
+            }]
+          },
+          options: {
+            indexAxis: 'y',
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false }
+            },
+            scales: {
+              x: { grid: { display: false }, ticks: { color: '#94a3b8' } },
+              y: { grid: { display: false }, ticks: { color: '#94a3b8' } }
+            }
+          }
+        });
+      }
+
+      const ctxTrend = document.getElementById('chart-trend')?.getContext('2d');
+      if (ctxTrend) {
+        new Chart(ctxTrend, {
+          type: 'line',
+          data: {
+            labels: dateList.map(d => d.slice(5)),
+            datasets: [
+              {
+                label: 'Moulded Quantity',
+                data: dailyOutput,
+                borderColor: '#3b82f6',
+                backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                fill: true,
+                tension: 0.3,
+                borderWidth: 2
+              },
+              {
+                label: 'Scrap Quantity',
+                data: dailyScrap,
+                borderColor: '#ef4444',
+                backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                fill: true,
+                tension: 0.3,
+                borderWidth: 2
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: {
+                position: 'top',
+                labels: { color: '#94a3b8' }
+              }
+            },
+            scales: {
+              x: { grid: { display: false }, ticks: { color: '#94a3b8' } },
+              y: { grid: { color: 'rgba(148, 163, 184, 0.1)' }, ticks: { color: '#94a3b8' } }
+            }
+          }
+        });
+      }
+    };
+
+    return { html, headers, dataRows, onRender };
+  }
+
+  function renderDailySummary(filters) {
+    const { from, to } = filters;
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const fromDate = from || todayStr;
+    const toDate = to || todayStr;
+
+    const stageRecords = DB.StageRecords.all();
+    const master = DB.Master.all();
+
+    const recs = stageRecords.filter(r => r.date >= fromDate && r.date <= toDate);
+
+    let totalMoulded = 0;
+    let totalCompleted = 0;
+    let totalScrap = 0;
+    let totalReprocess = 0;
+
+    recs.forEach(r => {
+      if (r.stage === 'production') {
+        totalMoulded += (r.outputQty || 0);
+      }
+      if (r.stage === 'store') {
+        totalCompleted += (r.inputQty || 0);
+      }
+      totalScrap += (r.lossQty || 0);
+      totalReprocess += (r.reprocessQty || 0);
+    });
+
+    const yieldRate = (totalCompleted + totalScrap) > 0 
+      ? ((totalCompleted / (totalCompleted + totalScrap)) * 100).toFixed(1) 
+      : '0.0';
+
+    const stages = ['production', 'cryogenic', 'deflashing', 'trimming', 'post-curing', 'waiting-visual', 'visual', 'gauge', 'quality', 'store'];
+    const stageSummary = stages.map(s => {
+      const stageRecs = recs.filter(r => r.stage === s);
+      let input = 0;
+      let output = 0;
+      let loss = 0;
+      let reprocess = 0;
+
+      stageRecs.forEach(r => {
+        input += (r.inputQty || 0);
+        output += (r.outputQty || 0);
+        loss += (r.lossQty || 0);
+        reprocess += (r.reprocessQty || 0);
+      });
+
+      if (s === 'store') {
+        input = stageRecs.reduce((sum, r) => sum + (r.inputQty || 0), 0);
+        output = input;
+      }
+
+      const scrapRate = input > 0 ? ((loss / input) * 100).toFixed(1) : '0.0';
+
+      return {
+        stage: STAGE_LABELS[s] || s,
+        input,
+        output,
+        loss,
+        reprocess,
+        scrapRate
+      };
+    });
+
+    const partSummaryMap = {};
+    recs.forEach(r => {
+      const batch = DB.Batches.find(r.batchId);
+      if (!batch) return;
+
+      if (!partSummaryMap[batch.jmrefNo]) {
+        const m = master.find(p => p.jmrefNo === batch.jmrefNo) || {};
+        partSummaryMap[batch.jmrefNo] = {
+          partNo: batch.partNo || m.partNo || 'Unknown',
+          jmrefNo: batch.jmrefNo,
+          description: m.description || '—',
+          moulded: 0,
+          completed: 0,
+          scrapped: 0,
+          reprocessed: 0
+        };
+      }
+
+      const entry = partSummaryMap[batch.jmrefNo];
+      if (r.stage === 'production') {
+        entry.moulded += (r.outputQty || 0);
+      }
+      if (r.stage === 'store') {
+        entry.completed += (r.inputQty || 0);
+      }
+      entry.scrapped += (r.lossQty || 0);
+      entry.reprocessed += (r.reprocessQty || 0);
+    });
+
+    const partRows = Object.values(partSummaryMap);
+
+    const kpiHtml = `
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px;">
+        <div class="card" style="padding: 16px; background: var(--bg-primary); border: 1px solid var(--border); border-left: 4px solid var(--accent-blue);">
+          <div class="text-sm text-muted">Total Moulded Today</div>
+          <div class="font-bold mt-2" style="font-size: 24px; color: var(--primary);">${formatNum(totalMoulded)}</div>
+        </div>
+        <div class="card" style="padding: 16px; background: var(--bg-primary); border: 1px solid var(--border); border-left: 4px solid var(--accent-green);">
+          <div class="text-sm text-muted">Completed (Moved to Store)</div>
+          <div class="font-bold mt-2" style="font-size: 24px; color: var(--accent-green);">${formatNum(totalCompleted)}</div>
+        </div>
+        <div class="card" style="padding: 16px; background: var(--bg-primary); border: 1px solid var(--border); border-left: 4px solid var(--accent-red);">
+          <div class="text-sm text-muted">Total Scrapped (Loss)</div>
+          <div class="font-bold mt-2" style="font-size: 24px; color: var(--accent-red);">${formatNum(totalScrap)}</div>
+        </div>
+        <div class="card" style="padding: 16px; background: var(--bg-primary); border: 1px solid var(--border); border-left: 4px solid var(--accent-teal);">
+          <div class="text-sm text-muted">Completed Yield Rate</div>
+          <div class="font-bold mt-2" style="font-size: 24px; color: var(--accent-teal);">${yieldRate}%</div>
+        </div>
+      </div>
+    `;
+
+    const stageTableRows = stageSummary.map(s => {
+      const scrapRateClass = parseFloat(s.scrapRate) > 5 ? 'text-danger font-bold' : 'text-muted';
+      return `
+        <tr>
+          <td class="font-semibold">${s.stage}</td>
+          <td>${s.input > 0 ? formatNum(s.input) : '—'}</td>
+          <td>${s.output > 0 ? formatNum(s.output) : '—'}</td>
+          <td class="${s.loss > 0 ? 'text-danger font-semibold' : ''}">${s.loss > 0 ? formatNum(s.loss) : '—'}</td>
+          <td class="${s.reprocess > 0 ? 'text-warning font-semibold' : ''}">${s.reprocess > 0 ? formatNum(s.reprocess) : '—'}</td>
+          <td class="${scrapRateClass}">${parseFloat(s.scrapRate) > 0 ? s.scrapRate + '%' : '—'}</td>
+        </tr>
+      `;
+    }).join('');
+
+    const stageTableHtml = `
+      <h3 style="font-size: 14px; font-weight:700; color:var(--primary); margin: 24px 0 12px 0;">🏢 Stage-wise Input, Output, and Scrap Rates</h3>
+      <div class="table-wrap" style="margin-bottom: 24px;">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Stage</th>
+              <th>Input Qty</th>
+              <th>Output Qty</th>
+              <th>Scrap (Loss)</th>
+              <th>Reprocess Qty</th>
+              <th>Scrap Rate (%)</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${stageTableRows}
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    let partTableRows = '';
+    if (partRows.length === 0) {
+      partTableRows = `<tr><td colspan="7" class="text-center text-muted" style="padding: 20px;">No production records found for the selected date range.</td></tr>`;
+    } else {
+      partTableRows = partRows.map(r => `
+        <tr>
+          <td class="font-semibold text-blue">${r.partNo}</td>
+          <td><span class="badge badge-teal">${r.jmrefNo}</span></td>
+          <td class="text-muted text-sm">${r.description}</td>
+          <td class="font-bold">${r.moulded > 0 ? formatNum(r.moulded) : '—'}</td>
+          <td class="font-bold text-success">${r.completed > 0 ? formatNum(r.completed) : '—'}</td>
+          <td class="text-danger font-semibold">${r.scrapped > 0 ? formatNum(r.scrapped) : '—'}</td>
+          <td class="text-warning font-semibold">${r.reprocessed > 0 ? formatNum(r.reprocessed) : '—'}</td>
+        </tr>
+      `).join('');
+    }
+
+    const partTableHtml = `
+      <h3 style="font-size: 14px; font-weight:700; color:var(--primary); margin: 12px 0;">📦 Item-wise Summary</h3>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Part No</th>
+              <th>JMREF No</th>
+              <th>Description</th>
+              <th>Moulded</th>
+              <th>Completed (Store)</th>
+              <th>Scrapped</th>
+              <th>Reprocessed</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${partTableRows}
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    const html = `
+      <div class="daily-summary-dashboard animate-in">
+        ${kpiHtml}
+        ${stageTableHtml}
+        ${partTableHtml}
+      </div>
+    `;
+
+    const headers = ['Type', 'Name / Stage / Part No', 'JMREF No', 'Description / Stage output', 'Input / Moulded Qty', 'Completed / Output Qty', 'Scrapped / Loss Qty', 'Reprocess Qty', 'Scrap / Yield Rate'];
+    
+    const exportRows = [];
+    exportRows.push(['KPI Summary', 'Total Moulded Today', '', '', totalMoulded, '', '', '', '']);
+    exportRows.push(['KPI Summary', 'Completed (Store)', '', '', '', totalCompleted, '', '', '']);
+    exportRows.push(['KPI Summary', 'Total Scrapped (Loss)', '', '', '', '', totalScrap, '', '']);
+    exportRows.push(['KPI Summary', 'Completed Yield Rate', '', '', '', '', '', '', yieldRate + '%']);
+    exportRows.push(['', '', '', '', '', '', '', '', '']); 
+
+    exportRows.push(['Header', 'Stage Breakdown', '', '', '', '', '', '', '']);
+    stageSummary.forEach(s => {
+      exportRows.push(['Stage Data', s.stage, '', '', s.input, s.output, s.loss, s.reprocess, s.scrapRate + '%']);
+    });
+    exportRows.push(['', '', '', '', '', '', '', '', '']); 
+
+    exportRows.push(['Header', 'Part Summary', '', '', '', '', '', '', '']);
+    partRows.forEach(r => {
+      exportRows.push(['Part Data', r.partNo, r.jmrefNo, r.description, r.moulded, r.completed, r.scrapped, r.reprocessed, '']);
+    });
+
+    return { html, headers, dataRows: exportRows };
+  }
+
+  function renderStoreAging(filters) {
+    const { jmref } = filters;
+    const master = DB.Master.all();
+    const batches = DB.Batches.all();
+    const stageRecords = DB.StageRecords.all();
+    const sales = DB.Sales.all();
+    const today = new Date();
+
+    let parts = master.filter(p => {
+      if (jmref) {
+        const q = jmref.toLowerCase();
+        const matchJmref = p.jmrefNo && p.jmrefNo.toLowerCase().includes(q);
+        const matchPartNo = p.partNo && p.partNo.toLowerCase().includes(q);
+        return matchJmref || matchPartNo;
+      }
+      return true;
+    });
+
+    const agingRows = [];
+
+    parts.forEach(p => {
+      const partBatches = batches.filter(b => b.jmrefNo === p.jmrefNo && b.status === 'completed');
+      if (partBatches.length === 0) return;
+
+      const batchEntries = partBatches.map(b => {
+        const storeRecs = stageRecords.filter(r => r.batchId === b.id && r.stage === 'store');
+        const lastRec = storeRecs.length ? storeRecs[storeRecs.length - 1] : null;
+        
+        const storeQty = lastRec ? (lastRec.inputQty || 0) : (b.initialQty || 0);
+        const storeDateStr = lastRec ? (lastRec.date || lastRec.createdAt || b.completedAt || b.createdAt) : (b.completedAt || b.createdAt || '');
+        
+        return {
+          batch: b,
+          storeQty,
+          storeDateStr: storeDateStr ? storeDateStr.slice(0, 10) : ''
+        };
+      });
+
+      batchEntries.sort((a, b) => {
+        if (!a.storeDateStr) return 1;
+        if (!b.storeDateStr) return -1;
+        return a.storeDateStr.localeCompare(b.storeDateStr);
+      });
+
+      let totalSold = sales.filter(s => s.jmrefNo === p.jmrefNo).reduce((s, r) => s + (r.qty || 0), 0);
+
+      batchEntries.forEach(entry => {
+        let remainingQty = entry.storeQty;
+        if (totalSold >= remainingQty) {
+          totalSold -= remainingQty;
+          remainingQty = 0;
+        } else if (totalSold > 0) {
+          remainingQty -= totalSold;
+          totalSold = 0;
+        }
+
+        if (remainingQty > 0) {
+          let ageDays = 0;
+          if (entry.storeDateStr) {
+            const entryDate = new Date(entry.storeDateStr);
+            const diffTime = Math.abs(today - entryDate);
+            ageDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+          }
+
+          agingRows.push({
+            partNo: p.partNo,
+            jmrefNo: p.jmrefNo,
+            description: p.description,
+            batchNo: entry.batch.batchNo,
+            storeDate: entry.storeDateStr || '—',
+            initialQty: entry.storeQty,
+            remainingQty,
+            ageDays
+          });
+        }
+      });
+    });
+
+    agingRows.sort((a, b) => b.ageDays - a.ageDays);
+
+    const headers = ['Part No', 'JMREF No', 'Description', 'Batch No', 'Date Completed', 'Original Qty', 'Remaining Qty', 'Age (Days)'];
+    
+    if (agingRows.length === 0) {
+      return {
+        html: emptyState('No finished goods inventory found in the Store.'),
+        headers,
+        dataRows: []
+      };
+    }
+
+    const dataRows = agingRows.map(r => [
+      r.partNo,
+      r.jmrefNo,
+      r.description,
+      r.batchNo,
+      r.storeDate,
+      r.initialQty,
+      r.remainingQty,
+      r.ageDays
+    ]);
+
+    const theadCols = headers.map(h => `<th>${h}</th>`).join('');
+    
+    const tbodyRows = agingRows.map(r => {
+      let ageClass = 'text-success font-semibold';
+      if (r.ageDays > 30) ageClass = 'text-danger font-bold';
+      else if (r.ageDays > 15) ageClass = 'text-warning font-semibold';
+
+      return `
+        <tr>
+          <td class="font-semibold text-blue">${r.partNo}</td>
+          <td><span class="badge badge-teal">${r.jmrefNo}</span></td>
+          <td class="text-muted text-sm">${r.description}</td>
+          <td class="font-semibold">${r.batchNo}</td>
+          <td>${r.storeDate}</td>
+          <td>${formatNum(r.initialQty)}</td>
+          <td class="font-bold text-success">${formatNum(r.remainingQty)}</td>
+          <td class="${ageClass}">${r.ageDays} days</td>
+        </tr>
+      `;
+    }).join('');
+
+    const html = `
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr>${theadCols}</tr></thead>
+          <tbody>${tbodyRows}</tbody>
+        </table>
+      </div>`;
+
+    return { html, headers, dataRows };
+  }
+
+  function showPartBatches(jmrefNo, partNo) {
+    const batches = DB.Batches.all().filter(b => b.jmrefNo === jmrefNo && b.status === 'active' && b.currentStage !== 'store');
+    
+    // Sort by date desc
+    batches.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+
+    let rowsHtml = '';
+    if (batches.length === 0) {
+      rowsHtml = `<tr><td colspan="6" class="text-center text-muted" style="padding:20px;">No batches found for this part.</td></tr>`;
+    } else {
+      rowsHtml = batches.map(b => {
+        const stageLabel = STAGE_LABELS[b.currentStage] || b.currentStage || 'Unknown';
+        const isStore = b.currentStage === 'store';
+        
+        let qty = b.initialQty || 0;
+        const statusClass = b.status === 'active' ? 'badge-blue' : 'badge-teal';
+        const stageClass = isStore ? 'text-success font-bold' : 'text-blue font-semibold';
+        
+        let vendorName = '—';
+        if (b.vendorId) {
+          const v = DB.Vendors.find(b.vendorId);
+          if (v) vendorName = v.name;
+        }
+
+        const dateStr = b.createdAt ? b.createdAt.slice(0, 10) : '—';
+
+        return `
+          <tr>
+            <td class="font-semibold">${b.batchNo}</td>
+            <td class="${stageClass}">${stageLabel}</td>
+            <td class="font-bold">${formatNum(qty)}</td>
+            <td>${vendorName}</td>
+            <td><span class="badge ${statusClass}">${b.status}</span></td>
+            <td class="text-muted text-sm">${dateStr}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    const modalHtml = `
+      <div class="modal-overlay" id="inventory-detail-overlay" onclick="if(event.target===this) ReportsModule.closePartBatches()" style="z-index: 10000;">
+        <div class="modal" style="max-width: 800px; width: 100%;">
+          <div class="modal-header">
+            <h3 style="font-size:16px; font-weight:700; color:var(--primary);">📦 WIP Batches for Part: ${partNo} (${jmrefNo})</h3>
+            <button class="btn btn-ghost" onclick="ReportsModule.closePartBatches()">✕</button>
+          </div>
+          <div class="modal-body" style="max-height: 60vh;">
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Batch No</th>
+                    <th>Destination Stage</th>
+                    <th>Qty</th>
+                    <th>Vendor</th>
+                    <th>Status</th>
+                    <th>Date Created</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${rowsHtml}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="ReportsModule.closePartBatches()">Close</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    closePartBatches();
+
+    const div = document.createElement('div');
+    div.id = 'inventory-detail-container';
+    div.innerHTML = modalHtml;
+    document.body.appendChild(div);
+  }
+
+  function closePartBatches() {
+    const el = document.getElementById('inventory-detail-container');
+    if (el) el.remove();
+  }
+
+  return { render, filterAging, showPartBatches, closePartBatches };
 })();

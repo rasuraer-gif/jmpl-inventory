@@ -852,6 +852,7 @@ const ProductionModule = (() => {
           <option value="cryogenic">Cryogenic</option>
           <option value="deflashing">Manual DE Flashing</option>
           <option value="trimming">Trimming</option>
+          <option value="visual">Visual Inspection</option>
         `;
         destSelect.value = (prevVal && prevVal !== 'production') ? prevVal : 'cryogenic';
       } else {
@@ -860,6 +861,7 @@ const ProductionModule = (() => {
           <option value="cryogenic">Cryogenic</option>
           <option value="deflashing">Manual DE Flashing</option>
           <option value="trimming">Trimming</option>
+          <option value="visual">Visual Inspection</option>
         `;
         destSelect.value = prevVal || 'production';
       }
