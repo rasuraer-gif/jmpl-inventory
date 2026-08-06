@@ -1574,12 +1574,431 @@ const ReportsModule = (() => {
     return { html, headers, dataRows };
   }
 
+  function renderSubPending(filters) {
+    const { from, to, jmref, subcontractorId } = filters;
+    const batches = DB.Batches.all().filter(b => b.productionType === 'subcontractor' && b.status === 'active' && b.currentStage !== 'store');
+    const stageRecs = DB.StageRecords.all();
+    const master = DB.Master.all();
+    const subcontractors = DB.Subcontractors.all();
+    const today = new Date();
+    today.setHours(0,0,0,0);
+
+    function parseLocalDate(dateStr) {
+      if (!dateStr) return new Date();
+      const clean = dateStr.slice(0, 10).trim();
+      const parts = clean.split(/[-/]/);
+      if (parts.length === 3) {
+        if (parts[0].length === 4) {
+          return new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+        } else {
+          return new Date(Number(parts[2]), Number(parts[1]) - 1, Number(parts[0]));
+        }
+      }
+      const d = new Date(clean);
+      return isNaN(d.getTime()) ? new Date() : d;
+    }
+
+    const dataRows = [];
+    const headers = ['#', 'Batch No', 'JMREF No', 'Part No', 'Description', 'Subcontractor', 'Current Stage', 'Current Qty', 'Date Created', 'Days Pending'];
+
+    batches.forEach(b => {
+      // Subcontractor Filter
+      if (subcontractorId && b.subcontractorId !== subcontractorId) return;
+
+      // Part / JMREF Filter
+      if (jmref) {
+        const q = jmref.toLowerCase();
+        const p = master.find(m => m.jmrefNo === b.jmrefNo) || {};
+        const matchJm = (b.jmrefNo || '').toLowerCase().includes(q);
+        const matchPart = (p.partNo || b.partNo || '').toLowerCase().includes(q);
+        const matchBatch = (b.batchNo || '').toLowerCase().includes(q);
+        if (!matchJm && !matchPart && !matchBatch) return;
+      }
+
+      // Date Range Filter (based on batch createdAt)
+      const cDate = (b.createdAt || '').slice(0, 10);
+      if (from && cDate < from) return;
+      if (to && cDate > to) return;
+
+      // Find subcontractor name
+      const sub = subcontractors.find(s => s.id === b.subcontractorId) || {};
+      const subName = sub.name || 'Unknown / Not Assigned';
+
+      // Find current quantity
+      let qty = b.initialQty || 0;
+      if (b.currentStage !== 'production') {
+        const incoming = stageRecs.filter(r => r.batchId === b.id && r.movedTo === b.currentStage);
+        if (incoming.length > 0) {
+          const lastRec = incoming[incoming.length - 1];
+          qty = lastRec.isRecheck ? lastRec.recheckQty : lastRec.outputQty;
+        }
+      }
+
+      // Find date received / entered in current stage
+      let entryDateStr = '';
+      const recs = stageRecs.filter(r => r.batchId === b.id && r.movedTo === b.currentStage)
+                            .sort((a, b) => (a.createdAt || a.date || '').localeCompare(b.createdAt || b.date || ''));
+      if (recs.length > 0) {
+        entryDateStr = recs[recs.length - 1].date || recs[recs.length - 1].createdAt || '';
+      }
+      if (!entryDateStr) {
+        entryDateStr = b.productionDate || b.createdAt || '';
+      }
+
+      const entryDate = parseLocalDate(entryDateStr);
+      entryDate.setHours(0,0,0,0);
+      const diffTime = today - entryDate;
+      const days = Math.max(0, Math.round(diffTime / (1000 * 60 * 60 * 24)));
+
+      const p = master.find(m => m.jmrefNo === b.jmrefNo) || {};
+      dataRows.push({
+        batchNo: b.batchNo,
+        jmrefNo: b.jmrefNo,
+        partNo: p.partNo || b.partNo || '—',
+        description: p.description || b.description || '—',
+        subcontractor: subName,
+        currentStage: STAGE_LABELS[b.currentStage] || b.currentStage,
+        qty: qty,
+        dateCreated: (b.createdAt || '').slice(0, 10),
+        daysPending: days
+      });
+    });
+
+    dataRows.sort((a, b) => b.daysPending - a.daysPending);
+
+    const rows = dataRows.map((r, i) => {
+      return [
+        i + 1,
+        r.batchNo,
+        r.jmrefNo,
+        r.partNo,
+        r.description,
+        r.subcontractor,
+        r.currentStage,
+        r.qty,
+        r.dateCreated,
+        r.daysPending
+      ];
+    });
+
+    const htmlRows = rows.map(r => {
+      const days = r[9];
+      let daysStyle = '';
+      if (days >= 60) daysStyle = 'style="color:var(--accent-red); font-weight:bold;"';
+      else if (days >= 30) daysStyle = 'style="color:var(--accent-amber); font-weight:bold;"';
+      else if (days >= 14) daysStyle = 'style="color:var(--accent-blue); font-weight:semibold;"';
+      else daysStyle = 'class="text-muted"';
+
+      return `
+        <tr>
+          <td>${r[0]}</td>
+          <td class="font-semibold text-blue">${r[1]}</td>
+          <td><span class="badge badge-teal">${r[2]}</span></td>
+          <td>${r[3]}</td>
+          <td class="text-muted text-sm">${r[4]}</td>
+          <td><span class="badge badge-amber">${r[5]}</span></td>
+          <td><span class="badge badge-blue">${r[6]}</span></td>
+          <td class="font-semibold">${formatNum(r[7])}</td>
+          <td>${formatDate(r[8])}</td>
+          <td ${daysStyle}>${days} days</td>
+        </tr>`;
+    }).join('');
+
+    const totalQty = dataRows.reduce((s, r) => s + r.qty, 0);
+    const totalRowHtml = `
+      <tr class="font-bold text-danger">
+        <td colspan="7" style="text-align:right;">TOTAL:</td>
+        <td>${formatNum(totalQty)}</td>
+        <td colspan="2"></td>
+      </tr>
+    `;
+    const finalHtmlRows = htmlRows ? (htmlRows + totalRowHtml) : '';
+    rows.push(['', '', '', '', '', '', 'TOTAL:', totalQty, '', '']);
+
+    const html = `
+      <div style="display:flex; gap:16px; margin-bottom: 20px; flex-wrap:wrap;">
+        <div class="stat-card blue" style="flex:1; min-width: 140px;"><div class="stat-label">Pending Batches</div><div class="stat-value blue">${dataRows.length}</div></div>
+        <div class="stat-card amber" style="flex:1; min-width: 140px;"><div class="stat-label">Total Pending Quantity</div><div class="stat-value amber">${formatNum(totalQty)}</div></div>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Batch No</th>
+              <th>JMREF No</th>
+              <th>Part No</th>
+              <th>Description</th>
+              <th>Subcontractor</th>
+              <th>Current Stage</th>
+              <th>Current Qty</th>
+              <th>Date Created</th>
+              <th>Days Pending</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${finalHtmlRows || '<tr><td colspan="10" style="text-align:center;padding:24px;color:var(--text-muted);">No pending subcontractor batches found matching the filters</td></tr>'}
+          </tbody>
+        </table>
+      </div>`;
+
+    return { html, headers, dataRows: rows };
+  }
+
+  function renderSubPerformance(filters) {
+    const { from, to } = filters;
+    const batches = DB.Batches.all();
+    const stageRecs = DB.StageRecords.all();
+    const subcontractors = DB.Subcontractors.all();
+    const vendors = DB.Vendors.all();
+
+    // 1. Subcontractor Production Metrics
+    const subData = subcontractors.map(sub => {
+      // Find batches where productionType is subcontractor and subcontractorId matches
+      let subBatches = batches.filter(b => b.productionType === 'subcontractor' && b.subcontractorId === sub.id);
+      
+      // Filter by date range if specified (based on b.createdAt)
+      subBatches = filterByDateRange(subBatches, 'createdAt', from, to);
+
+      const totalBatches = subBatches.length;
+      const totalInput = subBatches.reduce((sum, b) => sum + (b.initialQty || 0), 0);
+      
+      const batchIds = new Set(subBatches.map(b => b.id));
+      const subStageRecs = stageRecs.filter(r => batchIds.has(r.batchId));
+      const totalLoss = subStageRecs.reduce((sum, r) => sum + (r.lossQty || 0), 0);
+      const totalOutput = Math.max(0, totalInput - totalLoss);
+      const yieldRate = totalInput > 0 ? ((totalOutput / totalInput) * 100) : 100;
+
+      // Avg Lead Time for completed batches
+      let totalTimeHrs = 0;
+      let completedCount = 0;
+      subBatches.forEach(b => {
+        if (b.status === 'completed' && b.completedAt) {
+          const start = new Date(b.createdAt).getTime();
+          const end = new Date(b.completedAt).getTime();
+          totalTimeHrs += (end - start) / (1000 * 60 * 60);
+          completedCount++;
+        }
+      });
+      const avgLeadTime = completedCount > 0 ? (totalTimeHrs / completedCount / 24).toFixed(1) + ' days' : '—';
+
+      // Active WIP
+      const activeWipBatches = batches.filter(b => b.productionType === 'subcontractor' && b.subcontractorId === sub.id && b.status === 'active' && b.currentStage !== 'store');
+      const activeWipQty = activeWipBatches.reduce((sum, b) => {
+        let qty = b.initialQty || 0;
+        if (b.currentStage !== 'production') {
+          const incoming = stageRecs.filter(r => r.batchId === b.id && r.movedTo === b.currentStage);
+          if (incoming.length > 0) {
+            const lastRec = incoming[incoming.length - 1];
+            qty = lastRec.isRecheck ? lastRec.recheckQty : lastRec.outputQty;
+          }
+        }
+        return sum + qty;
+      }, 0);
+
+      return {
+        name: sub.name,
+        totalBatches,
+        totalInput,
+        totalOutput,
+        totalLoss,
+        yieldRate: yieldRate.toFixed(2) + '%',
+        avgLeadTime,
+        activeWipCount: activeWipBatches.length,
+        activeWipQty
+      };
+    });
+
+    // 2. Process Vendor Metrics (Deflashing & Trimming)
+    const vendorData = vendors.map(vendor => {
+      // Find stage records processed by this vendor
+      let vStageRecs = stageRecs.filter(r => r.vendorId === vendor.id && (r.stage === 'deflashing' || r.stage === 'trimming'));
+      
+      // Filter by date range if specified (based on r.date or r.createdAt)
+      vStageRecs = filterByDateRange(vStageRecs, 'date', from, to);
+
+      const batchIds = [...new Set(vStageRecs.map(r => r.batchId))];
+      const totalBatches = batchIds.length;
+
+      const totalInput = vStageRecs.reduce((sum, r) => sum + (r.inputQty || 0), 0);
+      const totalLoss = vStageRecs.reduce((sum, r) => sum + (r.lossQty || 0), 0);
+      const totalOutput = Math.max(0, totalInput - totalLoss);
+      const yieldRate = totalInput > 0 ? ((totalOutput / totalInput) * 100) : 100;
+
+      // Avg Dwell Time inside the stage for this vendor
+      let totalTimeHrs = 0;
+      let transitionCount = 0;
+      
+      vStageRecs.forEach(r => {
+        // Find when the batch entered this stage
+        const b = batches.find(bt => bt.id === r.batchId) || {};
+        const prevRecs = stageRecs.filter(pr => pr.batchId === r.batchId && pr.createdAt.localeCompare(r.createdAt) < 0)
+                                 .sort((a,b) => b.createdAt.localeCompare(a.createdAt));
+        const entryTimeStr = prevRecs.length > 0 ? (prevRecs[0].createdAt || prevRecs[0].date) : b.createdAt;
+        if (entryTimeStr) {
+          const start = new Date(entryTimeStr).getTime();
+          const end = new Date(r.createdAt || r.date).getTime();
+          const hrs = (end - start) / (1000 * 60 * 60);
+          if (hrs >= 0) {
+            totalTimeHrs += hrs;
+            transitionCount++;
+          }
+        }
+      });
+      const avgDwellTime = transitionCount > 0 ? (totalTimeHrs / transitionCount / 24).toFixed(1) + ' days' : '—';
+
+      // Active WIP currently assigned to this vendor
+      const activeWipBatches = batches.filter(b => b.status === 'active' && b.vendorId === vendor.id && b.currentStage !== 'store');
+      const activeWipQty = activeWipBatches.reduce((sum, b) => {
+        let qty = b.initialQty || 0;
+        if (b.currentStage !== 'production') {
+          const incoming = stageRecs.filter(r => r.batchId === b.id && r.movedTo === b.currentStage);
+          if (incoming.length > 0) {
+            const lastRec = incoming[incoming.length - 1];
+            qty = lastRec.isRecheck ? lastRec.recheckQty : lastRec.outputQty;
+          }
+        }
+        return sum + qty;
+      }, 0);
+
+      const deptLabels = (vendor.departments || []).map(d => STAGE_LABELS[d] || d).join(', ');
+
+      return {
+        name: vendor.name,
+        departments: deptLabels || '—',
+        totalBatches,
+        totalInput,
+        totalOutput,
+        totalLoss,
+        yieldRate: yieldRate.toFixed(2) + '%',
+        avgDwellTime,
+        activeWipCount: activeWipBatches.length,
+        activeWipQty
+      };
+    });
+
+    // Sort by yield rate descending or active WIP
+    subData.sort((a,b) => b.totalBatches - a.totalBatches);
+    vendorData.sort((a,b) => b.totalBatches - a.totalBatches);
+
+    // Build Tables HTML representation
+    const subRowsHtml = subData.map(r => `
+      <tr>
+        <td class="font-semibold text-blue">🏢 ${r.name}</td>
+        <td>${formatNum(r.totalBatches)}</td>
+        <td>${formatNum(r.totalInput)}</td>
+        <td>${formatNum(r.totalOutput)}</td>
+        <td class="text-danger font-semibold">${formatNum(r.totalLoss)}</td>
+        <td class="font-bold text-success">${r.yieldRate}</td>
+        <td>${r.avgLeadTime}</td>
+        <td class="font-semibold text-amber">${formatNum(r.activeWipCount)} batches (${formatNum(r.activeWipQty)} pcs)</td>
+      </tr>
+    `).join('');
+
+    const vendorRowsHtml = vendorData.map(r => `
+      <tr>
+        <td class="font-semibold text-blue">🔧 ${r.name}</td>
+        <td class="text-xs text-muted">${r.departments}</td>
+        <td>${formatNum(r.totalBatches)}</td>
+        <td>${formatNum(r.totalInput)}</td>
+        <td>${formatNum(r.totalOutput)}</td>
+        <td class="text-danger font-semibold">${formatNum(r.totalLoss)}</td>
+        <td class="font-bold text-success">${r.yieldRate}</td>
+        <td>${r.avgDwellTime}</td>
+        <td class="font-semibold text-amber">${formatNum(r.activeWipCount)} batches (${formatNum(r.activeWipQty)} pcs)</td>
+      </tr>
+    `).join('');
+
+    const html = `
+      <h4 class="font-bold mb-3" style="font-size: 15px; border-bottom: 2px solid var(--border); padding-bottom: 6px; margin-top: 12px;">🏢 Section 1: Subcontractor Production (Batch Creators)</h4>
+      <div class="table-wrap mb-6">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Subcontractor</th>
+              <th>Total Batches</th>
+              <th>Total Input (pcs)</th>
+              <th>Total Output (pcs)</th>
+              <th>Total Loss (pcs)</th>
+              <th>Avg Yield Rate</th>
+              <th>Avg Lead Time</th>
+              <th>Active WIP Load</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${subRowsHtml || '<tr><td colspan="8" style="text-align:center;padding:16px;color:var(--text-muted);">No subcontractor production records found</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+
+      <h4 class="font-bold mb-3" style="font-size: 15px; border-bottom: 2px solid var(--border); padding-bottom: 6px; margin-top: 24px;">🔧 Section 2: Process Stage Vendors (Deflashing & Trimming)</h4>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Vendor Name</th>
+              <th>Departments</th>
+              <th>Total Batches</th>
+              <th>Total Input (pcs)</th>
+              <th>Total Output (pcs)</th>
+              <th>Total Loss (pcs)</th>
+              <th>Avg Yield Rate</th>
+              <th>Avg Dwell Time</th>
+              <th>Active WIP Load</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${vendorRowsHtml || '<tr><td colspan="9" style="text-align:center;padding:16px;color:var(--text-muted);">No process stage vendor records found</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    // Define export data
+    const headers = ['Name', 'Type', 'Total Batches', 'Total Input Qty', 'Total Output Qty', 'Total Loss Qty', 'Yield Rate', 'Avg Time', 'Active WIP Batches', 'Active WIP Qty'];
+    const dataRows = [];
+    
+    subData.forEach(r => {
+      dataRows.push([
+        r.name,
+        'Subcontractor Production',
+        String(r.totalBatches),
+        String(r.totalInput),
+        String(r.totalOutput),
+        String(r.totalLoss),
+        r.yieldRate,
+        r.avgLeadTime,
+        String(r.activeWipCount),
+        String(r.activeWipQty)
+      ]);
+    });
+
+    vendorData.forEach(r => {
+      dataRows.push([
+        r.name,
+        'Process Vendor (' + r.departments + ')',
+        String(r.totalBatches),
+        String(r.totalInput),
+        String(r.totalOutput),
+        String(r.totalLoss),
+        r.yieldRate,
+        r.avgDwellTime,
+        String(r.activeWipCount),
+        String(r.activeWipQty)
+      ]);
+    });
+
+    return { html, headers, dataRows };
+  }
+
   // ── Build Filter UI ────────────────────────────────────────
   function buildFilters(report) {
     const masterList = DB.Master.all();
     const operators  = DB.Operators.all();
+    const subcontractors = DB.Subcontractors.all();
     const jmrefOpts  = masterList.map(m => `<option value="${m.jmrefNo}">${m.jmrefNo} — ${m.partNo}</option>`).join('');
     const opOpts     = operators.map(o => `<option value="${o.id}">${o.name}</option>`).join('');
+    const subOpts    = subcontractors.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
 
     const dateRange = `
       <div class="form-group mb-0">
@@ -1614,6 +2033,13 @@ const ReportsModule = (() => {
           <option value="">All Types</option>
           <option value="inhouse">In House</option>
           <option value="subcontractor">Subcontractor</option>
+        </select>
+      </div>`;
+    const subcontractorFilter = `
+      <div class="form-group mb-0">
+        <label class="form-label">Subcontractor</label>
+        <select class="form-control" id="rpt-subcontractor">
+          <option value="">All Subcontractors</option>${subOpts}
         </select>
       </div>`;
 
@@ -1668,6 +2094,8 @@ const ReportsModule = (() => {
       rejected:  '',
       recheck:   [opFilter, dateRange].join(''),
       'pending-batches': [pendingStageFilter, pendingTimeframeFilter].join(''),
+      'sub-pending': [subcontractorFilter, jmrefFilter, dateRange].join(''),
+      'sub-performance': dateRange,
       'qty-gain': [jmrefFilter, dateRange].join(''),
       'qty-loss': [jmrefFilter, dateRange].join(''),
       'op-efficiency': dateRange,
@@ -1933,6 +2361,7 @@ const ReportsModule = (() => {
       pendingStage: g('rpt-pending-stage'),
       pendingTimeframe: g('rpt-pending-timeframe'),
       prodType: g('rpt-prod-type'),
+      subcontractorId: g('rpt-subcontractor'),
     };
   }
 
@@ -1958,6 +2387,8 @@ const ReportsModule = (() => {
       case 'slob':       result = renderSlob(filters); break;
       case 'aging':      result = renderAging(filters); break;
       case 'pending-batches': result = renderPendingBatches(filters); break;
+      case 'sub-pending':     result = renderSubPending(filters); break;
+      case 'sub-performance': result = renderSubPerformance(filters); break;
       case 'qty-gain':        result = renderQtyGainReport(filters); break;
       case 'qty-loss':        result = renderQtyLossReport(filters); break;
       case 'op-efficiency':   result = renderOpEfficiency(filters); break;
@@ -2006,7 +2437,9 @@ const ReportsModule = (() => {
     { key:'mould-lifecycle',label:'⚙️ Mould Lifecycle & Performance',    desc:'Accumulative lift count, output yield, and maintenance alert status per mould' },
     { key:'cycle-time',     label:'⏳ Production Cycle Time & Bottlenecks', desc:'Average hours/days batches spend at each process stage' },
     { key:'wip-valuation',  label:'💰 WIP Inventory Valuation',          desc:'Financial valuation of live inventory based on part sale prices' },
-    { key:'sub-vs-inhouse', label:'🏢 Subcontractor vs. In-House Comparison', desc:'Yield, cycle time, and rejection comparison between manufacturing channels' }
+    { key:'sub-vs-inhouse', label:'🏢 Subcontractor vs. In-House Comparison', desc:'Yield, cycle time, and rejection comparison between manufacturing channels' },
+    { key:'sub-pending', label:'🏢 Subcontractor Pending Batches', desc:'Batches of subcontractor parts currently in pending/WIP stages other than Store' },
+    { key:'sub-performance', label:'🏢 Subcontractor & Vendor Performance Scorecard', desc:'Detailed quality, speed, and WIP load scorecard for all subcontractors and process vendors' }
   ];
 
   // ── Render ────────────────────────────────────────────────
@@ -2073,6 +2506,8 @@ const ReportsModule = (() => {
     // Auto-run inventory report immediately (no date filters needed)
     if (reportKey === 'inventory') runReport(reportKey);
     if (reportKey === 'pending-batches') runReport(reportKey);
+    if (reportKey === 'sub-pending') runReport(reportKey);
+    if (reportKey === 'sub-performance') runReport(reportKey);
   }
 
   function filterAging(val) {

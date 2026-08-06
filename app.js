@@ -459,6 +459,8 @@ const NAV = [
   { id:'rpt-cycle-time', label:'Production Cycle Time & Bottlenecks', icon:'⏳', module:'report_cycle_time', section:'tools', parent:'reports', perm:'report_cycle_time' },
   { id:'rpt-wip-valuation', label:'WIP Inventory Valuation', icon:'💰', module:'report_wip_valuation', section:'tools', parent:'reports', perm:'report_wip_valuation' },
   { id:'rpt-sub-vs-inhouse', label:'Subcontractor vs. In-House Comparison', icon:'🏢', module:'report_sub_vs_inhouse', section:'tools', parent:'reports', perm:'report_sub_vs_inhouse' },
+  { id:'rpt-sub-pending', label:'Subcontractor Pending Batches', icon:'🏢', module:'report_sub_pending', section:'tools', parent:'reports', perm:'report_sub_pending' },
+  { id:'rpt-sub-performance', label:'Subcontractor & Vendor Scorecard', icon:'🏢', module:'report_sub_performance', section:'tools', parent:'reports', perm:'report_sub_performance' },
 
   { id:'print-batch',  label:'Print Label',        icon:'🖨️', module:'print-batch',  section:'tools', perm:'print-batch' },
   { id:'ai-agent',   label:'AI Assistant',        icon:'🤖', module:'ai-agent',  section:'tools', perm:'ai-agent' },
@@ -520,6 +522,8 @@ const App = (() => {
     report_cycle_time:     () => ReportsModule?.render('cycle-time'),
     report_wip_valuation:  () => ReportsModule?.render('wip-valuation'),
     report_sub_vs_inhouse: () => ReportsModule?.render('sub-vs-inhouse'),
+    report_sub_pending:    () => ReportsModule?.render('sub-pending'),
+    report_sub_performance:() => ReportsModule?.render('sub-performance'),
     'print-batch':     () => PrintBatchModule?.render(),
   };
 
@@ -559,6 +563,8 @@ const App = (() => {
     report_cycle_time:     'Production Cycle Time & Bottlenecks',
     report_wip_valuation:  'WIP Inventory Valuation',
     report_sub_vs_inhouse: 'Subcontractor vs. In-House Comparison',
+    report_sub_pending:    'Subcontractor Pending Batches',
+    report_sub_performance:'Subcontractor & Vendor Scorecard',
   };
 
   function navigate(moduleId) {

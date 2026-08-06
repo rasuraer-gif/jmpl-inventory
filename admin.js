@@ -6,7 +6,7 @@ const AdminModule = (() => {
     'master','mould-tracking','production','cryogenic','deflashing','trimming','post-curing','waiting-visual','visual','gauge','quality','store',
     'stock','monthly-plan','prod-sched','replenishment','task-tracking','print-batch','ai-agent',
     'report_inventory','report_sales','report_production','report_cryogenic','report_deflashing','report_trimming','report_post_curing','report_waiting_visual','report_visual','report_gauge','report_rejected','report_recheck','report_reprocess',
-    'report_slob','report_aging','report_pending_batches','report_qty_gain','report_qty_loss','report_op_efficiency','report_mould_lifecycle','report_cycle_time','report_wip_valuation','report_sub_vs_inhouse'
+    'report_slob','report_aging','report_pending_batches','report_qty_gain','report_qty_loss','report_op_efficiency','report_mould_lifecycle','report_cycle_time','report_wip_valuation','report_sub_vs_inhouse','report_sub_pending','report_sub_performance'
   ];
   const PERM_LABELS = {
     master: 'Inventory Master',
@@ -50,7 +50,9 @@ const AdminModule = (() => {
     report_mould_lifecycle: 'Report: Mould Lifecycle',
     report_cycle_time: 'Report: Cycle Time & Bottlenecks',
     report_wip_valuation: 'Report: WIP Valuation',
-    report_sub_vs_inhouse: 'Report: Subcontractor vs In-House'
+    report_sub_vs_inhouse: 'Report: Subcontractor vs In-House',
+    report_sub_pending: 'Report: Subcontractor Pending Batches',
+    report_sub_performance: 'Report: Subcontractor & Vendor Scorecard'
   };
   let activeTab = 'users';
 

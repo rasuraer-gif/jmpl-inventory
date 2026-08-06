@@ -213,12 +213,6 @@ const ProductionModule = (() => {
                 <option value="cryogenic">Cryogenic</option>
                 <option value="deflashing">Manual DE Flashing</option>
                 <option value="trimming">Trimming</option>
-                <option value="post-curing">Post Curing</option>
-                <option value="waiting-visual">Waiting for Visual</option>
-                <option value="visual">Visual Inspection</option>
-                <option value="gauge">Gauge Inspection</option>
-                <option value="quality">QC Final</option>
-                <option value="store">Store</option>
               </select>
             </div>
           </div>
@@ -858,12 +852,6 @@ const ProductionModule = (() => {
           <option value="cryogenic">Cryogenic</option>
           <option value="deflashing">Manual DE Flashing</option>
           <option value="trimming">Trimming</option>
-          <option value="post-curing">Post Curing</option>
-          <option value="waiting-visual">Waiting for Visual</option>
-          <option value="visual">Visual Inspection</option>
-          <option value="gauge">Gauge Inspection</option>
-          <option value="quality">QC Final</option>
-          <option value="store">Store</option>
         `;
         destSelect.value = (prevVal && prevVal !== 'production') ? prevVal : 'cryogenic';
       } else {
@@ -872,12 +860,6 @@ const ProductionModule = (() => {
           <option value="cryogenic">Cryogenic</option>
           <option value="deflashing">Manual DE Flashing</option>
           <option value="trimming">Trimming</option>
-          <option value="post-curing">Post Curing</option>
-          <option value="waiting-visual">Waiting for Visual</option>
-          <option value="visual">Visual Inspection</option>
-          <option value="gauge">Gauge Inspection</option>
-          <option value="quality">QC Final</option>
-          <option value="store">Store</option>
         `;
         destSelect.value = prevVal || 'production';
       }
