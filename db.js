@@ -152,7 +152,12 @@ const DB = (() => {
         return new Promise((resolve) => {
           let resolved = false;
 
-          db.collection(table).onSnapshot({ includeMetadataChanges: true }, snapshot => {
+          let query = db.collection(table);
+          if (table === 'batches') {
+            query = query.where('isArchived', '==', false);
+          }
+
+          query.onSnapshot({ includeMetadataChanges: true }, snapshot => {
             const hasPendingWrites = snapshot.metadata ? snapshot.metadata.hasPendingWrites : false;
             triggerSyncStateChange(table, hasPendingWrites);
             const list = [];
@@ -198,10 +203,15 @@ const DB = (() => {
       });
 
       // Start the synchronization in the background without blocking the initial boot
-      Promise.all(initPromises).then(() => {
+      Promise.all(initPromises).then(async () => {
         console.log("JMPL Database fully synchronized with Firestore.");
         isCloudSyncComplete = true;
         runUserDeduplicationMigration();
+        try {
+          await runArchivalMigration();
+        } catch (migErr) {
+          console.error("Archival migration error:", migErr);
+        }
         seedDefaults();
       });
 
@@ -417,6 +427,160 @@ const DB = (() => {
       localStorage.setItem(PREFIX + 'moulds', JSON.stringify(cache.moulds));
       console.log(`[Migration] Seeded ${migratedCount} default mould master records.`);
     }
+  }
+
+  async function runArchivalMigration() {
+    if (localStorage.getItem('jmpl_archival_migration_run_v1') === 'true') return;
+    console.log("Running one-time archival migration to split active and completed/rejected batches...");
+    
+    let allBatches = [];
+    let allSales = [];
+    let allStageRecords = [];
+
+    if (db) {
+      try {
+        const snapshot = await db.collection('batches').get();
+        snapshot.forEach(doc => {
+          allBatches.push({ id: doc.id, ...doc.data() });
+        });
+        
+        const salesSnapshot = await db.collection('sales').get();
+        salesSnapshot.forEach(doc => {
+          allSales.push({ id: doc.id, ...doc.data() });
+        });
+        
+        const stageRecordsSnapshot = await db.collection('stageRecords').get();
+        stageRecordsSnapshot.forEach(doc => {
+          allStageRecords.push({ id: doc.id, ...doc.data() });
+        });
+      } catch (err) {
+        console.error("Migration failed to fetch cloud data:", err);
+        return;
+      }
+    } else {
+      allBatches = [...cache.batches];
+      allSales = [...cache.sales];
+      allStageRecords = [...cache.stageRecords];
+    }
+    
+    // Group sales by jmref
+    const salesByJmref = {};
+    allSales.forEach(s => {
+      if (s.jmrefNo) {
+        salesByJmref[s.jmrefNo] = (salesByJmref[s.jmrefNo] || 0) + (Number(s.qty) || 0);
+      }
+    });
+    
+    // Map stageRecords inputQty of 'store' stage by batchId
+    const storeQtyByBatchId = {};
+    allStageRecords.forEach(r => {
+      if (r.stage === 'store') {
+        storeQtyByBatchId[r.batchId] = Number(r.inputQty) || 0;
+      }
+    });
+
+    if (db) {
+      let batch = db.batch();
+      let writeCount = 0;
+      
+      for (const b of allBatches) {
+        let isArchived = false;
+        let remainingQty = Number(b.initialQty) || 0;
+        
+        if (b.status === 'completed') {
+          const storeQty = storeQtyByBatchId[b.id] || Number(b.initialQty) || 0;
+          const totalDeducted = salesByJmref[b.jmrefNo] || 0;
+          
+          // Match matching completed batches chronologically
+          const jmrefCompleted = allBatches
+            .filter(x => x.jmrefNo === b.jmrefNo && x.status === 'completed')
+            .sort((a, b) => (a.completedAt || a.createdAt || '').localeCompare(b.completedAt || b.createdAt || ''));
+            
+          let tempDeducted = totalDeducted;
+          let finalRemaining = storeQty;
+          
+          for (const jb of jmrefCompleted) {
+            const jbStoreQty = storeQtyByBatchId[jb.id] || Number(jb.initialQty) || 0;
+            const deduct = Math.min(jbStoreQty, tempDeducted);
+            tempDeducted -= deduct;
+            if (jb.id === b.id) {
+              finalRemaining = jbStoreQty - deduct;
+              break;
+            }
+          }
+          
+          remainingQty = finalRemaining;
+          isArchived = remainingQty === 0;
+        } else if (b.status === 'rejected') {
+          isArchived = true;
+          remainingQty = 0;
+        } else {
+          isArchived = false;
+          remainingQty = Number(b.initialQty) || 0;
+        }
+        
+        const docRef = db.collection('batches').doc(b.id);
+        batch.update(docRef, {
+          isArchived: isArchived,
+          remainingQty: remainingQty
+        });
+        writeCount++;
+        
+        if (writeCount >= 400) {
+          await batch.commit();
+          batch = db.batch();
+          writeCount = 0;
+        }
+      }
+      
+      if (writeCount > 0) {
+        await batch.commit();
+      }
+    } else {
+      // Local localStorage fallback
+      cache.batches.forEach(b => {
+        let isArchived = false;
+        let remainingQty = Number(b.initialQty) || 0;
+        
+        if (b.status === 'completed') {
+          const storeQty = storeQtyByBatchId[b.id] || Number(b.initialQty) || 0;
+          const totalDeducted = salesByJmref[b.jmrefNo] || 0;
+          
+          const jmrefCompleted = allBatches
+            .filter(x => x.jmrefNo === b.jmrefNo && x.status === 'completed')
+            .sort((a, b) => (a.completedAt || a.createdAt || '').localeCompare(b.completedAt || b.createdAt || ''));
+            
+          let tempDeducted = totalDeducted;
+          let finalRemaining = storeQty;
+          
+          for (const jb of jmrefCompleted) {
+            const jbStoreQty = storeQtyByBatchId[jb.id] || Number(jb.initialQty) || 0;
+            const deduct = Math.min(jbStoreQty, tempDeducted);
+            tempDeducted -= deduct;
+            if (jb.id === b.id) {
+              finalRemaining = jbStoreQty - deduct;
+              break;
+            }
+          }
+          
+          remainingQty = finalRemaining;
+          isArchived = remainingQty === 0;
+        } else if (b.status === 'rejected') {
+          isArchived = true;
+          remainingQty = 0;
+        } else {
+          isArchived = false;
+          remainingQty = Number(b.initialQty) || 0;
+        }
+        
+        b.isArchived = isArchived;
+        b.remainingQty = remainingQty;
+      });
+      localStorage.setItem(PREFIX + 'batches', JSON.stringify(cache.batches));
+    }
+    
+    localStorage.setItem('jmpl_archival_migration_run_v1', 'true');
+    console.log("Archival migration completed successfully!");
   }
 
   function runUserDeduplicationMigration() {
@@ -703,9 +867,74 @@ const DB = (() => {
       if (internalBatchNo == null) {
         internalBatchNo = Batches.nextInternalBatchNo();
       }
-      return insert('batches', { ...r, batchNo, internalBatchNo });
+      const initialQty = Number(r.initialQty) || 0;
+      const status = r.status || 'active';
+      const isArchived = status === 'rejected' || (status === 'completed' && initialQty === 0);
+      return insert('batches', { 
+        ...r, 
+        batchNo, 
+        internalBatchNo, 
+        isArchived, 
+        remainingQty: initialQty 
+      });
     },
-    update: (id, c) => update('batches', id, c),
+    update: (id, c) => {
+      const fields = { ...c };
+      const currentBatch = findById('batches', id) || {};
+      
+      // If updating initialQty, keep remainingQty in sync
+      if (fields.initialQty !== undefined) {
+        fields.remainingQty = Number(fields.initialQty) || 0;
+      }
+      
+      const checkStatus = fields.status !== undefined ? fields.status : currentBatch.status;
+      const checkRemaining = fields.remainingQty !== undefined ? fields.remainingQty : (currentBatch.remainingQty !== undefined ? currentBatch.remainingQty : currentBatch.initialQty || 0);
+      
+      if (checkStatus === 'rejected') {
+        fields.isArchived = true;
+      } else if (checkStatus === 'completed' && checkRemaining === 0) {
+        fields.isArchived = true;
+      } else if (checkStatus === 'completed' && checkRemaining > 0) {
+        fields.isArchived = false;
+      } else if (checkStatus === 'active') {
+        fields.isArchived = false;
+      }
+      
+      return update('batches', id, fields);
+    },
+    fetchByDateRange: async (from, to) => {
+      if (!db) return;
+      // If no date range, default to last 30 days
+      const startDate = from || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const endDate = to || new Date().toISOString().slice(0, 10);
+      
+      try {
+        const snapshot = await db.collection('batches')
+          .where('createdAt', '>=', startDate)
+          .where('createdAt', '<=', endDate + 'T23:59:59Z')
+          .get();
+          
+        const list = [];
+        snapshot.forEach(doc => {
+          list.push({ id: doc.id, ...doc.data() });
+        });
+        
+        // Merge with cache.batches
+        const existingIds = new Set(cache.batches.map(b => b.id));
+        let changed = false;
+        list.forEach(b => {
+          if (!existingIds.has(b.id)) {
+            cache.batches.push(b);
+            changed = true;
+          }
+        });
+        if (changed) {
+          saveLocal('batches');
+        }
+      } catch (err) {
+        console.error("Error fetching batches by date range:", err);
+      }
+    },
     nextBatchNo: () => {
       const batches = getAll('batches');
       let maxNum = 0;
@@ -846,9 +1075,38 @@ const DB = (() => {
     all: () => getAll('sales'),
     byJmref: (jmref) => getAll('sales').filter(r => r.jmrefNo === jmref),
     byDateRange: (from, to) => getAll('sales').filter(r => (!from || r.saleDate >= from) && (!to || r.saleDate <= to)),
-    insert: (r) => insert('sales', r),
+    insert: (r) => {
+      const res = insert('sales', r);
+      
+      // Auto FIFO deduction on completed batches in Firestore/local cache
+      let qtyToDeduct = Number(r.qty) || 0;
+      
+      // Get all completed, unarchived batches for this jmrefNo
+      const completedBatches = getAll('batches')
+        .filter(b => b.jmrefNo === r.jmrefNo && b.status === 'completed' && !b.isArchived)
+        .sort((a, b) => (a.completedAt || a.createdAt || '').localeCompare(b.completedAt || b.createdAt || ''));
+        
+      for (const batch of completedBatches) {
+        if (qtyToDeduct <= 0) break;
+        const currentRemaining = batch.remainingQty !== undefined ? batch.remainingQty : (batch.initialQty || 0);
+        if (currentRemaining <= 0) continue;
+        
+        const deduct = Math.min(currentRemaining, qtyToDeduct);
+        qtyToDeduct -= deduct;
+        
+        const newRemaining = currentRemaining - deduct;
+        
+        // Update batch remainingQty and archive if it hits 0
+        Batches.update(batch.id, {
+          remainingQty: newRemaining,
+          isArchived: newRemaining === 0
+        });
+      }
+      
+      return res;
+    },
     getFifoStock: (jmrefNo) => {
-      const batches = getAll('batches').filter(b => b.jmrefNo === jmrefNo && b.status === 'completed');
+      const batches = getAll('batches').filter(b => b.jmrefNo === jmrefNo && b.status === 'completed' && !b.isArchived);
       return batches.sort((a, b) => (a.completedAt || '').localeCompare(b.completedAt || ''));
     },
   };
@@ -856,51 +1114,25 @@ const DB = (() => {
   // ── STORE INVENTORY ───────────────────────────────────────
   const StoreInventory = {
     availableByJmref: (jmrefNo) => {
-      const completed = getAll('batches').filter(b => b.jmrefNo === jmrefNo && b.status === 'completed');
-      const totalIn = completed.reduce((s, b) => {
-        const storeRecord = getAll('stageRecords').filter(r => r.batchId === b.id && r.stage === 'store');
-        const qty = storeRecord.length ? storeRecord[storeRecord.length - 1].inputQty : 0;
-        return s + (qty || 0);
-      }, 0);
-      const totalSold = getAll('sales').filter(s => s.jmrefNo === jmrefNo).reduce((s, r) => s + (r.qty || 0), 0);
-      return Math.max(0, totalIn - totalSold);
+      const completed = getAll('batches').filter(b => b.jmrefNo === jmrefNo && b.status === 'completed' && !b.isArchived);
+      return completed.reduce((sum, b) => sum + (b.remainingQty !== undefined ? b.remainingQty : b.initialQty || 0), 0);
     },
     allParts: () => {
       const master = getAll('master');
       const batches = getAll('batches');
-      const stageRecords = getAll('stageRecords');
-      const sales = getAll('sales');
 
-      // 1. Map last inputQty of 'store' stage records by batchId
-      const storeQtyByBatchId = {};
-      stageRecords.forEach(r => {
-        if (r.stage === 'store') {
-          storeQtyByBatchId[r.batchId] = r.inputQty || 0;
-        }
-      });
-
-      // 2. Aggregate totalIn by jmrefNo for completed batches
-      const totalInByJmref = {};
+      const availableByJmref = {};
       batches.forEach(b => {
-        if (b.status === 'completed') {
-          const qty = storeQtyByBatchId[b.id] || 0;
-          totalInByJmref[b.jmrefNo] = (totalInByJmref[b.jmrefNo] || 0) + qty;
+        if (b.status === 'completed' && !b.isArchived) {
+          const qty = b.remainingQty !== undefined ? b.remainingQty : (b.initialQty || 0);
+          availableByJmref[b.jmrefNo] = (availableByJmref[b.jmrefNo] || 0) + qty;
         }
       });
 
-      // 3. Aggregate totalSold by jmrefNo
-      const totalSoldByJmref = {};
-      sales.forEach(s => {
-        totalSoldByJmref[s.jmrefNo] = (totalSoldByJmref[s.jmrefNo] || 0) + (s.qty || 0);
-      });
-
-      // 4. Map parts with computed available quantities
       return master.map(m => {
-        const totalIn = totalInByJmref[m.jmrefNo] || 0;
-        const totalSold = totalSoldByJmref[m.jmrefNo] || 0;
         return {
           ...m,
-          available: Math.max(0, totalIn - totalSold)
+          available: availableByJmref[m.jmrefNo] || 0
         };
       });
     },

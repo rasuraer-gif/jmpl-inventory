@@ -440,8 +440,12 @@ const ReportsModule = (() => {
 
   // ── Generic Stage Loss Report ──────────────────────────────
   function renderStageLoss(stage, filters, extraCols=[]) {
-    const { from, to, jmref } = filters;
+    const { from, to, jmref, vendorId } = filters;
     let records = DB.StageRecords.all().filter(r => r.stage === stage);
+    
+    if (vendorId) {
+      records = records.filter(r => r.vendorId === vendorId);
+    }
     
     if (jmref) {
       const q = jmref.toLowerCase();
@@ -469,6 +473,13 @@ const ReportsModule = (() => {
       const extra = extraCols.map(col => {
         if (col === 'Inspector') return r.inspectorName || '-';
         if (col === 'Recheck #') return r.iterationNo || '-';
+        if (col === 'Vendor') {
+          if (r.vendorId) {
+            const v = DB.Vendors.find(r.vendorId);
+            return v ? v.name : '—';
+          }
+          return 'In House';
+        }
         return '-';
       });
       const input = r.inputQty || 0;
@@ -2000,6 +2011,9 @@ const ReportsModule = (() => {
     const opOpts     = operators.map(o => `<option value="${o.id}">${o.name}</option>`).join('');
     const subOpts    = subcontractors.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
 
+    const trimmingVendors = DB.Vendors.byDept ? DB.Vendors.byDept('trimming') : DB.Vendors.all().filter(v => v.department === 'trimming');
+    const vendorOpts = trimmingVendors.map(v => `<option value="${v.id}">${v.name}</option>`).join('');
+
     const dateRange = `
       <div class="form-group mb-0">
         <label class="form-label">From Date</label>
@@ -2040,6 +2054,13 @@ const ReportsModule = (() => {
         <label class="form-label">Subcontractor</label>
         <select class="form-control" id="rpt-subcontractor">
           <option value="">All Subcontractors</option>${subOpts}
+        </select>
+      </div>`;
+    const vendorFilter = `
+      <div class="form-group mb-0">
+        <label class="form-label">Vendor</label>
+        <select class="form-control" id="rpt-vendor">
+          <option value="">All Vendors</option>${vendorOpts}
         </select>
       </div>`;
 
@@ -2086,7 +2107,7 @@ const ReportsModule = (() => {
       production:[jmrefFilter, opFilter, prodTypeFilter, dateRange].join(''),
       cryogenic: [jmrefFilter, dateRange].join(''),
       deflashing:[jmrefFilter, dateRange].join(''),
-      trimming:  [jmrefFilter, dateRange].join(''),
+      trimming:  [jmrefFilter, vendorFilter, dateRange].join(''),
       'post-curing':[jmrefFilter, dateRange].join(''),
       'waiting-visual':[jmrefFilter, dateRange].join(''),
       visual:    [jmrefFilter, dateRange].join(''),
@@ -2365,12 +2386,34 @@ const ReportsModule = (() => {
       pendingTimeframe: g('rpt-pending-timeframe'),
       prodType: g('rpt-prod-type'),
       subcontractorId: g('rpt-subcontractor'),
+      vendorId: g('rpt-vendor'),
     };
   }
 
   // ── Run Report ─────────────────────────────────────────────
-  function runReport(reportKey) {
+  async function runReport(reportKey) {
     const filters = collectFilters();
+
+    // Fetch historical batches on-demand if online and DB method is available
+    if (typeof DB !== 'undefined' && DB.Batches && DB.Batches.fetchByDateRange) {
+      const runBtn = document.getElementById('rpt-run-btn');
+      const originalText = runBtn ? runBtn.textContent : '🔍 Generate Report';
+      if (runBtn) {
+        runBtn.disabled = true;
+        runBtn.textContent = '⏳ Loading...';
+      }
+      try {
+        await DB.Batches.fetchByDateRange(filters.from, filters.to);
+      } catch (err) {
+        console.error("Failed to pre-fetch historical batches:", err);
+      } finally {
+        if (runBtn) {
+          runBtn.disabled = false;
+          runBtn.textContent = originalText;
+        }
+      }
+    }
+
     let result;
 
     switch(reportKey) {
@@ -2382,7 +2425,7 @@ const ReportsModule = (() => {
       case 'production': result = renderProduction(filters); break;
       case 'cryogenic':  result = renderStageLoss('cryogenic', filters); break;
       case 'deflashing': result = renderStageLoss('deflashing', filters); break;
-      case 'trimming':   result = renderStageLoss('trimming', filters); break;
+      case 'trimming':   result = renderStageLoss('trimming', filters, ['Vendor']); break;
       case 'post-curing':result = renderStageLoss('post-curing', filters); break;
       case 'waiting-visual':result = renderWaitingVisualReport(filters); break;
       case 'visual':     result = renderStageLoss('visual', filters, ['Inspector']); break;

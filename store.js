@@ -7,35 +7,26 @@ const StoreModule = (() => {
   // Returns available qty per jmref and FIFO batch breakdown
   function fifoAvailable(jmrefNo) {
     const batches = DB.Batches.all()
-      .filter(b => b.jmrefNo === jmrefNo && b.status === 'completed')
+      .filter(b => b.jmrefNo === jmrefNo && b.status === 'completed' && !b.isArchived)
       .sort((a, b) => (a.completedAt || a.createdAt || '').localeCompare(b.completedAt || b.createdAt || ''));
-
-    const totalIn = batches.reduce((s, b) => {
-      const recs = DB.StageRecords.all().filter(r => r.batchId === b.id && r.stage === 'store');
-      return s + (recs.length ? recs[recs.length - 1].inputQty || 0 : 0);
-    }, 0);
-    const totalSold = DB.Sales.all()
-      .filter(s => s.jmrefNo === jmrefNo)
-      .reduce((s, r) => s + (r.qty || 0), 0);
-    return Math.max(0, totalIn - totalSold);
+    return batches.reduce((sum, b) => sum + (b.remainingQty !== undefined ? b.remainingQty : b.initialQty || 0), 0);
   }
 
   // Build FIFO batch list with remaining quantities
   function fifoBatches(jmrefNo) {
     const batches = DB.Batches.all()
-      .filter(b => b.jmrefNo === jmrefNo && b.status === 'completed')
+      .filter(b => b.jmrefNo === jmrefNo && b.status === 'completed' && !b.isArchived)
       .sort((a, b) => (a.completedAt || a.createdAt || '').localeCompare(b.completedAt || b.createdAt || ''));
 
-    const sales = DB.Sales.all().filter(s => s.jmrefNo === jmrefNo);
-    let totalDeducted = sales.reduce((s, r) => s + (r.qty || 0), 0);
-
     return batches.map(b => {
-      const recs = DB.StageRecords.all().filter(r => r.batchId === b.id && r.stage === 'store');
-      const batchQty = recs.length ? (recs[recs.length - 1].inputQty || 0) : 0;
-      const deducted = Math.min(batchQty, totalDeducted);
-      totalDeducted -= deducted;
-      const remaining = batchQty - deducted;
-      return { batchId: b.id, batchNo: b.batchNo, batchQty, remaining, completedAt: b.completedAt };
+      const remaining = b.remainingQty !== undefined ? b.remainingQty : (b.initialQty || 0);
+      return { 
+        batchId: b.id, 
+        batchNo: b.batchNo, 
+        batchQty: b.initialQty || 0, 
+        remaining, 
+        completedAt: b.completedAt 
+      };
     }).filter(b => b.batchQty > 0);
   }
 
