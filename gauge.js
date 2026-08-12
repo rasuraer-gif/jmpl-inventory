@@ -417,6 +417,7 @@ const GaugeModule = (() => {
       content.innerHTML = pendingTab(batches);
       const inp = document.getElementById('gauge-pending-search');
       if (inp) {
+        inp.value = val;
         inp.focus();
         inp.setSelectionRange(inp.value.length, inp.value.length);
       }
@@ -425,3 +426,4 @@ const GaugeModule = (() => {
 
   return { render, openProcess, calcLoss, process, openReject, rejectBatch, filterHistory, filterPending, updateDynamicBatchNo };
 })();
+window.GaugeModule = GaugeModule;

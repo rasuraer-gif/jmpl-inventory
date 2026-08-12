@@ -345,6 +345,7 @@ const ProductionModule = (() => {
                 <option value="cryogenic">Cryogenic</option>
                 <option value="deflashing">Manual DE Flashing</option>
                 <option value="trimming">Trimming</option>
+                <option value="post-curing">Post Curing</option>
               </select>
             </div>
             <div class="form-group hidden" id="move-vendor-group">
@@ -1179,12 +1180,12 @@ const ProductionModule = (() => {
     
     return `
       <div class="modal-overlay hidden" id="prod-edit-batch-modal">
-        <div class="modal modal-md">
+        <div class="modal modal-md" style="max-height:90vh; display:flex; flex-direction:column;">
           <div class="modal-header">
             <h3>Edit Batch Details</h3>
             <button class="modal-close" onclick="document.getElementById('prod-edit-batch-modal').classList.add('hidden')">&#x2715;</button>
           </div>
-          <div class="modal-body">
+          <div class="modal-body" style="overflow-y:auto; max-height:calc(90vh - 130px); padding:20px;">
             <input type="hidden" id="edit-batch-db-id">
             
             <div class="form-row">
@@ -1201,7 +1202,7 @@ const ProductionModule = (() => {
             <div class="form-row">
               <div class="form-group" style="flex:1;">
                 <label class="form-label">Mould No <span class="required">*</span></label>
-                <select id="edit-batch-mould-no" class="form-control">
+                <select id="edit-batch-mould-no" class="form-control" onchange="ProductionModule.calculateEditInhouseQty()">
                   <option value="">Select mould...</option>
                 </select>
               </div>
@@ -1217,40 +1218,43 @@ const ProductionModule = (() => {
                 <input type="text" id="edit-batch-trno" class="form-control" placeholder="Enter TR No">
               </div>
               <div class="form-group" style="flex:1;">
+                <label class="form-label">Production Type <span class="required">*</span></label>
+                <div class="flex gap-3 mt-2">
+                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="radio" name="edit-prod-type" value="inhouse" checked onchange="ProductionModule.onEditTypeChange()"> <span>In-House</span></label>
+                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="radio" name="edit-prod-type" value="subcontractor" onchange="ProductionModule.onEditTypeChange()"> <span>Subcontractor</span></label>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-row" id="edit-prod-shift-press-row">
+              <div class="form-group" style="flex:1;">
                 <label class="form-label">Shift <span class="required">*</span></label>
                 <select id="edit-batch-shift" class="form-control">
                   <option value="day">Day (D)</option>
                   <option value="night">Night (N)</option>
                 </select>
               </div>
-            </div>
-
-            <div class="form-row">
-               <div class="form-group" style="flex:1;">
-                <label class="form-label">Operator / Subcontractor Type</label>
-                <div class="flex gap-3 mt-2">
-                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="radio" name="edit-prod-type" value="inhouse" onchange="ProductionModule.onEditTypeChange()"> <span>In-House</span></label>
-                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="radio" name="edit-prod-type" value="subcontractor" onchange="ProductionModule.onEditTypeChange()"> <span>Subcontractor</span></label>
-                </div>
-              </div>
-              <div class="form-group" style="flex:1;" id="edit-prod-op-group">
-                <label class="form-label">Operator <span class="required">*</span></label>
-                <select id="edit-batch-op" class="form-control"><option value="">Select operator...</option>${opOpts}</select>
-              </div>
-              <div class="form-group hidden" style="flex:1;" id="edit-prod-sub-group">
-                <label class="form-label">Subcontractor <span class="required">*</span></label>
-                <select id="edit-batch-sub" class="form-control"><option value="">Select subcontractor...</option>${subOpts}</select>
-              </div>
-            </div>
-
-            <div class="form-row" id="edit-prod-press-row">
               <div class="form-group" style="flex:1;">
                 <label class="form-label">Press No <span class="required">*</span></label>
                 <input type="text" id="edit-batch-press-no" class="form-control" placeholder="Enter Press No">
               </div>
+            </div>
+
+            <div class="form-row" id="edit-prod-op-lifts-row">
+              <div class="form-group" style="flex:1;" id="edit-prod-op-group">
+                <label class="form-label">Operator <span class="required">*</span></label>
+                <select id="edit-batch-op" class="form-control"><option value="">Select operator...</option>${opOpts}</select>
+              </div>
               <div class="form-group" style="flex:1;" id="edit-prod-lifts-group">
                 <label class="form-label">No. of Lifts <span class="required">*</span></label>
-                <input type="number" id="edit-batch-lifts" class="form-control" placeholder="Number of lifts" min="0">
+                <input type="number" id="edit-batch-lifts" class="form-control" placeholder="Number of lifts" min="0" oninput="ProductionModule.calculateEditInhouseQty()">
+              </div>
+            </div>
+
+            <div class="form-row hidden" id="edit-prod-sub-row">
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Subcontractor <span class="required">*</span></label>
+                <select id="edit-batch-sub" class="form-control"><option value="">Select subcontractor...</option>${subOpts}</select>
               </div>
             </div>
 
@@ -1322,26 +1326,42 @@ const ProductionModule = (() => {
     document.getElementById('prod-edit-batch-modal').classList.remove('hidden');
   }
 
+  function calculateEditInhouseQty() {
+    const type = document.querySelector('input[name="edit-prod-type"]:checked')?.value || 'inhouse';
+    if (type === 'inhouse') {
+      const jmref = document.getElementById('edit-batch-jmref')?.value;
+      const mouldNo = parseInt(document.getElementById('edit-batch-mould-no')?.value, 10);
+      const lifts = parseInt(document.getElementById('edit-batch-lifts')?.value, 10) || 0;
+      const qtyInput = document.getElementById('edit-batch-qty');
+      if (qtyInput && jmref && !isNaN(mouldNo)) {
+        const part = DB.Master.all().find(p => p.jmrefNo === jmref);
+        if (part && part.moulds) {
+          const partMould = part.moulds.find(m => Number(m.mouldNo) === Number(mouldNo));
+          if (partMould && partMould.cavities != null && partMould.cavities !== '') {
+            const cavities = parseInt(partMould.cavities, 10);
+            if (!isNaN(cavities)) {
+              qtyInput.value = cavities * lifts;
+            }
+          }
+        }
+      }
+    }
+  }
+
   function onEditTypeChange() {
-    const radioSub = document.querySelector('input[name="edit-prod-type"][value="subcontractor"]');
-    const subGroup = document.getElementById('edit-prod-sub-group');
-    const opGroup = document.getElementById('edit-prod-op-group');
-    const liftsGroup = document.getElementById('edit-prod-lifts-group');
-    const pressRow = document.getElementById('edit-prod-press-row');
-    const shiftGroup = document.getElementById('edit-batch-shift')?.parentElement;
- 
-    if (radioSub && radioSub.checked) {
-      if (subGroup) subGroup.classList.remove('hidden');
-      if (opGroup) opGroup.classList.add('hidden');
-      if (liftsGroup) liftsGroup.classList.add('hidden');
-      if (pressRow) pressRow.classList.add('hidden');
-      if (shiftGroup) shiftGroup.classList.add('hidden');
+    const type = document.querySelector('input[name="edit-prod-type"]:checked')?.value || 'inhouse';
+    const subRow = document.getElementById('edit-prod-sub-row');
+    const shiftPressRow = document.getElementById('edit-prod-shift-press-row');
+    const opLiftsRow = document.getElementById('edit-prod-op-lifts-row');
+
+    if (type === 'subcontractor') {
+      if (subRow) subRow.classList.remove('hidden');
+      if (shiftPressRow) shiftPressRow.classList.add('hidden');
+      if (opLiftsRow) opLiftsRow.classList.add('hidden');
     } else {
-      if (subGroup) subGroup.classList.add('hidden');
-      if (opGroup) opGroup.classList.remove('hidden');
-      if (liftsGroup) liftsGroup.classList.remove('hidden');
-      if (pressRow) pressRow.classList.remove('hidden');
-      if (shiftGroup) shiftGroup.classList.remove('hidden');
+      if (subRow) subRow.classList.add('hidden');
+      if (shiftPressRow) shiftPressRow.classList.remove('hidden');
+      if (opLiftsRow) opLiftsRow.classList.remove('hidden');
     }
   }
 
@@ -1500,5 +1520,6 @@ const ProductionModule = (() => {
     printWindow.document.close();
   }
 
-  return { render, openMove, calcLoss, moveBatch, openReject, rejectBatch, onTypeChange, createBatch, resetForm, showPartDropdown, filterParts, selectPart, updateDynamicBatchNo, updateMoveDynamicBatchNo, printBarcode, filterPending, showJmrefDropdown, filterJmrefs, onDestinationChange, onMouldChange, onSubDestinationChange, openEditBatch, onEditTypeChange, saveBatchEdit, calculateInhouseQty, toggleAllActive, toggleAllCompleted, bulkPrintBarcodes };
+  return { render, openMove, calcLoss, moveBatch, openReject, rejectBatch, onTypeChange, createBatch, resetForm, showPartDropdown, filterParts, selectPart, updateDynamicBatchNo, updateMoveDynamicBatchNo, printBarcode, filterPending, showJmrefDropdown, filterJmrefs, onDestinationChange, onMouldChange, onSubDestinationChange, openEditBatch, onEditTypeChange, saveBatchEdit, calculateInhouseQty, calculateEditInhouseQty, toggleAllActive, toggleAllCompleted, bulkPrintBarcodes };
 })();
+window.ProductionModule = ProductionModule;

@@ -176,6 +176,7 @@ const WaitingVisualModule = (() => {
       content.innerHTML = pendingTab(batches);
       const inp = document.getElementById('wv-pending-search');
       if (inp) {
+        inp.value = val;
         inp.focus();
         inp.setSelectionRange(inp.value.length, inp.value.length);
       }
@@ -778,3 +779,4 @@ const WaitingVisualModule = (() => {
 
   return { render, openProcess, openReject, openAllocate, saveRackDetails, process, rejectBatch, filterPending, filterHistory, calcLoss, updateDynamicBatchNo, updateAllocateDynamicBatchNo };
 })();
+window.WaitingVisualModule = WaitingVisualModule;

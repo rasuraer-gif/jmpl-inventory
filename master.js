@@ -364,13 +364,6 @@ const MasterModule = (() => {
       return;
     }
 
-    const types = moulds.map(m => m.mouldType).filter(t => t && t !== 'Yet to be assigned');
-    const uniqueTypes = new Set(types);
-    if (types.length !== uniqueTypes.size) {
-      showToast('Each mould must have a different Mould Type (Cryogenic, Flash Free, or Normal)', 'error');
-      return;
-    }
-
     const all = DB.Master.all();
     if (all.find(p => p.partNo === partNo && p.id !== id)) { showToast('Part No already exists', 'error'); return; }
     if (all.find(p => p.jmrefNo === jmrefNo && p.id !== id)) { showToast('JMREF No already exists', 'error'); return; }

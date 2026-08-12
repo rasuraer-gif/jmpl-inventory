@@ -5,29 +5,72 @@ const StoreModule = (() => {
 
   // ── FIFO engine ────────────────────────────────────────────
   // Returns available qty per jmref and FIFO batch breakdown
-  function fifoAvailable(jmrefNo) {
-    const batches = DB.Batches.all()
-      .filter(b => b.jmrefNo === jmrefNo && b.status === 'completed' && !b.isArchived)
-      .sort((a, b) => (a.completedAt || a.createdAt || '').localeCompare(b.completedAt || b.createdAt || ''));
-    return batches.reduce((sum, b) => sum + (b.remainingQty !== undefined ? b.remainingQty : b.initialQty || 0), 0);
+  function fifoAvailable(jmrefNo, partId) {
+    return DB.StoreInventory.availableByJmref(jmrefNo, partId);
   }
 
-  // Build FIFO batch list with remaining quantities
-  function fifoBatches(jmrefNo) {
+  // Build FIFO batch list with remaining quantities (pure in-memory calculation)
+  function fifoBatches(jmrefNo, partId) {
+    const normTarget = String(jmrefNo || '').trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+    const stageRecords = DB.StageRecords.all();
+    const sales = DB.Sales.all();
+
+    // 1. Get completed batches sorted FIFO
     const batches = DB.Batches.all()
-      .filter(b => b.jmrefNo === jmrefNo && b.status === 'completed' && !b.isArchived)
+      .filter(b => {
+        if (b.status !== 'completed' && b.currentStage !== 'store') return false;
+        if (b.notes && (b.notes.includes('Closed via stock') || b.notes.includes('Zeroed via stock') || b.notes.includes('zeroing'))) return false;
+        if (partId && b.partId === partId) return true;
+        if (b.jmrefNo) {
+          const bNorm = String(b.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+          if (normTarget && (bNorm === normTarget || String(b.jmrefNo).trim().toUpperCase() === String(jmrefNo).trim().toUpperCase())) return true;
+        }
+        return false;
+      })
       .sort((a, b) => (a.completedAt || a.createdAt || '').localeCompare(b.completedAt || b.createdAt || ''));
 
-    return batches.map(b => {
-      const remaining = b.remainingQty !== undefined ? b.remainingQty : (b.initialQty || 0);
-      return { 
-        batchId: b.id, 
-        batchNo: b.batchNo, 
-        batchQty: b.initialQty || 0, 
-        remaining, 
-        completedAt: b.completedAt 
-      };
-    }).filter(b => b.batchQty > 0);
+    // 2. Sum total sales
+    let totalSold = 0;
+    sales.forEach(s => {
+      if (partId && s.partId === partId) {
+        totalSold += Number(s.qty) || 0;
+        return;
+      }
+      if (s.jmrefNo) {
+        const sNorm = String(s.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+        if (normTarget && (sNorm === normTarget || String(s.jmrefNo).trim().toUpperCase() === String(jmrefNo).trim().toUpperCase())) {
+          totalSold += Number(s.qty) || 0;
+        }
+      }
+    });
+
+    // 3. FIFO deduct in memory
+    const list = [];
+    for (const b of batches) {
+      const storeRecs = stageRecords.filter(r => r.batchId === b.id && r.stage === 'store');
+      const storeQty = storeRecs.length ? (storeRecs[0].inputQty !== undefined ? Number(storeRecs[0].inputQty) : Number(b.initialQty || 0)) : Number(b.initialQty || 0);
+      if (storeQty <= 0) continue;
+
+      let remaining = storeQty;
+      if (totalSold >= storeQty) {
+        totalSold -= storeQty;
+        remaining = 0;
+      } else if (totalSold > 0) {
+        remaining = storeQty - totalSold;
+        totalSold = 0;
+      }
+
+      if (remaining > 0) {
+        list.push({
+          batchId: b.id,
+          batchNo: b.batchNo,
+          batchQty: storeQty,
+          remaining,
+          completedAt: b.completedAt || b.createdAt
+        });
+      }
+    }
+    return list;
   }
 
   // ── Render ─────────────────────────────────────────────────
@@ -85,7 +128,7 @@ const StoreModule = (() => {
       return '<div class="card card-body"><div class="empty-state"><div class="empty-icon">&#127978;</div><p>No parts in inventory. Complete batches through Quality Final to see stock here.</p></div></div>';
     }
     const rows = parts.map(p => {
-      const fifo = fifoBatches(p.jmrefNo);
+      const fifo = fifoBatches(p.jmrefNo, p.id);
       const available = p.available;
       const statusClass = available === 0 ? 'text-danger' : available < 10 ? 'text-amber' : 'text-success';
       const lowBadge = available < 10 ? ' <span class="badge badge-amber" style="font-size:10px;">Low</span>' : '';
@@ -204,6 +247,41 @@ const StoreModule = (() => {
     input.value = '';
   }
 
+  // ── Helper to resolve Master part from JMREF, Part No, 10 Digit No ───
+  function resolvePart(rawKey, master) {
+    if (!rawKey) return null;
+    const s = String(rawKey).trim();
+    const sNorm = s.replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+    
+    // 1. Direct JMREF exact or normalized match
+    let match = master.find(m => {
+      if (!m.jmrefNo) return false;
+      const mNorm = String(m.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+      return mNorm === sNorm || String(m.jmrefNo).trim().toUpperCase() === s.toUpperCase();
+    });
+    if (match) return match;
+
+    // 2. Part No match
+    match = master.find(m => m.partNo && String(m.partNo).trim().toUpperCase() === s.toUpperCase());
+    if (match) return match;
+
+    // 3. 10-Digit No match
+    match = master.find(m => m.tenDigitNo && String(m.tenDigitNo).trim().toUpperCase() === s.toUpperCase());
+    if (match) return match;
+
+    // 4. Substring / clean digit matching
+    const digitsOnly = s.replace(/\D/g, '');
+    if (digitsOnly.length >= 3) {
+      match = master.find(m => {
+        const mDigits = String(m.jmrefNo || '').replace(/\D/g, '');
+        return mDigits && mDigits === digitsOnly;
+      });
+      if (match) return match;
+    }
+
+    return null;
+  }
+
   // ── Parse & preview uploaded file ─────────────────────────
   function processFile(file) {
     if (typeof XLSX === 'undefined') { showToast('Excel library not loaded', 'error'); return; }
@@ -217,13 +295,13 @@ const StoreModule = (() => {
         if (raw.length < 2) { showToast('File is empty or has no data rows', 'error'); return; }
 
         const header = (raw[0] || []).map(h => String(h).trim().toLowerCase());
-        const dateIdx = header.findIndex(h => h.includes('date'));
-        const jmrefIdx = header.findIndex(h => h.includes('jmref'));
-        const qtyIdx = header.findIndex(h => h.includes('qty') || h.includes('quantity') || h.includes('sold'));
-        const priceIdx = header.findIndex(h => h.includes('price') || h.includes('rate') || h.includes('sale price') || h.includes('sales price'));
+        const dateIdx = header.findIndex(h => h.includes('date') || h.includes('dt'));
+        const jmrefIdx = header.findIndex(h => h.includes('jmref') || h.includes('jm ref') || h.includes('part') || h.includes('item') || h.includes('10 digit'));
+        const qtyIdx = header.findIndex(h => h.includes('qty') || h.includes('quantity') || h.includes('sold') || h.includes('dispatch') || h.includes('nos'));
+        const priceIdx = header.findIndex(h => h.includes('price') || h.includes('rate') || h.includes('sale price') || h.includes('sales price') || h.includes('cost') || h.includes('amount'));
 
-        if (dateIdx < 0 || jmrefIdx < 0 || qtyIdx < 0 || priceIdx < 0) {
-          showToast('Column headers must include: Date, JMREF, Sold Quantity, Sale Price', 'error');
+        if (dateIdx < 0 || jmrefIdx < 0 || qtyIdx < 0) {
+          showToast('Excel must include columns: Date, JMREF / Part No, Sold Quantity', 'error');
           return;
         }
 
@@ -242,7 +320,7 @@ const StoreModule = (() => {
           } else if (dateVal instanceof Date) {
             parsedDate = dateVal.toISOString().slice(0, 10);
           } else {
-            const str = String(dateVal).trim();
+            const str = String(dateVal || '').trim();
             // Match DD-MM-YYYY or D-M-YYYY with slashes or dashes
             const match = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
             if (match) {
@@ -250,27 +328,44 @@ const StoreModule = (() => {
               const m = match[2].padStart(2, '0');
               const y = match[3];
               parsedDate = `${y}-${m}-${d}`;
-            } else {
+            } else if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
               parsedDate = str;
+            } else {
+              parsedDate = new Date().toISOString().slice(0, 10);
             }
           }
 
-          const jmref = String(r[jmrefIdx] || '').trim();
-          const qty   = parseInt(r[qtyIdx]);
-          const price = parseFloat(r[priceIdx]);
-          const part  = master.find(m => m.jmrefNo === jmref);
-          const available = jmref ? fifoAvailable(jmref) : 0;
+          const rawIdentifier = String(r[jmrefIdx] || '').trim();
+          const part = resolvePart(rawIdentifier, master);
+          const jmrefNo = part ? part.jmrefNo : rawIdentifier;
+          const partNo = part ? (part.partNo || '—') : '—';
+          const partId = part ? part.id : null;
+          const qty = parseInt(r[qtyIdx], 10);
+          
+          let price = priceIdx >= 0 ? parseFloat(r[priceIdx]) : (part?.salePrice || 0);
+          if (isNaN(price)) price = part?.salePrice || 0;
+
+          const available = fifoAvailable(jmrefNo, partId);
 
           // Validate
           let errors = [];
           if (!parsedDate || !/^\d{4}-\d{2}-\d{2}$/.test(parsedDate)) errors.push('Invalid date (use DD-MM-YYYY)');
-          if (!jmref) errors.push('JMREF is empty');
-          if (!part) errors.push('JMREF not found in master');
+          if (!rawIdentifier) errors.push('JMREF/Part No is empty');
+          if (!part) errors.push('Part/JMREF not found in master');
           if (isNaN(qty) || qty < 1) errors.push('Qty must be ≥ 1');
-          if (part && qty > available) errors.push('Qty (' + qty + ') exceeds available stock (' + available + ')');
-          if (isNaN(price) || price < 0) errors.push('Sale Price must be a valid number ≥ 0');
+          if (part && qty > available) errors.push(`Qty (${qty}) exceeds available stock (${available})`);
 
-          rows.push({ row: i + 1, dateVal: parsedDate, jmref, partNo: part?.partNo || '—', qty, price, available, errors });
+          rows.push({
+            row: i + 1,
+            dateVal: parsedDate,
+            jmref: jmrefNo,
+            partNo,
+            partId,
+            qty,
+            price,
+            available,
+            errors
+          });
         }
 
         showPreview(rows);
@@ -349,16 +444,21 @@ const StoreModule = (() => {
     const validRows = JSON.parse(preview.dataset.validRows);
     if (!validRows.length) { showToast('No valid rows to save', 'error'); return; }
 
-    // Re-validate available stock at the moment of confirmation (stock may have changed)
+    // Re-validate available stock at the moment of confirmation
     const errors = [];
-    // Group by jmref to check cumulative qty in same upload
-    const jmrefQtys = {};
-    validRows.forEach(r => { jmrefQtys[r.jmref] = (jmrefQtys[r.jmref] || 0) + r.qty; });
+    const partQtys = {};
+    validRows.forEach(r => {
+      const key = r.partId || r.jmref;
+      if (!partQtys[key]) {
+        partQtys[key] = { jmref: r.jmref, partId: r.partId, qty: 0 };
+      }
+      partQtys[key].qty += r.qty;
+    });
 
-    for (const [jmref, totalQty] of Object.entries(jmrefQtys)) {
-      const avail = fifoAvailable(jmref);
-      if (totalQty > avail) {
-        errors.push(`${jmref}: need ${formatNum(totalQty)} but only ${formatNum(avail)} available`);
+    for (const item of Object.values(partQtys)) {
+      const avail = fifoAvailable(item.jmref, item.partId);
+      if (item.qty > avail) {
+        errors.push(`${item.jmref}: need ${formatNum(item.qty)} but only ${formatNum(avail)} available`);
       }
     }
 
@@ -367,14 +467,15 @@ const StoreModule = (() => {
       return;
     }
 
-    // Save each row as a sale record
+    // Save each row as a sale record and deduct stock
     let saved = 0;
     validRows.forEach(r => {
       DB.Sales.insert({
         jmrefNo: r.jmref,
         partNo:  r.partNo,
-        qty:     r.qty,
-        salePrice: r.price,
+        partId:  r.partId,
+        qty:     Number(r.qty),
+        salePrice: Number(r.price) || 0,
         saleDate: r.dateVal,
         uploadedViaExcel: true,
         notes: 'Excel bulk upload'
@@ -382,25 +483,23 @@ const StoreModule = (() => {
       saved++;
     });
 
-    showToast(`✓ ${saved} sale record${saved !== 1 ? 's' : ''} saved with FIFO applied`, 'success');
+    showToast(`✓ ${saved} sale record${saved !== 1 ? 's' : ''} saved and deducted from Store stock`, 'success');
 
     // Reset preview and re-render
     if (preview) { preview.innerHTML = ''; delete preview.dataset.validRows; }
 
-    // Refresh inventory tab
-    setTimeout(() => {
-      document.querySelectorAll('#store-tabs .tab-btn').forEach(b => b.classList.remove('active'));
-      const invBtn = document.querySelector('#store-tabs [data-tab="inventory"]');
-      if (invBtn) invBtn.classList.add('active');
-      render();
-    }, 800);
+    // Refresh inventory tab immediately
+    render();
   }
 
   // ── Completed Batches Tab ──────────────────────────────────
   let completedBatchSearch = '';
 
   function batchesTab() {
-    let batches = DB.Batches.byStatus('completed');
+    const stageRecords = DB.StageRecords.all();
+    const sales = DB.Sales.all();
+    let batches = DB.Batches.all().filter(b => b.status === 'completed' || b.currentStage === 'store');
+    
     if (completedBatchSearch) {
       const q = completedBatchSearch.toLowerCase();
       batches = batches.filter(b => 
@@ -420,18 +519,76 @@ const StoreModule = (() => {
         </div>`;
     }
 
+    // Precompute sales map
+    const salesMap = {};
+    sales.forEach(s => {
+      if (s.partId) salesMap[s.partId] = (salesMap[s.partId] || 0) + (Number(s.qty) || 0);
+      if (s.jmrefNo) {
+        const norm = 'jmref_' + String(s.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+        salesMap[norm] = (salesMap[norm] || 0) + (Number(s.qty) || 0);
+      }
+    });
+
+    // Group batches by part and compute FIFO
+    const partBatchesMap = {};
+    batches.forEach(b => {
+      const normJmref = b.jmrefNo ? 'jmref_' + String(b.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase() : '';
+      const key = b.partId || normJmref || 'batch_' + b.id;
+      if (!partBatchesMap[key]) partBatchesMap[key] = [];
+      partBatchesMap[key].push(b);
+    });
+
+    const batchStatusMap = {};
+    Object.entries(partBatchesMap).forEach(([key, bList]) => {
+      bList.sort((a, b) => (a.completedAt || a.createdAt || '').localeCompare(b.completedAt || b.createdAt || ''));
+      let totalSold = salesMap[key] || 0;
+
+      bList.forEach(b => {
+        const storeRecs = stageRecords.filter(r => r.batchId === b.id && r.stage === 'store');
+        let initialQty = storeRecs.length ? (storeRecs[0].inputQty !== undefined ? Number(storeRecs[0].inputQty) : Number(b.initialQty || 0)) : Number(b.initialQty || 0);
+        if (b.notes && (b.notes.includes('Closed via stock') || b.notes.includes('Zeroed via stock') || b.notes.includes('zeroing'))) {
+          initialQty = 0;
+        }
+
+        let remainingQty = initialQty;
+        if (totalSold >= initialQty) {
+          totalSold -= initialQty;
+          remainingQty = 0;
+        } else if (totalSold > 0) {
+          remainingQty = initialQty - totalSold;
+          totalSold = 0;
+        }
+
+        batchStatusMap[b.id] = {
+          initialQty,
+          remainingQty,
+          soldQty: Math.max(0, initialQty - remainingQty)
+        };
+      });
+    });
+
     const rows = batches
-      .sort((a, b) => (b.completedAt || '').localeCompare(a.completedAt || ''))
+      .sort((a, b) => (b.completedAt || b.createdAt || '').localeCompare(a.completedAt || a.createdAt || ''))
       .map(b => {
-        const storeRecs = DB.StageRecords.all().filter(r => r.batchId === b.id && r.stage === 'store');
-        const storeQty = storeRecs.length ? storeRecs[0].inputQty : 0;
+        const stats = batchStatusMap[b.id] || { initialQty: Number(b.initialQty || 0), remainingQty: Number(b.initialQty || 0), soldQty: 0 };
+        const initialQty = stats.initialQty;
+        const remainingQty = stats.remainingQty;
+        const soldQty = stats.soldQty;
+        const isDispatched = remainingQty === 0;
+        const statusBadge = isDispatched
+          ? '<span class="badge badge-gray">⚪ Dispatched</span>'
+          : '<span class="badge badge-green">🟢 In Store</span>';
+
         return `<tr>
           <td><input type="checkbox" class="bulk-stage-check" value="${b.id}" style="cursor:pointer;" onclick="event.stopPropagation()"></td>
           <td class="font-semibold text-blue">${b.batchNo}</td>
           <td><span class="badge badge-teal">${b.jmrefNo || '&#x2014;'}</span></td>
           <td>${b.partNo || '&#x2014;'}</td>
-          <td class="font-semibold">${formatNum(storeQty)}</td>
-          <td class="text-muted text-sm">${(b.completedAt || '').slice(0, 10)}</td>
+          <td class="font-semibold">${formatNum(initialQty)}</td>
+          <td class="${soldQty > 0 ? 'text-amber font-semibold' : 'text-muted'}">${soldQty > 0 ? formatNum(soldQty) : '—'}</td>
+          <td class="font-bold ${isDispatched ? 'text-muted' : 'text-success'}">${formatNum(remainingQty)}</td>
+          <td>${statusBadge}</td>
+          <td class="text-muted text-sm">${(b.completedAt || b.createdAt || '').slice(0, 10)}</td>
         </tr>`;
       }).join('');
 
@@ -449,7 +606,19 @@ const StoreModule = (() => {
         </div>
         <div class="table-wrap">
           <table class="data-table">
-            <thead><tr><th><input type="checkbox" onclick="App.toggleAllStageChecks(this)" style="cursor:pointer;"></th><th>Batch No</th><th>JMREF</th><th>Part</th><th>Qty in Store</th><th>Completed</th></tr></thead>
+            <thead>
+              <tr>
+                <th><input type="checkbox" onclick="App.toggleAllStageChecks(this)" style="cursor:pointer;"></th>
+                <th>Batch No</th>
+                <th>JMREF</th>
+                <th>Part</th>
+                <th>Initial Qty</th>
+                <th>Qty Sold / Dispatched</th>
+                <th>Remaining in Store</th>
+                <th>Status</th>
+                <th>Completed Date</th>
+              </tr>
+            </thead>
             <tbody>${rows}</tbody>
           </table>
         </div>
@@ -638,4 +807,5 @@ const StoreModule = (() => {
     filterCompletedBatches
   };
 })();
+window.StoreModule = StoreModule;
 

@@ -2,58 +2,83 @@
 // admin.js — Admin Panel Module
 // ============================================================
 const AdminModule = (() => {
-  const PERMS = [
-    'master','mould-tracking','production','cryogenic','deflashing','trimming','post-curing','waiting-visual','visual','gauge','quality','store',
-    'stock','monthly-plan','prod-sched','replenishment','task-tracking','print-batch','ai-agent',
-    'report_inventory','report_sales','report_production','report_cryogenic','report_deflashing','report_trimming','report_post_curing','report_waiting_visual','report_visual','report_gauge','report_rejected','report_recheck','report_reprocess',
-    'report_slob','report_aging','report_pending_batches','report_qty_gain','report_qty_loss','report_op_efficiency','report_mould_lifecycle','report_cycle_time','report_wip_valuation','report_sub_vs_inhouse','report_sub_pending','report_sub_performance'
+  const PERM_CATEGORIES = [
+    {
+      name: '🏭 Core Production & Departments',
+      perms: [
+        { key: 'master', label: 'Inventory Master' },
+        { key: 'mould-tracking', label: 'Mould Tracking' },
+        { key: 'production', label: 'Production / Moulding' },
+        { key: 'cryogenic', label: 'Cryogenic' },
+        { key: 'deflashing', label: 'Flash Removal (DE Flashing)' },
+        { key: 'trimming', label: 'Trimming' },
+        { key: 'post-curing', label: 'Post Curing' },
+        { key: 'waiting-visual', label: 'Waiting for Visual inspection' },
+        { key: 'visual', label: 'Visual Inspection' },
+        { key: 'gauge', label: 'Gauge Inspection' },
+        { key: 'quality', label: 'Quality Final (QC)' },
+        { key: 'store', label: 'Store & Sales' }
+      ]
+    },
+    {
+      name: '🛠️ Planning & Operations Tools',
+      perms: [
+        { key: 'stock', label: 'Stock Upload' },
+        { key: 'daily-analysis', label: 'Daily Feasibility' },
+        { key: 'monthly-plan', label: 'Monthly Plan' },
+        { key: 'prod-sched', label: 'Production Schedule' },
+        { key: 'replenishment', label: 'Replenishment Planner' },
+        { key: 'task-tracking', label: 'Task Tracking' },
+        { key: 'stock-audit', label: 'Monthly Stock Taking & Audit' },
+        { key: 'print-batch', label: 'Print Label' },
+        { key: 'ai-agent', label: 'AI Assistant' }
+      ]
+    },
+    {
+      name: '📊 Reports & Analytics',
+      perms: [
+        { key: 'report_inventory', label: 'Report: Inventory' },
+        { key: 'report_store_stock', label: 'Report: Store Stock' },
+        { key: 'report_sales', label: 'Report: Sales' },
+        { key: 'report_production', label: 'Report: Production' },
+        { key: 'report_cryogenic', label: 'Report: Cryo Loss' },
+        { key: 'report_deflashing', label: 'Report: DE Flash Loss' },
+        { key: 'report_trimming', label: 'Report: Trimming Loss' },
+        { key: 'report_post_curing', label: 'Report: Post Curing Loss' },
+        { key: 'report_waiting_visual', label: 'Report: Waiting for Visual' },
+        { key: 'report_visual', label: 'Report: Visual Insp' },
+        { key: 'report_gauge', label: 'Report: Gauge Insp' },
+        { key: 'report_rejected', label: 'Report: Rejected Batches' },
+        { key: 'report_recheck', label: 'Report: QF Recheck' },
+        { key: 'report_reprocess', label: 'Report: Reprocessed Items' },
+        { key: 'report_slob', label: 'Report: SLOB' },
+        { key: 'report_aging', label: 'Report: Aging WIP' },
+        { key: 'report_pending_batches', label: 'Report: Pending Batches' },
+        { key: 'report_qty_gain', label: 'Report: Qty Gain' },
+        { key: 'report_qty_loss', label: 'Report: Qty Loss' },
+        { key: 'report_op_efficiency', label: 'Report: Op & Insp Efficiency' },
+        { key: 'report_mould_lifecycle', label: 'Report: Mould Lifecycle' },
+        { key: 'report_cycle_time', label: 'Report: Cycle Time & Bottlenecks' },
+        { key: 'report_wip_valuation', label: 'Report: WIP Valuation' },
+        { key: 'report_sub_vs_inhouse', label: 'Report: Subcontractor vs In-House' },
+        { key: 'report_sub_pending', label: 'Report: Subcontractor Pending Batches' },
+        { key: 'report_sub_performance', label: 'Report: Subcontractor & Vendor Scorecard' },
+        { key: 'report_store_aging', label: 'Report: Store FIFO Aging' },
+        { key: 'report_daily_summary', label: 'Report: Daily Production & Scrap' },
+        { key: 'report_analytics', label: 'Report: Production & Quality Analytics' }
+      ]
+    }
   ];
-  const PERM_LABELS = {
-    master: 'Inventory Master',
-    'mould-tracking': 'Mould Tracking',
-    production: 'Production',
-    cryogenic: 'Cryogenic',
-    deflashing: 'DE Flashing',
-    trimming: 'Trimming',
-    'post-curing': 'Post Curing',
-    'waiting-visual': 'Waiting for Visual inspection',
-    visual: 'Visual',
-    gauge: 'Gauge',
-    quality: 'Quality Final',
-    store: 'Store',
-    stock: 'Stock Upload',
-    'monthly-plan': 'Monthly Plan',
-    'prod-sched': 'Production Schedule',
-    replenishment: 'Replenishment Planner',
-    'task-tracking': 'Task Tracking',
-    'print-batch': 'Print Label',
-    'ai-agent': 'AI Assistant',
-    report_inventory: 'Report: Inventory',
-    report_sales: 'Report: Sales',
-    report_production: 'Report: Production',
-    report_cryogenic: 'Report: Cryo Loss',
-    report_deflashing: 'Report: DE Flash Loss',
-    report_trimming: 'Report: Trimming Loss',
-    report_post_curing: 'Report: Post Curing Loss',
-    report_waiting_visual: 'Report: Waiting for Visual inspection',
-    report_visual: 'Report: Visual Insp',
-    report_gauge: 'Report: Gauge Insp',
-    report_rejected: 'Report: Rejected Batches',
-    report_recheck: 'Report: QF Recheck',
-    report_reprocess: 'Report: Reprocessed Items',
-    report_slob: 'Report: SLOB',
-    report_aging: 'Report: Aging WIP',
-    report_pending_batches: 'Report: Pending Batches',
-    report_qty_gain: 'Report: Qty Gain',
-    report_qty_loss: 'Report: Qty Loss',
-    report_op_efficiency: 'Report: Op & Insp Efficiency',
-    report_mould_lifecycle: 'Report: Mould Lifecycle',
-    report_cycle_time: 'Report: Cycle Time & Bottlenecks',
-    report_wip_valuation: 'Report: WIP Valuation',
-    report_sub_vs_inhouse: 'Report: Subcontractor vs In-House',
-    report_sub_pending: 'Report: Subcontractor Pending Batches',
-    report_sub_performance: 'Report: Subcontractor & Vendor Scorecard'
-  };
+
+  const PERMS = [];
+  const PERM_LABELS = {};
+  PERM_CATEGORIES.forEach(cat => {
+    cat.perms.forEach(p => {
+      PERMS.push(p.key);
+      PERM_LABELS[p.key] = p.label;
+    });
+  });
+
   let activeTab = 'users';
 
   function render() {
@@ -138,19 +163,34 @@ const AdminModule = (() => {
   }
 
   function userModal() {
-    const permPills = PERMS.map(p => `
-      <div class="perm-pill">
-        <input type="checkbox" id="perm-${p}" name="perm" value="${p}">
-        <label for="perm-${p}">${PERM_LABELS[p]}</label>
-      </div>`).join('');
+    const permSections = PERM_CATEGORIES.map((cat, catIdx) => `
+      <div style="margin-bottom:16px; background:rgba(0,0,0,0.02); padding:12px; border-radius:8px; border:1px solid var(--border);">
+        <div class="flex items-center justify-between mb-2">
+          <span style="font-size:12px; font-weight:700; color:var(--primary); text-transform:uppercase; letter-spacing:0.5px;">${cat.name}</span>
+          <div class="flex gap-1">
+            <button type="button" class="btn btn-ghost btn-xs text-blue" style="font-size:11px; padding:2px 6px;" onclick="AdminModule.toggleCategoryPerms(${catIdx}, true)">Select All</button>
+            <button type="button" class="btn btn-ghost btn-xs text-muted" style="font-size:11px; padding:2px 6px;" onclick="AdminModule.toggleCategoryPerms(${catIdx}, false)">Clear</button>
+          </div>
+        </div>
+        <div class="perm-grid" id="perm-cat-${catIdx}">
+          ${cat.perms.map(p => `
+            <div class="perm-pill">
+              <input type="checkbox" id="perm-${p.key}" name="perm" value="${p.key}">
+              <label for="perm-${p.key}">${p.label}</label>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `).join('');
+
     return `
       <div class="modal-overlay hidden" id="admin-user-modal">
-        <div class="modal modal-md">
+        <div class="modal modal-lg" style="max-width:780px;">
           <div class="modal-header">
             <h3 id="user-modal-title">Add User</h3>
             <button class="modal-close" onclick="document.getElementById('admin-user-modal').classList.add('hidden')">&#x2715;</button>
           </div>
-          <div class="modal-body">
+          <div class="modal-body" style="max-height:calc(85vh - 120px); overflow-y:auto;">
             <input type="hidden" id="user-edit-id">
             <div class="form-row">
               <div class="form-group"><label class="form-label">Full Name <span class="required">*</span></label><input type="text" id="user-name" class="form-control" placeholder="Full name"></div>
@@ -165,9 +205,17 @@ const AdminModule = (() => {
               </div>
             </div>
             <div class="form-group">
-              <label class="form-label">Module Permissions</label>
-              <div class="perm-grid" id="perm-grid">${permPills}</div>
-              <div class="form-hint">Select which modules this user can access.</div>
+              <div class="flex items-center justify-between mb-2">
+                <label class="form-label mb-0" style="font-weight:700;">Module Permissions</label>
+                <div class="flex gap-2">
+                  <button type="button" class="btn btn-ghost btn-xs text-blue" onclick="AdminModule.toggleAllPerms(true)">Select All Modules</button>
+                  <button type="button" class="btn btn-ghost btn-xs text-muted" onclick="AdminModule.toggleAllPerms(false)">Deselect All</button>
+                </div>
+              </div>
+              <div id="perm-container">
+                ${permSections}
+              </div>
+              <div class="form-hint mt-1">Select which functional modules and reports this user is permitted to view/operate.</div>
             </div>
             <div class="form-group">
               <label class="form-label">Status</label>
@@ -180,6 +228,21 @@ const AdminModule = (() => {
           </div>
         </div>
       </div>`;
+  }
+
+  function toggleCategoryPerms(catIdx, selectAll) {
+    const cat = PERM_CATEGORIES[catIdx];
+    if (!cat) return;
+    cat.perms.forEach(p => {
+      const cb = document.getElementById(`perm-${p.key}`);
+      if (cb && !cb.disabled) cb.checked = selectAll;
+    });
+  }
+
+  function toggleAllPerms(selectAll) {
+    document.querySelectorAll('[name=perm]').forEach(cb => {
+      if (!cb.disabled) cb.checked = selectAll;
+    });
   }
 
   function openAddUser() {
@@ -212,12 +275,11 @@ const AdminModule = (() => {
 
   function onRoleChange() {
     const role = document.getElementById('user-role') && document.getElementById('user-role').value;
-    const grid = document.getElementById('perm-grid');
-    if (!grid) return;
+    const allCbs = document.querySelectorAll('[name=perm]');
     if (role === 'admin') {
-      grid.querySelectorAll('input').forEach(cb => { cb.checked = true; cb.disabled = true; });
+      allCbs.forEach(cb => { cb.checked = true; cb.disabled = true; });
     } else {
-      grid.querySelectorAll('input').forEach(cb => { cb.disabled = false; });
+      allCbs.forEach(cb => { cb.disabled = false; });
     }
   }
 
@@ -1206,5 +1268,5 @@ const AdminModule = (() => {
     }
   }
 
-  return { render, openAddUser, editUser, saveUser, toggleUser, onRoleChange, openAddSub, editSub, saveSub, toggleSub, openAddVendor, editVendor, saveVendor, toggleVendor, openAddOp, editOp, saveOp, toggleOp, openAddInspector, editInspector, saveInspector, toggleInspector, clearTransactionData, toggleDatabaseMode, triggerBackupExport, triggerBackupImport, triggerBackupImportLive, viewTaskDetails, openCreateTask, createTask, filterAdminBatches, saveBatchStage };
+  return { render, openAddUser, editUser, saveUser, toggleUser, onRoleChange, toggleCategoryPerms, toggleAllPerms, openAddSub, editSub, saveSub, toggleSub, openAddVendor, editVendor, saveVendor, toggleVendor, openAddOp, editOp, saveOp, toggleOp, openAddInspector, editInspector, saveInspector, toggleInspector, clearTransactionData, toggleDatabaseMode, triggerBackupExport, triggerBackupImport, triggerBackupImportLive, viewTaskDetails, openCreateTask, createTask, filterAdminBatches, saveBatchStage };
 })();

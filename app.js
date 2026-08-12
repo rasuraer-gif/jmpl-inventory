@@ -38,6 +38,19 @@ function formatNum(n) { return n == null ? '0' : Number(n).toLocaleString('en-IN
 function today() { return new Date().toISOString().slice(0,10); }
 function nowISO() { return new Date().toISOString(); }
 
+const STAGE_LABELS = {
+  production: 'Moulding',
+  cryogenic: 'Cryogenic',
+  deflashing: 'Manual DE Flashing',
+  trimming: 'Trimming',
+  'post-curing': 'Post Curing',
+  'waiting-visual': 'Waiting for Visual',
+  visual: 'Visual Inspection',
+  gauge: 'Gauge Inspection',
+  quality: 'QC Final',
+  store: 'Store'
+};
+
 function printBarcode(batchId) {
   const batch = DB.Batches.find(batchId);
   if (!batch) { showToast('Batch not found', 'error'); return; }
@@ -288,7 +301,7 @@ function bulkPrintBarcodes(ids) {
     deflashing: 'Manual DE Flashing',
     trimming: 'Trimming',
     'post-curing': 'Post Curing',
-    'waiting-visual': 'Visual Inspection',
+    'waiting-visual': 'Waiting for Visual',
     visual: 'Visual Inspection',
     gauge: 'Gauge Inspection',
     quality: 'QC Final',
@@ -430,13 +443,16 @@ const NAV = [
   { id:'store',      label:'Store & Sales',       icon:'🏪', module:'store',     section:'dept', perm:'store' },
   // Tools
   { id:'stock',      label:'Stock Upload',        icon:'📤', module:'stock',     section:'tools', perm:'stock' },
+  { id:'daily-analysis', label:'Daily Feasibility', icon:'📈', module:'daily-analysis', section:'tools', perm:'daily-analysis' },
   { id:'monthly-plan', label:'Monthly Plan',      icon:'📅', module:'monthly-plan',section:'tools', perm:'monthly-plan' },
   { id:'prod-sched',  label:'Production Schedule', icon:'📝', module:'prod-sched',  section:'tools', perm:'prod-sched' },
   { id:'replenishment',label:'Replenishment Planner',icon:'🎯', module:'replenishment',section:'tools', perm:'replenishment' },
   { id:'task-tracking',label:'Task Tracking',     icon:'📋', module:'task-tracking',section:'tools', perm:'task-tracking' },
+  { id:'stock-audit',  label:'Monthly Stock Taking', icon:'📋', module:'stock-audit',  section:'tools', perm:'stock-audit' },
   { id:'reports',    label:'Reports',             icon:'📊', module:'reports',   section:'tools' },
   // Sub-reports
   { id:'rpt-inventory', label:'Inventory Report',  icon:'📦', module:'report_inventory', section:'tools', parent:'reports', perm:'report_inventory' },
+  { id:'rpt-store-stock', label:'Store Stock Report', icon:'🏪', module:'report_store_stock', section:'tools', parent:'reports', perm:'report_store_stock' },
   { id:'rpt-sales',     label:'Sales Report',      icon:'💰', module:'report_sales',     section:'tools', parent:'reports', perm:'report_sales' },
   { id:'rpt-production',label:'Production Report', icon:'🏭', module:'report_production',section:'tools', parent:'reports', perm:'report_production' },
   { id:'rpt-cryogenic', label:'Cryogenic Loss',    icon:'❄️', module:'report_cryogenic', section:'tools', parent:'reports', perm:'report_cryogenic' },
@@ -495,14 +511,17 @@ const App = (() => {
     quality:    () => QualityModule?.render(),
     store:      () => StoreModule?.render(),
     stock:      () => StockModule?.render(),
+    'daily-analysis': () => DailyAnalysisModule?.render(),
     'monthly-plan': () => MonthlyPlanModule?.render(),
     'prod-sched':   () => ProductionScheduleModule?.render(),
     replenishment:  () => ReplenishmentModule?.render(),
     'task-tracking': () => TaskTrackingModule?.render(),
+    'stock-audit':   () => StockAuditModule?.render(),
     reports:    () => ReportsModule?.render('inventory'),
     admin:      () => AdminModule?.render(),
     'ai-agent': () => AIAgentModule?.render(),
     report_inventory:  () => ReportsModule?.render('inventory'),
+    report_store_stock:() => ReportsModule?.render('store-stock'),
     report_sales:      () => ReportsModule?.render('sales'),
     report_production: () => ReportsModule?.render('production'),
     report_cryogenic:  () => ReportsModule?.render('cryogenic'),
@@ -539,14 +558,16 @@ const App = (() => {
     visual:'Visual Inspection', gauge:'Gauge Inspection', quality:'Quality Final',
     'post-curing':'Post Curing',
     'waiting-visual':'Waiting for Visual inspection',
-    store:'Store & Sales', stock:'Stock Upload', reports:'Reports', admin:'Admin Panel',
+    store:'Store & Sales', stock:'Stock Upload', 'daily-analysis':'Daily Requirement Feasibility', reports:'Reports', admin:'Admin Panel',
     'print-batch':'Print Label',
     'ai-agent':'AI Assistant',
     'monthly-plan':'Monthly Plan',
     'prod-sched':'Production Schedule',
     replenishment:'Replenishment Planner',
     'task-tracking':'Task Tracking',
+    'stock-audit':'Monthly Physical Stock Taking & Audit',
     report_inventory:'Inventory Report',
+    report_store_stock:'Store Stock Report',
     report_sales:'Sales Report',
     report_production:'Production Report',
     report_cryogenic:'Cryogenic Loss Report',
@@ -612,7 +633,10 @@ const App = (() => {
     // Render module
     const fn = MODULE_MAP[moduleId];
     if (fn) {
-      try { fn(); }
+      try { 
+        fn(); 
+        applyBatchTagsToContainer(document.getElementById('content'));
+      }
       catch(e) {
         console.error('Module render error:', e);
         const content = document.getElementById('content');
@@ -713,103 +737,64 @@ const App = (() => {
     document.getElementById('change-pwd-modal').classList.add('hidden');
   }
 
-  let observer = null;
+  function formatBatchCell(b) {
+    if (!b) return '—';
+    const batchNo = typeof b === 'string' ? b.trim() : String(b.batchNo || '').trim();
+    if (!batchNo) return '—';
+    let ib = typeof b === 'object' ? b.internalBatchNo : null;
+    if (ib == null && typeof DB !== 'undefined' && DB.Batches) {
+      const found = DB.Batches.all().find(x => x.batchNo === batchNo);
+      if (found && found.internalBatchNo) ib = found.internalBatchNo;
+    }
+    const ibText = ib ? ` <span style="font-size:10.5px;color:var(--accent-teal);font-weight:600;">(IB: ${ib})</span>` : '';
+    return `<span class="clickable-batch font-semibold text-blue" style="cursor:pointer;text-decoration:underline;" onclick="event.stopPropagation(); App.showBatchGenealogy('${batchNo}')" title="Click to view Batch Genealogy & Details">${batchNo}</span>${ibText}`;
+  }
+
+  let tagDebounceTimer = null;
   function setupInternalBatchNoObserver() {
-    if (observer) {
-      observer.disconnect();
+    const content = document.getElementById('content');
+    if (!content) return;
+    
+    if (window._batchTagObserver) {
+      window._batchTagObserver.disconnect();
     }
 
-    function applyTags(rootNode = document.body) {
-      if (typeof DB === 'undefined' || !DB.Batches) return;
-      const batches = DB.Batches.all();
-      if (!batches || !batches.length) return;
-      
-      const batchMap = new Map();
-      batches.forEach(b => {
-        if (b.batchNo && b.internalBatchNo) {
-          batchMap.set(b.batchNo.trim(), b.internalBatchNo);
-        }
-      });
+    applyBatchTagsToContainer(content);
 
-      if (!batchMap.size) return;
-
-      const sortedBatchNos = [...batchMap.keys()].sort((a,b) => b.length - a.length);
-      const escaped = sortedBatchNos.map(no => no.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'));
-      const regex = new RegExp(`(?<!\\(IB: \\d+\\)\\s*)(?:\\b|(?<=\\s|^))(${escaped.join('|')})(?:\\b|(?=\\s|$))(?!\\s*\\(IB: \\d+\\))`, 'g');
-
-      const walker = document.createTreeWalker(
-        rootNode,
-        NodeFilter.SHOW_TEXT,
-        {
-          acceptNode: (node) => {
-            const parent = node.parentNode;
-            if (!parent) return NodeFilter.FILTER_REJECT;
-            const tag = parent.tagName.toUpperCase();
-            if (['INPUT', 'TEXTAREA', 'SCRIPT', 'STYLE'].includes(tag)) {
-              return NodeFilter.FILTER_REJECT;
-            }
-            return NodeFilter.FILTER_ACCEPT;
-          }
-        }
-      );
-
-      let node;
-      const nodesToUpdate = [];
-      while (node = walker.nextNode()) {
-        const val = node.nodeValue;
-        if (val && regex.test(val)) {
-          nodesToUpdate.push(node);
-        }
-      }
-
-      if (observer) observer.disconnect();
-
-      nodesToUpdate.forEach(n => {
-        const parent = n.parentNode;
-        if (!parent) return;
-        const val = n.nodeValue;
-
-        const fragment = document.createDocumentFragment();
-        let lastIndex = 0;
-
-        val.replace(regex, (match, p1, offset) => {
-          if (offset > lastIndex) {
-            fragment.appendChild(document.createTextNode(val.substring(lastIndex, offset)));
-          }
-
-          const ib = batchMap.get(match.trim());
-          const span = document.createElement('span');
-          span.className = 'clickable-batch';
-          span.style.color = 'var(--accent-blue)';
-          span.style.cursor = 'pointer';
-          span.style.fontWeight = '600';
-          span.style.textDecoration = 'underline';
-          span.setAttribute('onclick', `App.showBatchGenealogy('${match.trim()}')`);
-          span.textContent = `${match} (IB: ${ib})`;
-          fragment.appendChild(span);
-
-          lastIndex = offset + match.length;
-          return match;
-        });
-
-        if (lastIndex < val.length) {
-          fragment.appendChild(document.createTextNode(val.substring(lastIndex)));
-        }
-
-        parent.replaceChild(fragment, n);
-      });
-
-      if (observer) {
-        observer.observe(document.body, { childList: true, subtree: true, characterData: true });
-      }
-    }
-
-    observer = new MutationObserver((mutations) => {
-      applyTags();
+    window._batchTagObserver = new MutationObserver(() => {
+      clearTimeout(tagDebounceTimer);
+      tagDebounceTimer = setTimeout(() => {
+        applyBatchTagsToContainer(document.getElementById('content'));
+      }, 40);
     });
 
-    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
-    applyTags();
+    window._batchTagObserver.observe(content, { childList: true, subtree: true });
+  }
+
+  function applyBatchTagsToContainer(rootNode) {
+    if (!rootNode || typeof DB === 'undefined' || !DB.Batches) return;
+    const batches = DB.Batches.all();
+    if (!batches || !batches.length) return;
+
+    const batchMap = new Map();
+    batches.forEach(b => {
+      if (b.batchNo) {
+        batchMap.set(b.batchNo.trim(), b.internalBatchNo || null);
+      }
+    });
+
+    if (!batchMap.size) return;
+
+    const tdElements = rootNode.querySelectorAll ? rootNode.querySelectorAll('td, .batch-cell') : [];
+    tdElements.forEach(td => {
+      if (td.querySelector('.clickable-batch') || td.querySelector('button, input, select, textarea')) return;
+      const text = td.textContent.trim();
+      if (batchMap.has(text)) {
+        const ib = batchMap.get(text);
+        const ibText = ib ? ` <span style="font-size:10.5px;color:var(--accent-teal);font-weight:600;">(IB: ${ib})</span>` : '';
+        td.innerHTML = `<span class="clickable-batch font-semibold text-blue" style="cursor:pointer;text-decoration:underline;" onclick="event.stopPropagation(); App.showBatchGenealogy('${text}')" title="Click to view Batch Genealogy & Details">${text}</span>${ibText}`;
+      }
+    });
   }
 
   let pendingSyncCollections = new Set();
@@ -846,6 +831,218 @@ const App = (() => {
     }
   }
 
+  function escapeHtml(str) {
+    return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function onGlobalSearchFocus() {
+    const input = document.getElementById('global-search-input');
+    if (input && input.value.trim()) {
+      onGlobalSearchInput(input.value);
+    }
+  }
+
+  function onGlobalSearchInput(query) {
+    const dropdown = document.getElementById('global-search-dropdown');
+    if (!dropdown) return;
+
+    try {
+      const q = (query || '').trim().toLowerCase();
+      if (!q) {
+        dropdown.classList.add('hidden');
+        dropdown.innerHTML = '';
+        return;
+      }
+
+      const qNorm = q.replace(/[\s\-_]/g, '');
+
+      // 1. Search Batches
+      const allBatches = (typeof DB !== 'undefined' && DB.Batches && DB.Batches.all) ? DB.Batches.all() : [];
+      const ops = (typeof DB !== 'undefined' && DB.Operators && DB.Operators.all) ? DB.Operators.all() : [];
+      const subs = (typeof DB !== 'undefined' && DB.Subcontractors && DB.Subcontractors.all) ? DB.Subcontractors.all() : [];
+      const opMap = {};
+      ops.forEach(o => { opMap[o.id] = (o.name || '').toLowerCase(); });
+      const subMap = {};
+      subs.forEach(s => { subMap[s.id] = (s.name || '').toLowerCase(); });
+
+      const matchedBatches = allBatches.filter(b => {
+        const batchNo = (b.batchNo || '').toLowerCase();
+        const batchNoNorm = batchNo.replace(/[\s\-_]/g, '');
+        const internalNo = b.internalBatchNo != null ? String(b.internalBatchNo).toLowerCase() : '';
+        const trNo = (b.trNo || '').toLowerCase();
+        const jmrefNo = (b.jmrefNo || '').toLowerCase();
+        const jmrefNoNorm = jmrefNo.replace(/[\s\-_]/g, '');
+        const partNo = (b.partNo || '').toLowerCase();
+        const partNoNorm = partNo.replace(/[\s\-_]/g, '');
+        const opName = (b.operatorName || opMap[b.operatorId] || '').toLowerCase();
+        const subName = (subMap[b.subcontractorId] || '').toLowerCase();
+
+        return batchNo.includes(q) ||
+               (qNorm && batchNoNorm.includes(qNorm)) ||
+               internalNo === q ||
+               internalNo.includes(q) ||
+               trNo.includes(q) ||
+               jmrefNo.includes(q) ||
+               (qNorm && jmrefNoNorm.includes(qNorm)) ||
+               partNo.includes(q) ||
+               (qNorm && partNoNorm.includes(qNorm)) ||
+               opName.includes(q) ||
+               subName.includes(q);
+      }).slice(0, 8);
+
+      // 2. Search Master Parts
+      const allMaster = (typeof DB !== 'undefined' && DB.Master && DB.Master.all) ? DB.Master.all() : [];
+      const matchedParts = allMaster.filter(m => {
+        const partNo = (m.partNo || '').toLowerCase();
+        const partNoNorm = partNo.replace(/[\s\-_]/g, '');
+        const jmrefNo = (m.jmrefNo || '').toLowerCase();
+        const jmrefNoNorm = jmrefNo.replace(/[\s\-_]/g, '');
+        const desc = (m.description || '').toLowerCase();
+
+        return partNo.includes(q) ||
+               (qNorm && partNoNorm.includes(qNorm)) ||
+               jmrefNo.includes(q) ||
+               (qNorm && jmrefNoNorm.includes(qNorm)) ||
+               desc.includes(q);
+      }).slice(0, 4);
+
+      // 3. Search Moulds
+      const allMoulds = (typeof DB !== 'undefined' && DB.Moulds && DB.Moulds.all) ? DB.Moulds.all() : [];
+      const matchedMoulds = allMoulds.filter(m => {
+        const mouldNo = String(m.mouldNo || '');
+        const mouldId = (m.mouldId || '').toLowerCase();
+        const mouldType = (m.mouldType || '').toLowerCase();
+        const jmrefNo = (m.jmrefNo || '').toLowerCase();
+
+        return mouldNo === q ||
+               mouldNo.includes(q) ||
+               mouldId.includes(q) ||
+               mouldType.includes(q) ||
+               jmrefNo.includes(q);
+      }).slice(0, 3);
+
+      if (!matchedBatches.length && !matchedParts.length && !matchedMoulds.length) {
+        dropdown.innerHTML = `
+          <div style="padding:16px; text-align:center; color:var(--text-muted); font-size:13px;">
+            <div style="font-size:24px; margin-bottom:4px;">🔍</div>
+            No matching batches, parts, or moulds found for "<strong>${escapeHtml(query)}</strong>"
+          </div>`;
+        dropdown.classList.remove('hidden');
+        return;
+      }
+
+      let html = '';
+
+      // Render Batches
+      if (matchedBatches.length) {
+        html += `
+          <div style="font-size:11px; font-weight:700; text-transform:uppercase; color:var(--text-muted); padding:6px 10px; display:flex; justify-content:space-between;">
+            <span>📦 Batches (${matchedBatches.length})</span>
+            <span style="font-size:10px; opacity:0.8;">Click to Open</span>
+          </div>`;
+        
+        matchedBatches.forEach(b => {
+          const stageLabel = (typeof STAGE_LABELS !== 'undefined' && STAGE_LABELS[b.currentStage]) ? STAGE_LABELS[b.currentStage] : (b.currentStage || 'Unknown');
+          const statusBadge = b.status === 'completed' ? '<span class="badge badge-green">Completed</span>' : (b.status === 'rejected' ? '<span class="badge badge-red">Rejected</span>' : `<span class="stage-chip ${b.currentStage}">${stageLabel}</span>`);
+          const qty = b.initialQty || 0;
+
+          html += `
+            <div class="search-result-item" style="padding:8px 10px; border-radius:8px; display:flex; align-items:center; justify-content:space-between; gap:8px; cursor:pointer; margin-bottom:4px; transition:background 0.15s;" 
+              onmouseover="this.style.background='var(--bg-glass-hover)'" onmouseout="this.style.background='transparent'" onclick="App.selectBatchFromSearch('${b.id}')">
+              <div style="flex:1; min-width:0;">
+                <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+                  <span class="font-bold text-blue" style="font-size:13px;">${b.batchNo}</span>
+                  <span class="badge badge-teal" style="font-size:10px;">${b.jmrefNo || '—'}</span>
+                  ${b.internalBatchNo != null ? `<span style="font-size:10.5px; color:var(--accent-teal); font-weight:600;">IB: ${b.internalBatchNo}</span>` : ''}
+                  ${statusBadge}
+                </div>
+                <div style="font-size:11.5px; color:var(--text-muted); margin-top:2px; display:flex; gap:12px;">
+                  <span>Part: <strong style="color:var(--text-main);">${b.partNo || '—'}</strong></span>
+                  <span>Qty: <strong style="color:var(--text-main);">${formatNum(qty)}</strong></span>
+                  ${b.trNo ? `<span>TR: <strong>${b.trNo}</strong></span>` : ''}
+                </div>
+              </div>
+              <div style="display:flex; gap:4px; flex-shrink:0;" onclick="event.stopPropagation()">
+                <button class="btn btn-ghost btn-xs" onclick="App.showBatchGenealogy('${b.id}'); App.closeGlobalSearch();" title="View Genealogy" style="padding:3px 6px;">🧬</button>
+                <button class="btn btn-primary btn-xs" onclick="App.selectBatchFromSearch('${b.id}')" style="padding:3px 8px; font-size:11px;">Open →</button>
+              </div>
+            </div>`;
+        });
+      }
+
+      // Render Parts
+      if (matchedParts.length) {
+        html += `
+          <div style="font-size:11px; font-weight:700; text-transform:uppercase; color:var(--text-muted); padding:8px 10px 4px 10px; border-top:1px solid var(--border); margin-top:4px;">
+            <span>📋 Master Parts (${matchedParts.length})</span>
+          </div>`;
+        
+        matchedParts.forEach(p => {
+          html += `
+            <div class="search-result-item" style="padding:8px 10px; border-radius:8px; display:flex; align-items:center; justify-content:space-between; gap:8px; cursor:pointer; margin-bottom:4px; transition:background 0.15s;" 
+              onmouseover="this.style.background='var(--bg-glass-hover)'" onmouseout="this.style.background='transparent'" onclick="App.navigate('master'); App.closeGlobalSearch();">
+              <div>
+                <div style="display:flex; align-items:center; gap:6px;">
+                  <span class="font-bold" style="font-size:13px; color:var(--primary);">${p.partNo}</span>
+                  <span class="badge badge-teal" style="font-size:10px;">${p.jmrefNo}</span>
+                </div>
+                <div style="font-size:11.5px; color:var(--text-muted); margin-top:2px;">
+                  ${escapeHtml(p.description || 'Rubber Component')}
+                </div>
+              </div>
+              <span class="text-xs text-muted">Master →</span>
+            </div>`;
+        });
+      }
+
+      // Render Moulds
+      if (matchedMoulds.length) {
+        html += `
+          <div style="font-size:11px; font-weight:700; text-transform:uppercase; color:var(--text-muted); padding:8px 10px 4px 10px; border-top:1px solid var(--border); margin-top:4px;">
+            <span>⚙️ Moulds (${matchedMoulds.length})</span>
+          </div>`;
+        
+        matchedMoulds.forEach(m => {
+          html += `
+            <div class="search-result-item" style="padding:8px 10px; border-radius:8px; display:flex; align-items:center; justify-content:space-between; gap:8px; cursor:pointer; margin-bottom:4px; transition:background 0.15s;" 
+              onmouseover="this.style.background='var(--bg-glass-hover)'" onmouseout="this.style.background='transparent'" onclick="App.navigate('mould-tracking'); App.closeGlobalSearch();">
+              <div>
+                <div style="display:flex; align-items:center; gap:6px;">
+                  <span class="font-bold" style="font-size:13px; color:var(--accent-amber);">Mould ${m.mouldNo}</span>
+                  <span class="badge badge-teal" style="font-size:10px;">${m.jmrefNo || '—'}</span>
+                </div>
+                <div style="font-size:11.5px; color:var(--text-muted); margin-top:2px;">
+                  ${escapeHtml(m.mouldType || 'Yet to be assigned')} • Cavities: ${m.cavity || '—'}
+                </div>
+              </div>
+              <span class="text-xs text-muted">Tracking →</span>
+            </div>`;
+        });
+      }
+
+      dropdown.innerHTML = html;
+      dropdown.classList.remove('hidden');
+    } catch (err) {
+      console.error("Global search error:", err);
+      dropdown.innerHTML = `<div style="padding:12px; color:var(--accent-red); font-size:12px;">Search error: ${escapeHtml(err.message)}</div>`;
+      dropdown.classList.remove('hidden');
+    }
+  }
+
+  function selectBatchFromSearch(batchId) {
+    closeGlobalSearch();
+    const batch = DB.Batches.find(batchId);
+    if (!batch) return;
+    navigateToBatch(batch);
+  }
+
+  function closeGlobalSearch() {
+    const dropdown = document.getElementById('global-search-dropdown');
+    if (dropdown) dropdown.classList.add('hidden');
+    const input = document.getElementById('global-search-input');
+    if (input) input.blur();
+  }
+
   function runQuickScan() {
     if (typeof Scanner === 'undefined') {
       showToast('Scanner module not loaded', 'error');
@@ -856,80 +1053,120 @@ const App = (() => {
     });
   }
 
-  function routeScannedBatch(batchNo) {
-    if (!batchNo) return;
-    const batch = DB.Batches.all().find(b => (b.batchNo || '').trim() === batchNo.trim());
-    if (!batch) {
-      showToast(`Batch "${batchNo}" not found in system`, 'error');
-      return;
-    }
+  function filterStageScreenForBatch(stage, batchNo) {
+    if (!stage || !batchNo) return;
+
+    const applyFilter = () => {
+      switch (stage) {
+        case 'production':
+          if (typeof ProductionModule !== 'undefined' && typeof ProductionModule.filterPending === 'function') {
+            ProductionModule.filterPending(batchNo);
+            const inp = document.getElementById('prod-pending-search');
+            if (inp) inp.value = batchNo;
+          }
+          break;
+        case 'cryogenic':
+          if (typeof CryogenicModule !== 'undefined' && typeof CryogenicModule.filterPending === 'function') {
+            CryogenicModule.filterPending(batchNo);
+            const inp = document.getElementById('cryo-pending-search');
+            if (inp) inp.value = batchNo;
+          }
+          break;
+        case 'deflashing':
+          if (typeof DeflashingModule !== 'undefined' && typeof DeflashingModule.filterPending === 'function') {
+            DeflashingModule.filterPending(batchNo);
+            const inp = document.getElementById('de-pending-search');
+            if (inp) inp.value = batchNo;
+          }
+          break;
+        case 'trimming':
+          if (typeof TrimmingModule !== 'undefined' && typeof TrimmingModule.filterPending === 'function') {
+            TrimmingModule.filterPending(batchNo);
+            const inp = document.getElementById('trim-pending-search');
+            if (inp) inp.value = batchNo;
+          }
+          break;
+        case 'post-curing':
+          if (typeof PostCuringModule !== 'undefined' && typeof PostCuringModule.filterPending === 'function') {
+            PostCuringModule.filterPending(batchNo);
+            const inp = document.getElementById('pc-pending-search');
+            if (inp) inp.value = batchNo;
+          }
+          break;
+        case 'waiting-visual':
+          if (typeof WaitingVisualModule !== 'undefined' && typeof WaitingVisualModule.filterPending === 'function') {
+            WaitingVisualModule.filterPending(batchNo);
+            const inp = document.getElementById('wv-pending-search');
+            if (inp) inp.value = batchNo;
+          }
+          break;
+        case 'visual':
+          if (typeof VisualModule !== 'undefined' && typeof VisualModule.filterPending === 'function') {
+            VisualModule.filterPending(batchNo);
+            const inp = document.getElementById('vis-pending-search');
+            if (inp) inp.value = batchNo;
+          }
+          break;
+        case 'gauge':
+          if (typeof GaugeModule !== 'undefined' && typeof GaugeModule.filterPending === 'function') {
+            GaugeModule.filterPending(batchNo);
+            const inp = document.getElementById('gauge-pending-search');
+            if (inp) inp.value = batchNo;
+          }
+          break;
+        case 'quality':
+          if (typeof QualityModule !== 'undefined' && typeof QualityModule.filterPending === 'function') {
+            QualityModule.filterPending(batchNo);
+            const inp = document.getElementById('qf-pending-search');
+            if (inp) inp.value = batchNo;
+          }
+          break;
+        case 'store':
+          if (typeof StoreModule !== 'undefined' && typeof StoreModule.filterCompletedBatches === 'function') {
+            StoreModule.filterCompletedBatches(batchNo);
+            const inp = document.getElementById('store-batch-search');
+            if (inp) inp.value = batchNo;
+          }
+          break;
+      }
+    };
+
+    applyFilter();
+    setTimeout(applyFilter, 50);
+    setTimeout(applyFilter, 150);
+    setTimeout(applyFilter, 300);
+  }
+
+  function navigateToBatch(batch) {
+    if (!batch) return;
+    const batchNo = batch.batchNo || '';
 
     if (batch.status === 'completed') {
-      showToast(`Batch "${batchNo}" is completed and stored in Store`, 'success');
+      showToast(`Batch "${batchNo}" is in Store`, 'success');
       navigate('store');
+      filterStageScreenForBatch('store', batchNo);
       return;
     }
 
     if (batch.status === 'rejected') {
       showToast(`Batch "${batchNo}" is rejected`, 'error');
+      navigate('reports');
       return;
     }
 
     navigate(batch.currentStage);
+    filterStageScreenForBatch(batch.currentStage, batchNo);
+  }
 
-    setTimeout(() => {
-      const inputQty = getBatchCurrentQty(batch.id);
-      
-      switch (batch.currentStage) {
-        case 'production':
-          if (window.ProductionModule && typeof ProductionModule.openMove === 'function') {
-            ProductionModule.openMove(batch.id);
-          }
-          break;
-        case 'cryogenic':
-          if (window.CryogenicModule && typeof CryogenicModule.openProcess === 'function') {
-            CryogenicModule.openProcess(batch.id, inputQty);
-          }
-          break;
-        case 'deflashing':
-          if (window.DeflashingModule && typeof DeflashingModule.openProcess === 'function') {
-            DeflashingModule.openProcess(batch.id, inputQty);
-          }
-          break;
-        case 'trimming':
-          if (window.TrimmingModule && typeof TrimmingModule.openProcess === 'function') {
-            TrimmingModule.openProcess(batch.id, inputQty);
-          }
-          break;
-        case 'post-curing':
-          if (window.PostCuringModule && typeof PostCuringModule.openProcess === 'function') {
-            PostCuringModule.openProcess(batch.id, inputQty);
-          }
-          break;
-        case 'waiting-visual':
-          if (window.WaitingVisualModule && typeof WaitingVisualModule.openProcess === 'function') {
-            WaitingVisualModule.openProcess(batch.id, inputQty);
-          }
-          break;
-        case 'visual':
-          if (window.VisualModule && typeof VisualModule.openProcess === 'function') {
-            VisualModule.openProcess(batch.id, inputQty);
-          }
-          break;
-        case 'gauge':
-          if (window.GaugeModule && typeof GaugeModule.openProcess === 'function') {
-            GaugeModule.openProcess(batch.id, inputQty);
-          }
-          break;
-        case 'quality':
-          if (window.QualityModule && typeof QualityModule.openPass === 'function') {
-            QualityModule.openPass(batch.id, inputQty);
-          }
-          break;
-        default:
-          showToast(`No routing action defined for stage: ${batch.currentStage}`, 'warning');
-      }
-    }, 200);
+  function routeScannedBatch(batchNo) {
+    if (!batchNo) return;
+    const q = batchNo.trim().toLowerCase();
+    const batch = DB.Batches.all().find(b => (b.batchNo || '').trim().toLowerCase() === q || (b.internalBatchNo != null && String(b.internalBatchNo).trim().toLowerCase() === q));
+    if (!batch) {
+      showToast(`Batch "${batchNo}" not found in system`, 'error');
+      return;
+    }
+    navigateToBatch(batch);
   }
 
   function getBatchCurrentQty(batchId) {
@@ -1186,7 +1423,28 @@ const App = (() => {
     window.bulkPrintBarcodes(checked);
   }
 
-  return { navigate, init, toggleReportsMenu, openChangePasswordModal, changePassword, runQuickScan, showBatchGenealogy, get current() { return currentModule; }, changeDashboardMonth: (val) => { dashboardMonth = val; renderDashboard(); }, toggleAllStageChecks, bulkPrintStageSelected };
+  document.addEventListener('click', (e) => {
+    const searchContainer = document.getElementById('global-search-container');
+    if (searchContainer && !searchContainer.contains(e.target)) {
+      closeGlobalSearch();
+    }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      const input = document.getElementById('global-search-input');
+      if (input) {
+        input.focus();
+        input.select();
+        onGlobalSearchFocus();
+      }
+    } else if (e.key === 'Escape') {
+      closeGlobalSearch();
+    }
+  });
+
+  return { navigate, init, toggleReportsMenu, openChangePasswordModal, changePassword, runQuickScan, showBatchGenealogy, formatBatchCell, applyBatchTagsToContainer, get current() { return currentModule; }, changeDashboardMonth: (val) => { dashboardMonth = val; renderDashboard(); }, toggleAllStageChecks, bulkPrintStageSelected, onGlobalSearchFocus, onGlobalSearchInput, selectBatchFromSearch, closeGlobalSearch };
 })();
 
 // ── Login Page ─────────────────────────────────────────────
@@ -1221,17 +1479,44 @@ function showLoginPage() {
     </div>
     <div id="toast-container"></div>`;
 
-  document.getElementById('login-form').addEventListener('submit', e => {
+  document.getElementById('login-form').addEventListener('submit', async e => {
     e.preventDefault();
+    const btn = e.target.querySelector('button[type=submit]');
+    const originalText = btn ? btn.innerHTML : 'Sign In →';
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = 'Verifying...';
+    }
+    
+    const err = document.getElementById('login-error');
+    if (err) {
+      err.textContent = '';
+      err.classList.remove('show');
+    }
+
     const username = document.getElementById('login-username').value.trim();
     const password = document.getElementById('login-password').value;
-    const result = Auth.login(username, password);
-    if (result.ok) {
-      App.init();
-    } else {
-      const err = document.getElementById('login-error');
-      err.textContent = result.error;
-      err.classList.add('show');
+    
+    try {
+      const result = await Auth.login(username, password);
+      if (result.ok) {
+        App.init();
+      } else {
+        if (err) {
+          err.textContent = result.error;
+          err.classList.add('show');
+        }
+      }
+    } catch (loginErr) {
+      if (err) {
+        err.textContent = 'Login error: ' + (loginErr.message || loginErr);
+        err.classList.add('show');
+      }
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+      }
     }
   });
 
@@ -1320,7 +1605,24 @@ function showAppShell(session) {
       <main id="main">
         <header id="top-bar">
           <button id="sidebar-toggle" class="btn btn-ghost btn-sm no-print" style="margin-right:12px; display:none; align-items:center; justify-content:center; width:36px; height:36px; font-size:18px;">☰</button>
-          <h2 id="top-bar-title">Dashboard</h2>
+          <h2 id="top-bar-title" style="flex-shrink:0;">Dashboard</h2>
+
+          <!-- Global Quick Search Container -->
+          <div id="global-search-container" style="position:relative; flex:1; max-width:440px; margin:0 12px;">
+            <div style="position:relative; display:flex; align-items:center;">
+              <span style="position:absolute; left:12px; color:var(--text-muted); font-size:13px; pointer-events:none;">🔍</span>
+              <input type="text" id="global-search-input" class="form-control" placeholder="Search batch, part, JMREF, mould... (Ctrl+K)" 
+                style="padding-left:36px; padding-right:75px; height:36px; font-size:12.5px; border-radius:20px; background:var(--card-bg); border:1px solid var(--border);"
+                onfocus="App.onGlobalSearchFocus()" oninput="App.onGlobalSearchInput(this.value)" autocomplete="off">
+              <div style="position:absolute; right:8px; display:flex; align-items:center; gap:4px;">
+                <kbd style="font-size:10px; font-family:inherit; padding:1px 5px; border-radius:4px; background:var(--bg-input); color:var(--text-muted); border:1px solid var(--border); line-height:1.2;">Ctrl K</kbd>
+                <button type="button" class="btn btn-ghost btn-xs" onclick="App.runQuickScan()" title="Scan QR Code" style="padding:2px 5px; height:24px; font-size:12px; color:var(--accent-teal);">📷</button>
+              </div>
+            </div>
+            <div id="global-search-dropdown" class="hidden" style="position:absolute; top:calc(100% + 6px); left:0; right:0; max-height:420px; overflow-y:auto; background:var(--card-bg); border:1px solid var(--border); border-radius:12px; box-shadow:0 12px 30px rgba(0,0,0,0.4); z-index:1000; padding:8px;">
+            </div>
+          </div>
+
           <span class="top-badge" id="top-badge-date">${new Date().toLocaleDateString('en-IN', {weekday:'short',day:'numeric',month:'short',year:'numeric'})}</span>
         </header>
         <div id="content" style="padding:28px;"></div>
@@ -1443,55 +1745,72 @@ function renderDashboard() {
     return b && b.status === 'active';
   }).length;
 
-  // Critical replenishments (stock < 30% of target level)
+  // Critical replenishments (stock < 30% of target level) - Optimized O(N) indexing
   let criticalCount = 0;
   const STAGES = ['production', 'cryogenic', 'deflashing', 'trimming', 'post-curing', 'waiting-visual', 'visual', 'gauge', 'quality'];
   
-  function getStageLossRate(partId, stage) {
-    const stageRecords = DB.StageRecords.all().filter(r => {
-      const b = DB.Batches.find(r.batchId);
-      return b && b.partId === partId && r.stage === stage;
-    });
-    if (stageRecords.length === 0) {
-      const generalRecords = DB.StageRecords.all().filter(r => r.stage === stage);
-      if (generalRecords.length === 0) return 0.05;
-      const totalIn = generalRecords.reduce((s, r) => s + (r.inputQty || 0), 0);
-      const totalLoss = generalRecords.reduce((s, r) => s + (r.lossQty || 0), 0);
-      return totalIn > 0 ? (totalLoss / totalIn) : 0.05;
-    }
-    const totalIn = stageRecords.reduce((s, r) => s + (r.inputQty || 0), 0);
-    const totalLoss = stageRecords.reduce((s, r) => s + (r.lossQty || 0), 0);
-    return totalIn > 0 ? (totalLoss / totalIn) : 0.0;
-  }
+  const allStageRecords = DB.StageRecords.all();
+  const allBatches = batches;
 
-  function getWIPQty(partId, stage) {
-    const activeBatches = DB.Batches.all().filter(b => b.partId === partId && b.currentStage === stage && b.status === 'active');
-    const stageRecords = DB.StageRecords.all();
-    return activeBatches.reduce((sum, b) => {
-      const incoming = stageRecords.filter(r => r.batchId === b.id && r.movedTo === stage);
-      if (incoming.length) {
-        return sum + (incoming[incoming.length - 1].outputQty || 0);
-      }
-      return sum + (b.initialQty || 0);
-    }, 0);
-  }
+  // Build quick batch lookups
+  const batchMap = new Map();
+  allBatches.forEach(b => batchMap.set(b.id, b));
+
+  // Pre-index active batches by partId & stage
+  const activeBatchesByPartAndStage = {};
+  allBatches.forEach(b => {
+    if (b.status === 'active' && b.partId) {
+      const k = `${b.partId}_${b.currentStage}`;
+      if (!activeBatchesByPartAndStage[k]) activeBatchesByPartAndStage[k] = [];
+      activeBatchesByPartAndStage[k].push(b);
+    }
+  });
+
+  // Pre-index incoming stage records by batchId
+  const incomingRecordsByBatchId = {};
+  allStageRecords.forEach(r => {
+    if (r.movedTo) {
+      if (!incomingRecordsByBatchId[r.batchId]) incomingRecordsByBatchId[r.batchId] = [];
+      incomingRecordsByBatchId[r.batchId].push(r);
+    }
+  });
+
+  // Pre-calculate general stage loss rates
+  const generalLossRates = {};
+  STAGES.forEach(stage => {
+    const stageRecs = allStageRecords.filter(r => r.stage === stage);
+    const totalIn = stageRecs.reduce((s, r) => s + (r.inputQty || 0), 0);
+    const totalLoss = stageRecs.reduce((s, r) => s + (r.lossQty || 0), 0);
+    generalLossRates[stage] = totalIn > 0 ? (totalLoss / totalIn) : 0.05;
+  });
+
+  // Pre-calculate available store stock map for all parts
+  const storeStockByJmref = {};
+  storeInv.forEach(p => {
+    if (p.jmrefNo) storeStockByJmref[p.jmrefNo] = p.available || 0;
+  });
 
   master.forEach(p => {
     const target = p.averageTargetInventory || 0;
     if (target <= 0) return;
-    const storeStock = DB.StoreInventory.availableByJmref(p.jmrefNo);
+    const storeStock = storeStockByJmref[p.jmrefNo] || 0;
     
     let wipYield = 0;
-    const lossRates = STAGES.map(stage => getStageLossRate(p.id, stage));
-    const wipCounts = STAGES.map(stage => getWIPQty(p.id, stage));
-
     for (let i = 0; i < STAGES.length; i++) {
-      const wip = wipCounts[i];
+      const stage = STAGES[i];
+      const activeList = activeBatchesByPartAndStage[`${p.id}_${stage}`] || [];
+      const wip = activeList.reduce((sum, b) => {
+        const inc = incomingRecordsByBatchId[b.id] || [];
+        const matchInc = inc.filter(r => r.movedTo === stage);
+        if (matchInc.length) return sum + (matchInc[matchInc.length - 1].outputQty || 0);
+        return sum + (b.initialQty || 0);
+      }, 0);
+
       if (wip <= 0) continue;
 
       let survivalRate = 1.0;
       for (let j = i; j < STAGES.length; j++) {
-        survivalRate *= (1.0 - lossRates[j]);
+        survivalRate *= (1.0 - (generalLossRates[STAGES[j]] || 0.05));
       }
       wipYield += Math.round(wip * survivalRate);
     }

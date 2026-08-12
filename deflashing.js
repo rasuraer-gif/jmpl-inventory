@@ -519,6 +519,7 @@ const DeflashingModule = (() => {
       content.innerHTML = pendingTab(batches);
       const inp = document.getElementById('de-pending-search');
       if (inp) {
+        inp.value = val;
         inp.focus();
         inp.setSelectionRange(inp.value.length, inp.value.length);
       }
@@ -527,3 +528,4 @@ const DeflashingModule = (() => {
 
   return { render, openProcess, calcLoss, process, openReject, rejectBatch, filterHistory, filterPending, updateDynamicBatchNo, onDestinationChange };
 })();
+window.DeflashingModule = DeflashingModule;

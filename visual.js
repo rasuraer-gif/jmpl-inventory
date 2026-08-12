@@ -861,6 +861,7 @@ const VisualModule = (() => {
       content.innerHTML = pendingTab(batches);
       const inp = document.getElementById('vis-pending-search');
       if (inp) {
+        inp.value = val;
         inp.focus();
         inp.setSelectionRange(inp.value.length, inp.value.length);
       }
@@ -869,3 +870,4 @@ const VisualModule = (() => {
 
   return { render, openProcess, calcLoss, process, openReject, rejectBatch, showInspectorDropdown, filterInspectors, selectInspector, filterHistory, filterPending, updateDynamicBatchNo, onDestinationChange };
 })();
+window.VisualModule = VisualModule;

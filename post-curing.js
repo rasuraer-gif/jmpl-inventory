@@ -460,6 +460,7 @@ const PostCuringModule = (() => {
       content.innerHTML = pendingTab(batches);
       const inp = document.getElementById('pc-pending-search');
       if (inp) {
+        inp.value = val;
         inp.focus();
         inp.setSelectionRange(inp.value.length, inp.value.length);
       }
@@ -468,3 +469,4 @@ const PostCuringModule = (() => {
 
   return { render, openProcess, calcLoss, process, openReject, rejectBatch, filterHistory, filterPending, updateDynamicBatchNo };
 })();
+window.PostCuringModule = PostCuringModule;

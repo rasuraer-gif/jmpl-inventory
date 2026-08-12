@@ -468,6 +468,7 @@ const TrimmingModule = (() => {
       content.innerHTML = pendingTab(batches);
       const inp = document.getElementById('trim-pending-search');
       if (inp) {
+        inp.value = val;
         inp.focus();
         inp.setSelectionRange(inp.value.length, inp.value.length);
       }
@@ -476,3 +477,4 @@ const TrimmingModule = (() => {
 
   return { render, openProcess, calcLoss, process, openReject, rejectBatch, filterHistory, filterPending, updateDynamicBatchNo };
 })();
+window.TrimmingModule = TrimmingModule;

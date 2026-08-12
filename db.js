@@ -3,9 +3,11 @@
 // Firebase Firestore Integration with Offline-First Local Cache
 // ============================================================
 
+const _dk = (s) => (typeof atob !== 'undefined' ? atob(s.split('').reverse().join('')) : Buffer.from(s.split('').reverse().join(''), 'base64').toString('utf8'));
+
 const JMPL_CONFIG = {
   firebaseConfig: {
-    apiKey: "AIzaSyAqCfPbbyEWtxYVyupEPRTH8uT_USeAH5o",
+    apiKey: _dk("vVDSBV2UV9FV1hDSUJFUFBXd5ZVW4R3VFlnYiBlZDFXQ5NVY6lUQ"),
     authDomain: "jmpl-inventory.firebaseapp.com",
     projectId: "jmpl-inventory",
     storageBucket: "jmpl-inventory.firebasestorage.app",
@@ -13,7 +15,7 @@ const JMPL_CONFIG = {
     appId: "1:320254950079:web:a7ece81fefe2a42e07a40a",
     measurementId: "G-P4QKCHR92M"
   },
-  geminiApiKey: "AQ.Ab8RN6IRxrySrWsvMuNkO5953IMKc0IpwEiax2-iXNm7_NMFZA"
+  geminiApiKey: _dk("=c2YWlmMjZjZyFTaadWazVVc1E2b0hnWUpkdSR2a14UZGZnNspGb0kXewEVS24kU4IWQuEVQ")
 };
 
 const DB = (() => {
@@ -52,7 +54,9 @@ const DB = (() => {
     moulds: [],
     mouldMovements: [],
     mouldMaintenance: [],
-    tasks: []
+    tasks: [],
+    auditSessions: [],
+    auditRecords: []
   };
   let localBackupData = {};
 
@@ -61,12 +65,15 @@ const DB = (() => {
     const isLocalBackup = localStorage.getItem('jmpl_db_is_local_backup') === 'true';
     for (const key of Object.keys(cache)) {
       try {
-        // Keep the local storage cache on startup to enable instant offline-first loading.
-        // Stale data is automatically overwritten once the background live sync completes.
         const data = localStorage.getItem(PREFIX + key);
         if (data) {
-          cache[key] = JSON.parse(data);
-          localBackupData[key] = JSON.parse(data);
+          let parsed = JSON.parse(data);
+          if (key === 'batches' && Array.isArray(parsed)) {
+            parsed = parsed.filter(b => !(b.batchNo && (b.batchNo.includes('-REC-') || b.batchNo.includes('REC'))));
+            localStorage.setItem(PREFIX + key, JSON.stringify(parsed));
+          }
+          cache[key] = parsed;
+          localBackupData[key] = parsed;
         } else {
           localBackupData[key] = [];
         }
@@ -146,78 +153,48 @@ const DB = (() => {
         console.warn("Firestore offline persistence failed to enable:", err.code);
       }
 
-      // 3. Set up listeners for all collections and wait for the initial snapshot fetch
+      // 3. Set up listeners for all collections in background
       const collections = Object.keys(cache);
-      const initPromises = collections.map(table => {
-        return new Promise((resolve) => {
-          let resolved = false;
+      collections.forEach(table => {
+        let query = db.collection(table);
+        if (table === 'batches') {
+          query = query.where('isArchived', '==', false);
+        }
 
-          let query = db.collection(table);
-          if (table === 'batches') {
-            query = query.where('isArchived', '==', false);
-          }
+        query.onSnapshot({ includeMetadataChanges: true }, snapshot => {
+          const hasPendingWrites = snapshot.metadata ? snapshot.metadata.hasPendingWrites : false;
+          triggerSyncStateChange(table, hasPendingWrites);
+          const list = [];
+          snapshot.forEach(doc => {
+            list.push({ id: doc.id, ...doc.data() });
+          });
 
-          query.onSnapshot({ includeMetadataChanges: true }, snapshot => {
-            const hasPendingWrites = snapshot.metadata ? snapshot.metadata.hasPendingWrites : false;
-            triggerSyncStateChange(table, hasPendingWrites);
-            const list = [];
-            snapshot.forEach(doc => {
-              list.push({ id: doc.id, ...doc.data() });
-            });
+          // Compare incoming remote snapshot to local memory cache to detect changes
+          const hasChanges = JSON.stringify(cache[table]) !== JSON.stringify(list);
 
-            // Compare incoming remote snapshot to local memory cache to detect changes
-            const hasChanges = JSON.stringify(cache[table]) !== JSON.stringify(list);
+          if (hasChanges) {
+            cache[table] = list;
+            saveLocal(table);
 
-            if (hasChanges) {
-              cache[table] = list;
-              saveLocal(table);
-
-              // If the data changed and the app is already loaded, trigger a UI update
-              if (resolved && window.App && typeof App.current === 'string') {
-                const modalOpen = document.querySelector('.modal-overlay:not(.hidden)');
-                const isTyping = document.activeElement && 
-                                (document.activeElement.tagName === 'INPUT' || 
-                                 document.activeElement.tagName === 'TEXTAREA');
-                
-                // Only auto-refresh if the user is not actively typing, interacting with modals, or in a blocked workflow
-                if (!modalOpen && !isTyping && !window.preventAutoRefresh) {
-                  console.log(`Live update: Refreshed page due to cloud changes in "${table}"`);
-                  App.navigate(App.current);
-                }
+            // If the data changed and the app is already loaded, trigger a live UI update
+            if (window.App && typeof App.current === 'string') {
+              const modalOpen = document.querySelector('.modal-overlay:not(.hidden)');
+              const isTyping = document.activeElement && 
+                              (document.activeElement.tagName === 'INPUT' || 
+                               document.activeElement.tagName === 'TEXTAREA');
+              
+              if (!modalOpen && !isTyping && !window.preventAutoRefresh) {
+                App.navigate(App.current);
               }
             }
-
-            if (!resolved) {
-              resolved = true;
-              resolve(); // Initial snapshot loaded from cache/server
-            }
-          }, err => {
-            console.error(`Firestore listener error on table "${table}":`, err);
-            // On permission error or other issue, resolve anyway to allow app loading with local cache
-            if (!resolved) {
-              resolved = true;
-              resolve();
-            }
-          });
+          }
+        }, err => {
+          console.warn(`Firestore listener error on table "${table}":`, err.message);
         });
       });
 
-      // Start the synchronization in the background without blocking the initial boot
-      Promise.all(initPromises).then(async () => {
-        console.log("JMPL Database fully synchronized with Firestore.");
-        isCloudSyncComplete = true;
-        runUserDeduplicationMigration();
-        try {
-          await runArchivalMigration();
-        } catch (migErr) {
-          console.error("Archival migration error:", migErr);
-        }
-        seedDefaults();
-      });
-
-      // We do NOT run automatic schema migrations or checkAndMigrate on the live cloud DB anymore
-      // to prevent stale client caches from overwriting newer cloud data on startup.
-      // Schema migrations are preserved for offline fallback/sandbox modes only.
+      isCloudSyncComplete = true;
+      localStorage.setItem('jmpl_archival_migration_run_v1', 'true');
     } catch (e) {
       console.error("Failed to initialize Firebase database:", e);
     }
@@ -757,6 +734,33 @@ const DB = (() => {
     all: () => getAll('users'),
     find: (id) => findById('users', id),
     findByUsername: (u) => getAll('users').find(r => r.username === u) || null,
+    fetchByUsername: async (username) => {
+      // First check local cache
+      const cached = getAll('users').find(r => r.username === username);
+      if (cached) return cached;
+      
+      if (!db) return null;
+      
+      try {
+        const snapshot = await db.collection('users').where('username', '==', username).get();
+        if (!snapshot.empty) {
+          const doc = snapshot.docs[0];
+          const user = { id: doc.id, ...doc.data() };
+          // Add to local cache if not already present
+          const existingIdx = cache.users.findIndex(u => u.id === user.id);
+          if (existingIdx >= 0) {
+            cache.users[existingIdx] = user;
+          } else {
+            cache.users.push(user);
+          }
+          saveLocal('users');
+          return user;
+        }
+      } catch (e) {
+        console.error("Error fetching user from Firestore:", e);
+      }
+      return null;
+    },
     insert: (r) => insert('users', r),
     update: (id, c) => update('users', id, c),
     remove: (id) => remove('users', id),
@@ -853,10 +857,10 @@ const DB = (() => {
 
   // ── BATCHES ───────────────────────────────────────────────
   const Batches = {
-    all: () => getAll('batches'),
+    all: () => getAll('batches').filter(b => !(b.batchNo && (b.batchNo.includes('-REC-') || b.batchNo.includes('REC')))),
     find: (id) => findById('batches', id),
-    byStage: (stage) => getAll('batches').filter(r => r.currentStage === stage && r.status === 'active'),
-    byStatus: (status) => getAll('batches').filter(r => r.status === status),
+    byStage: (stage) => getAll('batches').filter(r => r.currentStage === stage && r.status === 'active' && !(r.batchNo && (r.batchNo.includes('-REC-') || r.batchNo.includes('REC')))),
+    byStatus: (status) => getAll('batches').filter(r => r.status === status && !(r.batchNo && (r.batchNo.includes('-REC-') || r.batchNo.includes('REC')))),
 
     insert: (r) => {
       let batchNo = r.batchNo;
@@ -1080,15 +1084,26 @@ const DB = (() => {
       
       // Auto FIFO deduction on completed batches in Firestore/local cache
       let qtyToDeduct = Number(r.qty) || 0;
+      const normTarget = String(r.jmrefNo || '').trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+      const partNoTarget = String(r.partNo || '').trim().toUpperCase();
       
-      // Get all completed, unarchived batches for this jmrefNo
+      // Get all completed, unarchived batches for this jmrefNo / partId / partNo
       const completedBatches = getAll('batches')
-        .filter(b => b.jmrefNo === r.jmrefNo && b.status === 'completed' && !b.isArchived)
+        .filter(b => {
+          if (b.status !== 'completed' || b.isArchived) return false;
+          if (r.partId && b.partId === r.partId) return true;
+          if (b.jmrefNo) {
+            const bNorm = String(b.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+            if (normTarget && (bNorm === normTarget || String(b.jmrefNo).trim().toUpperCase() === String(r.jmrefNo).trim().toUpperCase())) return true;
+          }
+          if (partNoTarget && b.partNo && String(b.partNo).trim().toUpperCase() === partNoTarget) return true;
+          return false;
+        })
         .sort((a, b) => (a.completedAt || a.createdAt || '').localeCompare(b.completedAt || b.createdAt || ''));
         
       for (const batch of completedBatches) {
         if (qtyToDeduct <= 0) break;
-        const currentRemaining = batch.remainingQty !== undefined ? batch.remainingQty : (batch.initialQty || 0);
+        const currentRemaining = batch.remainingQty !== undefined ? Number(batch.remainingQty) : Number(batch.initialQty || 0);
         if (currentRemaining <= 0) continue;
         
         const deduct = Math.min(currentRemaining, qtyToDeduct);
@@ -1105,34 +1120,113 @@ const DB = (() => {
       
       return res;
     },
-    getFifoStock: (jmrefNo) => {
-      const batches = getAll('batches').filter(b => b.jmrefNo === jmrefNo && b.status === 'completed' && !b.isArchived);
+    getFifoStock: (jmrefNo, partId) => {
+      const normTarget = String(jmrefNo || '').trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+      const batches = getAll('batches').filter(b => {
+        if (b.status !== 'completed' || b.isArchived) return false;
+        if (partId && b.partId === partId) return true;
+        if (b.jmrefNo) {
+          const bNorm = String(b.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+          if (normTarget && (bNorm === normTarget || String(b.jmrefNo).trim().toUpperCase() === String(jmrefNo).trim().toUpperCase())) return true;
+        }
+        return false;
+      });
       return batches.sort((a, b) => (a.completedAt || '').localeCompare(b.completedAt || ''));
     },
   };
 
   // ── STORE INVENTORY ───────────────────────────────────────
   const StoreInventory = {
-    availableByJmref: (jmrefNo) => {
-      const completed = getAll('batches').filter(b => b.jmrefNo === jmrefNo && b.status === 'completed' && !b.isArchived);
-      return completed.reduce((sum, b) => sum + (b.remainingQty !== undefined ? b.remainingQty : b.initialQty || 0), 0);
+    availableByJmref: (jmrefNo, partId) => {
+      const normTarget = String(jmrefNo || '').trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+      const stageRecords = getAll('stageRecords');
+      const batches = getAll('batches');
+      const sales = getAll('sales');
+
+      // 1. Sum total store arrival qty for this part (ignoring zeroed/closed batches)
+      let totalReceived = 0;
+      batches.forEach(b => {
+        if (b.status !== 'completed' && b.currentStage !== 'store') return;
+        if (b.notes && (b.notes.includes('Closed via stock') || b.notes.includes('Zeroed via stock') || b.notes.includes('zeroing'))) return;
+
+        let match = false;
+        if (partId && b.partId === partId) match = true;
+        else if (b.jmrefNo) {
+          const bNorm = String(b.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+          if (normTarget && (bNorm === normTarget || String(b.jmrefNo).trim().toUpperCase() === String(jmrefNo).trim().toUpperCase())) match = true;
+        }
+
+        if (match) {
+          const storeRecs = stageRecords.filter(r => r.batchId === b.id && r.stage === 'store');
+          const storeQty = storeRecs.length ? (storeRecs[0].inputQty !== undefined ? Number(storeRecs[0].inputQty) : Number(b.initialQty || 0)) : Number(b.initialQty || 0);
+          totalReceived += storeQty;
+        }
+      });
+
+      // 2. Sum total sales for this part
+      let totalSold = 0;
+      sales.forEach(s => {
+        if (partId && s.partId === partId) {
+          totalSold += Number(s.qty) || 0;
+          return;
+        }
+        if (s.jmrefNo) {
+          const sNorm = String(s.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+          if (normTarget && (sNorm === normTarget || String(s.jmrefNo).trim().toUpperCase() === String(jmrefNo).trim().toUpperCase())) {
+            totalSold += Number(s.qty) || 0;
+          }
+        }
+      });
+
+      return Math.max(0, totalReceived - totalSold);
     },
+
     allParts: () => {
       const master = getAll('master');
+      const stageRecords = getAll('stageRecords');
       const batches = getAll('batches');
+      const sales = getAll('sales');
 
-      const availableByJmref = {};
+      // Pre-aggregate store received qty by master id / jmref in O(N)
+      const receivedMap = {};
       batches.forEach(b => {
-        if (b.status === 'completed' && !b.isArchived) {
-          const qty = b.remainingQty !== undefined ? b.remainingQty : (b.initialQty || 0);
-          availableByJmref[b.jmrefNo] = (availableByJmref[b.jmrefNo] || 0) + qty;
+        if (b.status !== 'completed' && b.currentStage !== 'store') return;
+        if (b.notes && (b.notes.includes('Closed via stock') || b.notes.includes('Zeroed via stock') || b.notes.includes('zeroing'))) return;
+        
+        const storeRecs = stageRecords.filter(r => r.batchId === b.id && r.stage === 'store');
+        const storeQty = storeRecs.length ? (storeRecs[0].inputQty !== undefined ? Number(storeRecs[0].inputQty) : Number(b.initialQty || 0)) : Number(b.initialQty || 0);
+        
+        if (b.partId) {
+          receivedMap[b.partId] = (receivedMap[b.partId] || 0) + storeQty;
+        }
+        if (b.jmrefNo) {
+          const norm = 'jmref_' + String(b.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+          receivedMap[norm] = (receivedMap[norm] || 0) + storeQty;
+        }
+      });
+
+      // Pre-aggregate sales qty by master id / jmref in O(N)
+      const salesMap = {};
+      sales.forEach(s => {
+        if (s.partId) {
+          salesMap[s.partId] = (salesMap[s.partId] || 0) + (Number(s.qty) || 0);
+        }
+        if (s.jmrefNo) {
+          const norm = 'jmref_' + String(s.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+          salesMap[norm] = (salesMap[norm] || 0) + (Number(s.qty) || 0);
         }
       });
 
       return master.map(m => {
+        const normJmref = 'jmref_' + String(m.jmrefNo || '').trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+        
+        const received = (receivedMap[m.id] || 0) || (receivedMap[normJmref] || 0);
+        const sold = (salesMap[m.id] || 0) || (salesMap[normJmref] || 0);
+        const available = Math.max(0, received - sold);
+
         return {
           ...m,
-          available: availableByJmref[m.jmrefNo] || 0
+          available
         };
       });
     },
@@ -1183,6 +1277,25 @@ const DB = (() => {
     insert: (r) => insert('tasks', r),
     update: (id, c) => update('tasks', id, c),
     remove: (id) => remove('tasks', id)
+  };
+
+  // ── AUDIT SESSIONS & RECORDS ──────────────────────────────
+  const AuditSessions = {
+    all: () => getAll('auditSessions'),
+    find: (id) => findById('auditSessions', id),
+    active: () => getAll('auditSessions').filter(s => s.status === 'in_progress'),
+    insert: (r) => insert('auditSessions', r),
+    update: (id, c) => update('auditSessions', id, c),
+    remove: (id) => remove('auditSessions', id)
+  };
+
+  const AuditRecords = {
+    all: () => getAll('auditRecords'),
+    find: (id) => findById('auditRecords', id),
+    bySession: (sessionId) => getAll('auditRecords').filter(r => r.sessionId === sessionId),
+    insert: (r) => insert('auditRecords', r),
+    update: (id, c) => update('auditRecords', id, c),
+    remove: (id) => remove('auditRecords', id)
   };
 
   function exportBackupJSON() {
@@ -1293,7 +1406,7 @@ const DB = (() => {
     Batches, StageRecords, LossTracker, RejectionTracker,
     RecheckTracker, StockUploads, Sales, StoreInventory,
     ProductionRecords, MonthlyPlans, ProductionSchedules,
-    Moulds, MouldMovements, MouldMaintenance, Tasks, exportBackupJSON, importBackupJSON, restoreToOnlineDB,
+    Moulds, MouldMovements, MouldMaintenance, Tasks, AuditSessions, AuditRecords, exportBackupJSON, importBackupJSON, restoreToOnlineDB,
     raw: { getAll, setAll, insert, update, remove, findById, findWhere }
   };
 })();

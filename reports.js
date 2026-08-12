@@ -7,7 +7,7 @@
 const ReportsModule = (() => {
 
   const MODULES = [
-    'inventory','sales','production','cryogenic','deflashing',
+    'inventory','store-stock','sales','production','cryogenic','deflashing',
     'trimming','waiting-visual','visual','gauge','rejected','recheck','slob','aging','reprocess','store-aging','daily-summary','analytics'
   ];
 
@@ -78,7 +78,7 @@ const ReportsModule = (() => {
     const master = DB.Master.all();
     const batches = DB.Batches.all();
     const stageRecords = DB.StageRecords.all();
-    const stages = ['production','cryogenic','deflashing','trimming','post-curing','waiting-visual','visual','gauge','quality','store'];
+    const wipStages = ['production','cryogenic','deflashing','trimming','post-curing','waiting-visual','visual','gauge','quality'];
 
     let parts = master.filter(p => {
       if (jmref) {
@@ -92,15 +92,11 @@ const ReportsModule = (() => {
 
     if (!parts.length) return emptyState('No parts found. Add parts in Inventory Master first.');
 
-    const stageHeaders = stages.map(s => STAGE_LABELS[s]);
-    const headers = ['Part No', 'JMREF No', 'Description', ...stageHeaders, 'Total WIP', 'Store (Available)'];
+    const wipHeaders = wipStages.map(s => STAGE_LABELS[s]);
+    const headers = ['Part No', 'JMREF No', 'Description', ...wipHeaders, 'Total WIP', 'Store (Available)'];
 
     const dataRows = parts.map(p => {
-      const stageCounts = stages.map(stage => {
-        if (stage === 'store') {
-          // FIFO-computed available stock
-          return DB.StoreInventory.availableByJmref(p.jmrefNo);
-        }
+      const stageCounts = wipStages.map(stage => {
         // Active batches for this part currently sitting at this stage
         const activeBatches = batches.filter(b =>
           b.partId === p.id && b.currentStage === stage && b.status === 'active'
@@ -117,20 +113,19 @@ const ReportsModule = (() => {
         }, 0);
       });
 
-      // Total WIP = all stages except 'store' (last element)
-      const totalWip = stageCounts.slice(0, stages.length - 1).reduce((s, v) => s + v, 0);
-      const storeAvail = stageCounts[stages.length - 1];
+      // Total WIP = sum of all WIP stages
+      const totalWip = stageCounts.reduce((s, v) => s + v, 0);
+      const storeAvail = DB.StoreInventory.availableByJmref(p.jmrefNo, p.id);
 
       return [p.partNo, p.jmrefNo, p.description, ...stageCounts, totalWip, storeAvail];
     });
 
-    const stageLen = stages.length;
+    const wipLen = wipStages.length;
     const theadCols = headers.map((h, i) => {
       let color = '';
-      if (i >= 3 && i < 3 + stageLen - 1) color = 'var(--accent-blue)';   // WIP stages
-      if (i === 3 + stageLen - 1)          color = 'var(--accent-green)';  // Store
-      if (i === 3 + stageLen)              color = 'var(--accent-teal)';   // Total WIP
-      if (i === 3 + stageLen + 1)          color = 'var(--accent-green)';  // Store avail
+      if (i >= 3 && i < 3 + wipLen) color = 'var(--accent-blue)';   // WIP stages
+      if (i === 3 + wipLen)         color = 'var(--accent-teal)';   // Total WIP
+      if (i === 3 + wipLen + 1)     color = 'var(--accent-green)';  // Store avail
       return `<th${color ? ' style="color:' + color + ';"' : ''}>${h}</th>`;
     }).join('');
 
@@ -140,16 +135,13 @@ const ReportsModule = (() => {
         <td><span class="badge badge-teal" style="cursor:pointer;" title="Click to view batches" onclick="ReportsModule.showPartBatches('${r[1]}', '${r[0]}')">${r[1]}</span></td>
         <td class="text-muted">${r[2]}</td>`;
 
-      const stageCols = r.slice(3, 3 + stageLen).map((v, i) => {
-        const isStore = i === stageLen - 1;
-        const cls = v > 0
-          ? (isStore ? 'font-bold text-success' : 'font-semibold text-blue')
-          : 'text-muted';
+      const stageCols = r.slice(3, 3 + wipLen).map((v) => {
+        const cls = v > 0 ? 'font-semibold text-blue' : 'text-muted';
         return `<td class="${cls}">${v > 0 ? formatNum(v) : '—'}</td>`;
       }).join('');
 
-      const totalWip   = r[3 + stageLen];
-      const storeAvail = r[3 + stageLen + 1];
+      const totalWip   = r[3 + wipLen];
+      const storeAvail = r[3 + wipLen + 1];
       const summaryCols = `
         <td class="font-bold" style="color:var(--accent-teal);">${totalWip > 0 ? formatNum(totalWip) : '—'}</td>
         <td class="font-bold text-success">${storeAvail > 0 ? formatNum(storeAvail) : '—'}</td>`;
@@ -157,7 +149,7 @@ const ReportsModule = (() => {
       return `<tr>${infoCols}${stageCols}${summaryCols}</tr>`;
     }).join('');
 
-    const totals = Array(stageLen + 2).fill(0);
+    const totals = Array(wipLen + 2).fill(0);
     dataRows.forEach(r => {
       for (let i = 3; i < r.length; i++) {
         totals[i - 3] += (r[i] || 0);
@@ -169,8 +161,8 @@ const ReportsModule = (() => {
         <td colspan="3" style="text-align:right;">TOTAL:</td>
         ${totals.map((t, idx) => {
           let style = '';
-          const isStoreAvail = idx === stageLen + 1;
-          const isTotalWip = idx === stageLen;
+          const isTotalWip = idx === wipLen;
+          const isStoreAvail = idx === wipLen + 1;
           if (isStoreAvail) style = ' style="color:var(--accent-green);"';
           else if (isTotalWip) style = ' style="color:var(--accent-teal);"';
           return `<td${style}>${t > 0 ? formatNum(t) : '0'}</td>`;
@@ -185,6 +177,167 @@ const ReportsModule = (() => {
         <table class="data-table">
           <thead><tr>${theadCols}</tr></thead>
           <tbody>${tbodyRows}</tbody>
+        </table>
+      </div>`;
+
+    return { html, headers, dataRows };
+  }
+
+  // ── Render Store Stock Report ──────────────────────────────
+  function renderStoreStock(filters) {
+    const { jmref } = filters;
+    const master = DB.Master.all();
+    const batches = DB.Batches.all();
+    const parts = DB.StoreInventory.allParts();
+
+    let filtered = parts;
+    if (jmref) {
+      const q = jmref.toLowerCase();
+      filtered = filtered.filter(p => 
+        (p.jmrefNo && p.jmrefNo.toLowerCase().includes(q)) ||
+        (p.partNo && p.partNo.toLowerCase().includes(q)) ||
+        (p.tenDigitNo && p.tenDigitNo.toLowerCase().includes(q)) ||
+        (p.description && p.description.toLowerCase().includes(q))
+      );
+    }
+
+    if (!filtered.length) return emptyState('No store stock records found matching filters.');
+
+    // Calculate summary statistics
+    const totalSKUs = filtered.length;
+    const totalStock = filtered.reduce((s, p) => s + (p.available || 0), 0);
+    const totalValuation = filtered.reduce((s, p) => s + ((p.available || 0) * (p.salePrice || 0)), 0);
+    const lowStockCount = filtered.filter(p => (p.available || 0) < 10 && (p.available || 0) > 0).length;
+    const outOfStockCount = filtered.filter(p => (p.available || 0) === 0).length;
+
+    // Helper to get FIFO batches for a part
+    function getPartStoreBatches(p) {
+      if (typeof StoreModule !== 'undefined' && typeof StoreModule.fifoBatches === 'function') {
+        return StoreModule.fifoBatches(p.jmrefNo, p.id);
+      }
+      const normTarget = String(p.jmrefNo || '').trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+      return batches.filter(b => {
+        if (b.status !== 'completed' || b.isArchived) return false;
+        if (b.batchNo && (b.batchNo.includes('-REC-') || b.batchNo.includes('REC'))) return false;
+        if (p.id && b.partId === p.id) return true;
+        if (b.jmrefNo) {
+          const bNorm = String(b.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+          if (normTarget && (bNorm === normTarget || String(b.jmrefNo).trim().toUpperCase() === String(p.jmrefNo).trim().toUpperCase())) return true;
+        }
+        return false;
+      }).sort((a, b) => (a.completedAt || a.createdAt || '').localeCompare(b.completedAt || b.createdAt || ''));
+    }
+
+    const headers = ['#', 'Part No', 'JMREF No', '10 Digit No', 'Description', 'Sale Price (₹)', 'Available Qty (pcs)', 'Valuation (₹)', 'FIFO Batches Breakdown', 'Status'];
+    
+    const dataRows = [];
+    const tableRows = filtered.map((p, idx) => {
+      const available = p.available || 0;
+      const price = p.salePrice || 0;
+      const valuation = available * price;
+      const partBatches = getPartStoreBatches(p);
+      const batchListStr = partBatches.map(b => {
+        const rem = b.remaining !== undefined ? Number(b.remaining) : (b.remainingQty !== undefined ? Number(b.remainingQty) : Number(b.initialQty || 0));
+        return `${b.batchNo} (${formatNum(rem)})`;
+      }).join(', ');
+
+      const statusText = available === 0 ? 'Out of Stock' : (available < 10 ? 'Low Stock' : 'In Stock');
+      let statusBadge = '<span class="badge badge-green">🟢 In Stock</span>';
+      if (available === 0) statusBadge = '<span class="badge badge-red">🔴 Out of Stock</span>';
+      else if (available < 10) statusBadge = '<span class="badge badge-amber">🟡 Low Stock</span>';
+
+      dataRows.push([
+        idx + 1,
+        p.partNo || '—',
+        p.jmrefNo || '—',
+        p.tenDigitNo || '—',
+        p.description || '—',
+        price,
+        available,
+        valuation,
+        batchListStr || '—',
+        statusText
+      ]);
+
+      const batchBadges = partBatches.map(b => {
+        const rem = b.remainingQty !== undefined ? Number(b.remainingQty) : Number(b.initialQty || 0);
+        return `<span class="badge badge-gray" style="font-size:11px; margin:2px 3px 2px 0;"><strong>${b.batchNo}</strong>: <span style="color:var(--accent-green);font-weight:700;">${formatNum(rem)}</span></span>`;
+      }).join('') || '<span class="text-muted text-xs">—</span>';
+
+      return `
+        <tr>
+          <td class="text-muted">${idx + 1}</td>
+          <td class="font-semibold text-blue">${p.partNo || '—'}</td>
+          <td><span class="badge badge-teal font-semibold">${p.jmrefNo || '—'}</span></td>
+          <td class="text-muted text-xs">${p.tenDigitNo || '—'}</td>
+          <td class="text-muted text-sm" style="max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${p.description || ''}">${p.description || '—'}</td>
+          <td style="text-align:right;">₹${price.toFixed(2)}</td>
+          <td style="text-align:right; font-weight:700;" class="${available === 0 ? 'text-danger' : (available < 10 ? 'text-amber' : 'text-success')}">${formatNum(available)}</td>
+          <td style="text-align:right; font-weight:700; color:var(--accent-teal);">₹${Number(valuation).toLocaleString('en-IN', {maximumFractionDigits:2})}</td>
+          <td><div style="display:flex; flex-wrap:wrap; max-width:350px;">${batchBadges}</div></td>
+          <td>${statusBadge}</td>
+        </tr>`;
+    }).join('');
+
+    dataRows.push(['', '', 'TOTAL', '', '', '', totalStock, totalValuation, '', '']);
+
+    const html = `
+      <!-- Store Stock KPI Cards -->
+      <div class="stats-grid mb-6" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px;">
+        <div class="stat-card blue">
+          <div class="stat-label">Total SKUs in Store</div>
+          <div class="stat-value blue">${formatNum(totalSKUs)}</div>
+          <div class="text-xs text-muted mt-1">Finished Goods Catalog</div>
+        </div>
+        <div class="stat-card green">
+          <div class="stat-label">Total Available Stock</div>
+          <div class="stat-value green">${formatNum(totalStock)}</div>
+          <div class="text-xs text-success font-semibold mt-1">Ready for Dispatch</div>
+        </div>
+        <div class="stat-card teal">
+          <div class="stat-label">Total Store Valuation</div>
+          <div class="stat-value teal" style="font-size:20px;">₹${Number(totalValuation).toLocaleString('en-IN', {maximumFractionDigits:2})}</div>
+          <div class="text-xs text-muted mt-1">Based on Master Sale Prices</div>
+        </div>
+        <div class="stat-card amber">
+          <div class="stat-label">Low Stock SKUs (&lt; 10)</div>
+          <div class="stat-value amber">${formatNum(lowStockCount)}</div>
+          <div class="text-xs font-semibold mt-1" style="color:var(--accent-amber);">Replenishment Alert</div>
+        </div>
+        <div class="stat-card red">
+          <div class="stat-label">Out of Stock SKUs</div>
+          <div class="stat-value red">${formatNum(outOfStockCount)}</div>
+          <div class="text-xs text-danger font-semibold mt-1">Zero Store Balance</div>
+        </div>
+      </div>
+
+      <!-- Store Stock Table -->
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Part No</th>
+              <th>JMREF No</th>
+              <th>10 Digit No</th>
+              <th>Description</th>
+              <th style="text-align:right;">Sale Price</th>
+              <th style="text-align:right;">Available Qty</th>
+              <th style="text-align:right;">Total Valuation (₹)</th>
+              <th>FIFO Batches in Store</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${tableRows}
+            <tr class="font-bold text-success" style="background:rgba(16,185,129,0.06); border-top:2px solid var(--border);">
+              <td colspan="5" style="text-align:right; font-weight:800;">GRAND TOTAL:</td>
+              <td></td>
+              <td style="text-align:right; font-weight:800; font-size:14px;">${formatNum(totalStock)} pcs</td>
+              <td style="text-align:right; font-weight:800; font-size:14px; color:var(--accent-teal);">₹${Number(totalValuation).toLocaleString('en-IN', {maximumFractionDigits:2})}</td>
+              <td colspan="2"></td>
+            </tr>
+          </tbody>
         </table>
       </div>`;
 
@@ -440,7 +593,7 @@ const ReportsModule = (() => {
 
   // ── Generic Stage Loss Report ──────────────────────────────
   function renderStageLoss(stage, filters, extraCols=[]) {
-    const { from, to, jmref, vendorId } = filters;
+    const { from, to, jmref, vendorId, rejectionRate } = filters;
     let records = DB.StageRecords.all().filter(r => r.stage === stage);
     
     if (vendorId) {
@@ -456,9 +609,36 @@ const ReportsModule = (() => {
                (batch.partNo || '').toLowerCase().includes(q);
       });
     }
+
+    if (rejectionRate) {
+      records = records.filter(r => {
+        const input = Number(r.inputQty || 0);
+        const loss = Number(r.lossQty || 0);
+        const reprocess = Number(r.reprocessQty || 0);
+        const output = Number(r.outputQty || 0);
+
+        // Total non-conforming defect units (either scrapped loss or sent for reprocessing)
+        const totalDefects = Math.max(loss + reprocess, Math.max(0, input - output));
+        const pct = input > 0 ? (totalDefects / input) * 100 : 0;
+
+        if (rejectionRate === 'zero') {
+          // Strict 0% rejection: zero loss, zero reprocessed, output equals input, and input > 0
+          return totalDefects === 0 && loss === 0 && reprocess === 0 && output >= input && input > 0;
+        } else if (rejectionRate === '10') {
+          return pct >= 10;
+        } else if (rejectionRate === '20') {
+          return pct >= 20;
+        } else if (rejectionRate === '30') {
+          return pct >= 30;
+        } else if (rejectionRate === '50') {
+          return pct >= 50;
+        }
+        return true;
+      });
+    }
     
     records = filterByDateRange(records, 'date', from, to);
-    if (!records.length) return emptyState();
+    if (!records.length) return emptyState('No records found for the selected rejection and date filters.');
 
     // Sort chronologically (oldest to newest) so that cumulative data reads naturally
     records.sort((a, b) => {
@@ -467,11 +647,12 @@ const ReportsModule = (() => {
       return dateA.localeCompare(dateB);
     });
 
-    const headers = ['#','Batch No','JMREF','Part No','Input Qty','Output Qty','Loss Qty','% Loss','Date', ...extraCols];
+    const headers = ['#','Batch No','JMREF','Part No','Input Qty','Output Qty','Loss Qty','% Loss / Defect','Date', ...extraCols];
     const dataRows = records.map((r, i) => {
       const batch = DB.Batches.find(r.batchId) || {};
       const extra = extraCols.map(col => {
         if (col === 'Inspector') return r.inspectorName || '-';
+        if (col === 'Reprocess Qty') return r.reprocessQty || 0;
         if (col === 'Recheck #') return r.iterationNo || '-';
         if (col === 'Vendor') {
           if (r.vendorId) {
@@ -484,28 +665,97 @@ const ReportsModule = (() => {
       });
       const input = r.inputQty || 0;
       const loss = r.lossQty || 0;
-      const pct = input ? ((loss / input) * 100).toFixed(1) + '%' : '0.0%';
+      const reprocess = r.reprocessQty || 0;
+      const totalDefects = Math.max(loss + reprocess, Math.max(0, input - (r.outputQty || 0)));
+      const pct = input ? ((totalDefects / input) * 100).toFixed(1) + '%' : '0.0%';
       return [i+1, batch.batchNo||'', batch.jmrefNo||'', batch.partNo||'', input, r.outputQty||'', loss, pct, (r.date||'').slice(0,10), ...extra];
     });
 
     const totalLoss = records.reduce((s, r) => s + (r.lossQty||0), 0);
+    const totalReprocess = records.reduce((s, r) => s + (r.reprocessQty||0), 0);
     const totalInput = records.reduce((s, r) => s + (r.inputQty || 0), 0);
     const totalOutput = records.reduce((s, r) => s + (r.outputQty || 0), 0);
-    const totalPct = totalInput ? ((totalLoss / totalInput) * 100).toFixed(1) + '%' : '0.0%';
-    const summaryRow = ['', '', '', 'TOTAL:', totalInput, totalOutput, totalLoss, totalPct, '', ...extraCols.map(()=>'')];
+    const totalDefects = Math.max(totalLoss + totalReprocess, Math.max(0, totalInput - totalOutput));
+    const totalPct = totalInput ? ((totalDefects / totalInput) * 100).toFixed(1) + '%' : '0.0%';
+    
+    const summaryExtra = extraCols.map(col => {
+      if (col === 'Reprocess Qty') return totalReprocess;
+      return '';
+    });
+    const summaryRow = ['', '', '', 'TOTAL:', totalInput, totalOutput, totalLoss, totalPct, '', ...summaryExtra];
     dataRows.push(summaryRow);
+
+    const htmlRows = records.map((r, i) => {
+      const batch = DB.Batches.find(r.batchId) || {};
+      const input = r.inputQty || 0;
+      const loss = r.lossQty || 0;
+      const reprocess = r.reprocessQty || 0;
+      const totalDefects = Math.max(loss + reprocess, Math.max(0, input - (r.outputQty || 0)));
+      const pctNum = input ? (totalDefects / input) * 100 : 0;
+      const pctStr = pctNum.toFixed(1) + '%';
+      
+      let badgeClass = 'badge-green';
+      if (pctNum >= 50) badgeClass = 'badge-red font-bold';
+      else if (pctNum >= 30) badgeClass = 'badge-red';
+      else if (pctNum >= 20) badgeClass = 'badge-amber';
+      else if (pctNum >= 10) badgeClass = 'badge-amber';
+      else if (pctNum > 0) badgeClass = 'badge-blue';
+
+      const extraTd = extraCols.map(col => {
+        if (col === 'Inspector') return `<td>${r.inspectorName || '-'}</td>`;
+        if (col === 'Reprocess Qty') return `<td class="${(r.reprocessQty || 0) > 0 ? 'text-warning font-semibold' : 'text-muted'}">${formatNum(r.reprocessQty || 0)}</td>`;
+        if (col === 'Recheck #') return `<td>${r.iterationNo || '-'}</td>`;
+        if (col === 'Vendor') {
+          if (r.vendorId) {
+            const v = DB.Vendors.find(r.vendorId);
+            return `<td>${v ? v.name : '—'}</td>`;
+          }
+          return `<td>In House</td>`;
+        }
+        return `<td>-</td>`;
+      }).join('');
+
+      return `
+        <tr>
+          <td>${i + 1}</td>
+          <td class="font-semibold text-blue">${batch.batchNo || '—'}</td>
+          <td><span class="badge badge-teal">${batch.jmrefNo || '—'}</span></td>
+          <td>${batch.partNo || '—'}</td>
+          <td>${formatNum(input)}</td>
+          <td class="font-semibold text-success">${formatNum(r.outputQty || 0)}</td>
+          <td class="${loss > 0 ? 'text-danger font-semibold' : 'text-muted'}">${formatNum(loss)}</td>
+          <td><span class="badge ${badgeClass}">${pctStr}</span></td>
+          <td class="text-sm text-muted">${(r.date || '').slice(0, 10)}</td>
+          ${extraTd}
+        </tr>`;
+    }).join('');
+
+    const totalRowHtml = `
+      <tr class="font-bold text-danger">
+        <td colspan="4" style="text-align:right;">TOTAL:</td>
+        <td>${formatNum(totalInput)}</td>
+        <td>${formatNum(totalOutput)}</td>
+        <td>${formatNum(totalLoss)}</td>
+        <td>${totalPct}</td>
+        <td></td>
+        ${extraCols.map(col => col === 'Reprocess Qty' ? `<td class="text-warning font-bold">${formatNum(totalReprocess)}</td>` : '<td></td>').join('')}
+      </tr>`;
+
     const html = `<div class="table-wrap"><table class="data-table">
       <thead><tr>${headers.map(th).join('')}</tr></thead>
-      <tbody>${dataRows.map((r,i)=>`<tr class="${i===dataRows.length-1?'font-bold text-danger':''}">${r.map(v=>td(v)).join('')}</tr>`).join('')}</tbody>
+      <tbody>${htmlRows}${totalRowHtml}</tbody>
     </table></div>`;
     return { html, headers, dataRows };
   }
 
   // ── Render Report: Reprocessed Items ─────────────────────
   function renderReprocess(filters) {
-    const { from, to, jmref } = filters;
-    let recs = DB.StageRecords.all().filter(r => r.reprocessQty > 0);
-    recs = filterByDateRange(recs, 'date', from, to);
+    const { from, to, jmref, reprocessDestination } = filters;
+    let recs = DB.StageRecords.all().filter(r => (r.reprocessQty || 0) > 0);
+    
+    if (reprocessDestination) {
+      recs = recs.filter(r => r.reprocessDestination === reprocessDestination);
+    }
     
     if (jmref) {
       const q = jmref.toLowerCase();
@@ -517,19 +767,28 @@ const ReportsModule = (() => {
       });
     }
 
-    if (!recs.length) return emptyState('No reprocessed items found.');
+    recs = filterByDateRange(recs, 'date', from, to);
+    if (!recs.length) return emptyState('No reprocessed items found matching the selected filters.');
+
+    // Sort chronologically (oldest to newest)
+    recs.sort((a, b) => {
+      const dateA = a.createdAt || a.date || '';
+      const dateB = b.createdAt || b.date || '';
+      return dateA.localeCompare(dateB);
+    });
 
     const headers = ['#', 'Original Batch No', 'JMREF No', 'Part No', 'Reprocess Qty', 'Reprocess Destination', 'Processed By', 'Date'];
     const users = DB.Users.all();
+    const stageLabelMap = {
+      cryogenic: 'Cryogenic',
+      trimming: 'Trimming',
+      deflashing: 'Manual DE Flashing (Flash Removal)'
+    };
     
     const dataRows = recs.map((r, i) => {
       const batch = DB.Batches.find(r.batchId) || {};
       const user = users.find(u => u.id === r.recordedBy) || {};
-      const stageLabelMap = {
-        trimming: 'Trimming',
-        cryogenic: 'Cryogenic',
-        deflashing: 'Manual DE Flashing (Flash Removal)'
-      };
+      const destLabel = stageLabelMap[r.reprocessDestination] || r.reprocessDestination || '—';
       const dateStr = r.date ? formatDate(r.date) : '—';
       return [
         i + 1,
@@ -537,19 +796,48 @@ const ReportsModule = (() => {
         batch.jmrefNo || '—',
         batch.partNo || '—',
         r.reprocessQty || 0,
-        stageLabelMap[r.reprocessDestination] || r.reprocessDestination || '—',
+        destLabel,
         user.name || '—',
         dateStr
       ];
     });
 
-    const totalReprocessQty = recs.reduce((s, r) => s + (r.reprocessQty||0), 0);
+    const totalReprocessQty = recs.reduce((s, r) => s + (r.reprocessQty || 0), 0);
     const summaryRow = ['', '', '', 'TOTAL:', totalReprocessQty, '', '', ''];
     dataRows.push(summaryRow);
 
+    const htmlRows = recs.map((r, i) => {
+      const batch = DB.Batches.find(r.batchId) || {};
+      const user = users.find(u => u.id === r.recordedBy) || {};
+      const dest = r.reprocessDestination;
+      const destLabel = stageLabelMap[dest] || dest || '—';
+      let destBadge = 'badge-blue';
+      if (dest === 'trimming') destBadge = 'badge-amber';
+      else if (dest === 'deflashing') destBadge = 'badge-purple';
+
+      return `
+        <tr>
+          <td>${i + 1}</td>
+          <td class="font-semibold text-blue">${batch.batchNo || '—'}</td>
+          <td><span class="badge badge-teal">${batch.jmrefNo || '—'}</span></td>
+          <td>${batch.partNo || '—'}</td>
+          <td class="font-bold text-warning">${formatNum(r.reprocessQty || 0)}</td>
+          <td><span class="badge ${destBadge}">${destLabel}</span></td>
+          <td>${user.name || '—'}</td>
+          <td class="text-sm text-muted">${(r.date || '').slice(0, 10)}</td>
+        </tr>`;
+    }).join('');
+
+    const totalRowHtml = `
+      <tr class="font-bold text-danger">
+        <td colspan="4" style="text-align:right;">TOTAL:</td>
+        <td>${formatNum(totalReprocessQty)}</td>
+        <td colspan="3"></td>
+      </tr>`;
+
     const html = `<div class="table-wrap"><table class="data-table">
       <thead><tr>${headers.map(th).join('')}</tr></thead>
-      <tbody>${dataRows.map((r,i)=>`<tr class="${i===dataRows.length-1?'font-bold text-danger':''}">${r.map(v=>td(v)).join('')}</tr>`).join('')}</tbody>
+      <tbody>${htmlRows}${totalRowHtml}</tbody>
     </table></div>`;
     
     return { html, headers, dataRows };
@@ -2100,9 +2388,34 @@ const ReportsModule = (() => {
         </select>
       </div>`;
 
+    const rejectionRateFilter = `
+      <div class="form-group mb-0">
+        <label class="form-label">Rejection / Loss %</label>
+        <select class="form-control" id="rpt-rejection-rate">
+          <option value="">All Rejection Rates</option>
+          <option value="zero">0% Rejection (No Rejection / Loss)</option>
+          <option value="10">Above 10% Rejection (&ge; 10%)</option>
+          <option value="20">Above 20% Rejection (&ge; 20%)</option>
+          <option value="30">Above 30% Rejection (&ge; 30%)</option>
+          <option value="50">Above 50% Rejection (&ge; 50%)</option>
+        </select>
+      </div>`;
+
+    const reprocessDestFilter = `
+      <div class="form-group mb-0">
+        <label class="form-label">Reprocess Destination</label>
+        <select class="form-control" id="rpt-reprocess-dest">
+          <option value="">All Destinations</option>
+          <option value="cryogenic">Cryogenic</option>
+          <option value="trimming">Trimming</option>
+          <option value="deflashing">Manual DE Flashing (Flash Removal)</option>
+        </select>
+      </div>`;
+
     const filterMap = {
-      reprocess: [jmrefFilter, dateRange].join(''),
+      reprocess: [jmrefFilter, reprocessDestFilter, dateRange].join(''),
       inventory: jmrefFilter,
+      'store-stock': jmrefFilter,
       sales:     [jmrefFilter, dateRange].join(''),
       production:[jmrefFilter, opFilter, prodTypeFilter, dateRange].join(''),
       cryogenic: [jmrefFilter, dateRange].join(''),
@@ -2110,7 +2423,7 @@ const ReportsModule = (() => {
       trimming:  [jmrefFilter, vendorFilter, dateRange].join(''),
       'post-curing':[jmrefFilter, dateRange].join(''),
       'waiting-visual':[jmrefFilter, dateRange].join(''),
-      visual:    [jmrefFilter, dateRange].join(''),
+      visual:    [jmrefFilter, rejectionRateFilter, dateRange].join(''),
       gauge:     [jmrefFilter, dateRange].join(''),
       rejected:  '',
       recheck:   [opFilter, dateRange].join(''),
@@ -2382,6 +2695,8 @@ const ReportsModule = (() => {
       jmref: g('rpt-jmref') || g('rpt-partno'),
       partNo: g('rpt-partno'),
       operatorId: g('rpt-operator'),
+      rejectionRate: g('rpt-rejection-rate'),
+      reprocessDestination: g('rpt-reprocess-dest'),
       pendingStage: g('rpt-pending-stage'),
       pendingTimeframe: g('rpt-pending-timeframe'),
       prodType: g('rpt-prod-type'),
@@ -2419,6 +2734,7 @@ const ReportsModule = (() => {
     switch(reportKey) {
       case 'reprocess':  result = renderReprocess(filters); break;
       case 'inventory':  result = renderInventory(filters); break;
+      case 'store-stock':result = renderStoreStock(filters); break;
       case 'store-aging': result = renderStoreAging(filters); break;
       case 'daily-summary': result = renderDailySummary(filters); break;
       case 'sales':      result = renderSales(filters); break;
@@ -2428,7 +2744,7 @@ const ReportsModule = (() => {
       case 'trimming':   result = renderStageLoss('trimming', filters, ['Vendor']); break;
       case 'post-curing':result = renderStageLoss('post-curing', filters); break;
       case 'waiting-visual':result = renderWaitingVisualReport(filters); break;
-      case 'visual':     result = renderStageLoss('visual', filters, ['Inspector']); break;
+      case 'visual':     result = renderStageLoss('visual', filters, ['Inspector', 'Reprocess Qty']); break;
       case 'gauge':      result = renderStageLoss('gauge', filters); break;
       case 'rejected':   result = renderRejected(); break;
       case 'recheck':    result = renderRecheck(filters); break;
@@ -2470,6 +2786,7 @@ const ReportsModule = (() => {
   const REPORTS = [
     { key:'reprocess',  label:'🔄 Reprocessed Items Report',   desc:'Chronological list of all batches and quantities sent for reprocessing' },
     { key:'inventory',  label:'📦 Inventory Report',           desc:'Current quantity per part at each stage' },
+    { key:'store-stock',label:'🏪 Store Stock Report',         desc:'Finished Goods inventory available in Store with batch breakdown and valuation' },
     { key:'sales',      label:'💰 Sales Report',               desc:'Sales records with date range filter' },
     { key:'production', label:'🏭 Production Report',          desc:'Operator-wise and JMREF-wise production output' },
     { key:'cryogenic',  label:'❄️ Cryogenic Loss Report',      desc:'Loss during cryogenic processing' },
@@ -2559,8 +2876,9 @@ const ReportsModule = (() => {
 
     // Auto-run if no filters needed (e.g. rejected report)
     if (!buildFilters(reportKey)) runReport(reportKey);
-    // Auto-run inventory report immediately (no date filters needed)
+    // Auto-run inventory & store reports immediately (no date filters needed)
     if (reportKey === 'inventory') runReport(reportKey);
+    if (reportKey === 'store-stock') runReport(reportKey);
     if (reportKey === 'pending-batches') runReport(reportKey);
     if (reportKey === 'sub-pending') runReport(reportKey);
     if (reportKey === 'sub-performance') runReport(reportKey);

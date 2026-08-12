@@ -7,16 +7,34 @@ const AIAgentModule = (() => {
   let chatHistory = []; // Stores conversation history: { role: 'user'|'model', parts: [{ text: string }] }
   let voiceOutputEnabled = true;
   let customApiKey = localStorage.getItem('jmpl_gemini_key') || '';
+  let selectedModel = localStorage.getItem('jmpl_gemini_model') || 'auto';
   let recognition = null;
   let isListening = false;
 
+  const CANDIDATE_MODELS = [
+    'gemini-3.5-flash',
+    'gemini-3.5-flash-lite',
+    'gemini-3.6-flash',
+    'gemini-3.1-flash-lite',
+    'gemini-2.0-flash',
+    'gemini-2.0-flash-lite',
+    'gemini-1.5-flash-latest',
+    'gemini-1.5-flash'
+  ];
+
   function getApiKey() {
-    return customApiKey || JMPL_CONFIG.geminiApiKey;
+    return customApiKey || (typeof JMPL_CONFIG !== 'undefined' ? JMPL_CONFIG.geminiApiKey : '');
   }
 
   function setCustomApiKey(key) {
     customApiKey = key.trim();
     localStorage.setItem('jmpl_gemini_key', customApiKey);
+  }
+
+  function changeModel(model) {
+    selectedModel = model;
+    localStorage.setItem('jmpl_gemini_model', model);
+    showToast(`AI Model set to ${model === 'auto' ? 'Auto (Recommended)' : model}`, 'info');
   }
 
   // ── Render Entrypoint ──────────────────────────────────────
@@ -28,10 +46,10 @@ const AIAgentModule = (() => {
       <style>
         .ai-layout {
           display: flex;
-          gap: 24px;
-          height: calc(100vh - 120px);
-          min-height: 500px;
-          max-height: 800px;
+          gap: 20px;
+          height: calc(100vh - 130px);
+          min-height: 520px;
+          max-height: 860px;
         }
         @media (max-width: 900px) {
           .ai-layout {
@@ -41,10 +59,10 @@ const AIAgentModule = (() => {
             max-height: none;
           }
           .ai-chat-card {
-            height: 450px;
+            height: 550px;
           }
           .ai-sidebar-card {
-            height: 350px;
+            height: auto;
           }
         }
         .ai-chat-card {
@@ -52,13 +70,22 @@ const AIAgentModule = (() => {
           display: flex;
           flex-direction: column;
           height: 100%;
+          background: #ffffff;
+          border: 1px solid #e2e8f0;
+          border-radius: 12px;
+          overflow: hidden;
+          box-shadow: 0 4px 16px rgba(15, 23, 42, 0.05);
         }
         .ai-sidebar-card {
           flex: 3;
           display: flex;
           flex-direction: column;
           height: 100%;
+          background: #ffffff;
+          border: 1px solid #e2e8f0;
+          border-radius: 12px;
           overflow-y: auto;
+          box-shadow: 0 4px 16px rgba(15, 23, 42, 0.05);
         }
         .ai-chat-log {
           flex: 1;
@@ -67,13 +94,13 @@ const AIAgentModule = (() => {
           display: flex;
           flex-direction: column;
           gap: 16px;
-          border-bottom: 1px solid var(--border);
-          background-color: rgba(15, 23, 42, 0.2);
+          border-bottom: 1px solid #e2e8f0;
+          background-color: #f8fafc;
         }
         .ai-message-bubble {
           display: flex;
           gap: 12px;
-          max-width: 85%;
+          max-width: 88%;
           align-self: flex-start;
           animation: fadeIn 0.25s ease-out;
         }
@@ -82,100 +109,151 @@ const AIAgentModule = (() => {
           flex-direction: row-reverse;
         }
         .ai-msg-avatar {
-          width: 32px;
-          height: 32px;
+          width: 34px;
+          height: 34px;
           border-radius: 50%;
-          background-color: var(--border);
+          background-color: #e2e8f0;
           display: flex;
           align-items: center;
           justify-content: center;
-          font-size: 16px;
+          font-size: 17px;
           flex-shrink: 0;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.05);
         }
         .ai-message-bubble.user .ai-msg-avatar {
-          background-color: var(--primary);
+          background-color: #2563eb;
+          color: #ffffff;
         }
         .ai-msg-content {
-          background-color: var(--card-bg);
-          border: 1px solid var(--border);
+          background-color: #ffffff;
+          border: 1px solid #cbd5e1;
           border-radius: 12px;
-          padding: 12px 16px;
-          box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+          padding: 14px 18px;
+          box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+          color: #0f172a;
+          word-break: break-word;
         }
         .ai-message-bubble.user .ai-msg-content {
-          background-color: rgba(99, 102, 241, 0.15);
-          border-color: rgba(99, 102, 241, 0.3);
+          background-color: #2563eb;
+          color: #ffffff;
+          border-color: #1d4ed8;
+          border-bottom-right-radius: 2px;
         }
         .ai-msg-sender {
-          font-size: 11px;
-          font-weight: 600;
-          color: var(--text-muted);
+          font-size: 11.5px;
+          font-weight: 700;
+          color: #64748b;
           margin-bottom: 6px;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
         }
         .ai-message-bubble.user .ai-msg-sender {
           text-align: right;
+          color: rgba(255, 255, 255, 0.85);
         }
         .ai-msg-text {
           font-size: 13.5px;
-          line-height: 1.6;
-          color: var(--text-main);
+          line-height: 1.65;
+          color: #1e293b;
+        }
+        .ai-message-bubble.user .ai-msg-text {
+          color: #ffffff;
         }
         .ai-msg-text strong {
-          color: #fff;
+          color: #0f172a;
+          font-weight: 750;
+        }
+        .ai-message-bubble.user .ai-msg-text strong {
+          color: #ffffff;
+          font-weight: 750;
+        }
+        .ai-msg-text h1, .ai-msg-text h2, .ai-msg-text h3, .ai-msg-text h4 {
+          color: #0f172a;
+          font-weight: 750;
+          margin-top: 14px;
+          margin-bottom: 6px;
         }
         .ai-msg-text p {
           margin-bottom: 8px;
+          color: inherit;
         }
         .ai-msg-text ul, .ai-msg-text ol {
-          margin: 6px 0 10px 20px;
+          margin: 6px 0 10px 22px;
+          color: inherit;
         }
         .ai-msg-text li {
           margin-bottom: 4px;
+          color: inherit;
+        }
+        .ai-table-wrap {
+          overflow-x: auto;
+          margin: 12px 0;
+          border-radius: 8px;
+          border: 1px solid #cbd5e1;
         }
         .ai-msg-text table {
           width: 100%;
           border-collapse: collapse;
-          margin: 12px 0;
           font-size: 12.5px;
+          background: #ffffff;
         }
         .ai-msg-text th, .ai-msg-text td {
-          border: 1px solid var(--border);
-          padding: 8px 10px;
+          border: 1px solid #e2e8f0;
+          padding: 8px 12px;
           text-align: left;
         }
         .ai-msg-text th {
-          background-color: rgba(255,255,255,0.03);
-          font-weight: bold;
+          background-color: #f1f5f9;
+          color: #0f172a;
+          font-weight: 700;
+          border-bottom: 2px solid #cbd5e1;
+        }
+        .ai-msg-text tr:nth-child(even) td {
+          background-color: #f8fafc;
+        }
+        .ai-msg-text tr:hover td {
+          background-color: #f1f5f9;
+        }
+        .ai-msg-text code {
+          background-color: #f1f5f9;
+          color: #0f172a;
+          padding: 2px 6px;
+          border-radius: 4px;
+          font-family: monospace;
+          font-size: 12px;
+          border: 1px solid #e2e8f0;
         }
         .ai-input-bar {
           display: flex;
-          gap: 12px;
-          padding: 16px;
-          background-color: var(--card-bg);
+          gap: 10px;
+          padding: 14px 16px;
+          background-color: #ffffff;
           align-items: center;
+          border-top: 1px solid #e2e8f0;
         }
         .ai-suggestions-container {
           display: flex;
           flex-wrap: wrap;
           gap: 8px;
-          padding: 12px 16px;
-          background-color: rgba(255,255,255,0.01);
-          border-bottom: 1px solid var(--border);
+          padding: 10px 16px;
+          background-color: #ffffff;
+          border-bottom: 1px solid #e2e8f0;
         }
         .ai-suggestion-chip {
-          background-color: var(--border);
-          color: var(--text-main);
-          border: 1px solid rgba(255,255,255,0.05);
+          background-color: #f1f5f9;
+          color: #1e293b;
+          border: 1px solid #cbd5e1;
           border-radius: 16px;
           padding: 6px 14px;
-          font-size: 11.5px;
+          font-size: 12px;
+          font-weight: 500;
           cursor: pointer;
           transition: all 0.2s;
         }
         .ai-suggestion-chip:hover {
-          background-color: var(--primary);
-          color: white;
-          border-color: var(--primary);
+          background-color: #2563eb;
+          color: #ffffff;
+          border-color: #2563eb;
         }
         .ai-alert-center {
           display: flex;
@@ -192,14 +270,14 @@ const AIAgentModule = (() => {
           animation: fadeIn 0.3s ease-out;
         }
         .ai-alert-card.warning {
-          background-color: rgba(245, 158, 11, 0.05);
-          border-color: var(--warning);
-          color: #fbbf24;
+          background-color: #fffbeb;
+          border-color: #f59e0b;
+          color: #b45309;
         }
         .ai-alert-card.danger {
-          background-color: rgba(239, 68, 68, 0.05);
-          border-color: var(--danger);
-          color: #f87171;
+          background-color: #fef2f2;
+          border-color: #ef4444;
+          color: #b91c1c;
         }
         .ai-alert-title {
           font-weight: 700;
@@ -298,9 +376,23 @@ const AIAgentModule = (() => {
           <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 6px;">⚙️ AI Settings</h3>
           
           <!-- Text to Speech toggle -->
-          <div class="form-group" style="display:flex; align-items:center; justify-content:between; margin-bottom: 16px;">
+          <div class="form-group" style="display:flex; align-items:center; justify-content:space-between; margin-bottom: 16px;">
             <label class="form-label" style="margin:0; cursor:pointer;" for="voice-toggle-chk">🔊 Voice Output (Read replies)</label>
             <input type="checkbox" id="voice-toggle-chk" style="width: 18px; height: 18px; cursor:pointer;" ${voiceOutputEnabled ? 'checked' : ''} onchange="AIAgentModule.toggleVoice(this.checked)">
+          </div>
+
+          <!-- AI Model Selection -->
+          <div class="form-group" style="margin-bottom: 16px;">
+            <label class="form-label">AI Model</label>
+            <select id="ai-model-select" class="form-control form-control-sm" onchange="AIAgentModule.changeModel(this.value)">
+              <option value="auto" ${selectedModel === 'auto' ? 'selected' : ''}>⚡ Auto (Active: Gemini 3.5 Flash)</option>
+              <option value="gemini-3.5-flash" ${selectedModel === 'gemini-3.5-flash' ? 'selected' : ''}>🚀 Gemini 3.5 Flash (Super Fast & Smart)</option>
+              <option value="gemini-3.5-flash-lite" ${selectedModel === 'gemini-3.5-flash-lite' ? 'selected' : ''}>⚡ Gemini 3.5 Flash-Lite</option>
+              <option value="gemini-3.6-flash" ${selectedModel === 'gemini-3.6-flash' ? 'selected' : ''}>🌟 Gemini 3.6 Flash</option>
+              <option value="gemini-3.1-flash-lite" ${selectedModel === 'gemini-3.1-flash-lite' ? 'selected' : ''}>⚡ Gemini 3.1 Flash-Lite</option>
+              <option value="gemini-2.0-flash" ${selectedModel === 'gemini-2.0-flash' ? 'selected' : ''}>🤖 Gemini 2.0 Flash</option>
+            </select>
+            <p style="font-size:10.5px; color:var(--text-muted); margin-top:4px;">Auto connects directly to active supported Gemini models.</p>
           </div>
 
           <!-- Custom API Key override -->
@@ -431,11 +523,35 @@ const AIAgentModule = (() => {
     }
   }
 
-  function saveApiKey() {
+  async function saveApiKey() {
     const input = document.getElementById('custom-api-key');
-    if (input) {
-      setCustomApiKey(input.value);
-      showToast("Gemini key settings updated", "success");
+    if (!input) return;
+    const keyVal = input.value.trim();
+    setCustomApiKey(keyVal);
+
+    if (!keyVal) {
+      showToast("Reset to default system Gemini key", "info");
+      return;
+    }
+
+    // Quick validation check
+    const btn = event?.target;
+    const origText = btn ? btn.textContent : 'Save';
+    if (btn) { btn.disabled = true; btn.textContent = 'Testing...'; }
+
+    try {
+      const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${keyVal}`);
+      if (resp.ok) {
+        showToast("✅ Gemini API Key connected and verified successfully!", "success");
+      } else {
+        const errJson = await resp.json().catch(() => ({}));
+        const msg = errJson.error?.message || "Invalid or restricted API Key";
+        showToast("⚠️ Key saved, but Google returned: " + msg, "warning");
+      }
+    } catch (e) {
+      showToast("Gemini key saved", "success");
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = origText; }
     }
   }
 
@@ -587,6 +703,107 @@ const AIAgentModule = (() => {
   }
 
   // ── Gemini Communication ──────────────────────────────────
+  async function executeGeminiRequest(apiKey, modelName, contents, systemInstruction) {
+    const cleanModel = modelName.replace(/^models\//, '');
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey}`;
+    
+    const payload = {
+      contents: contents,
+      generationConfig: {
+        temperature: 0.15
+      }
+    };
+
+    if (systemInstruction) {
+      payload.systemInstruction = {
+        parts: [{ text: systemInstruction }]
+      };
+    }
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    return response;
+  }
+
+  async function callGeminiWithAutoFallback(apiKey, contents, systemInstruction) {
+    const modelsToTry = [];
+    if (selectedModel && selectedModel !== 'auto') {
+      modelsToTry.push(selectedModel);
+    }
+    CANDIDATE_MODELS.forEach(m => {
+      if (!modelsToTry.includes(m)) modelsToTry.push(m);
+    });
+
+    let lastError = null;
+
+    for (const model of modelsToTry) {
+      try {
+        const response = await executeGeminiRequest(apiKey, model, contents, systemInstruction);
+        if (response.ok) {
+          const resJson = await response.json();
+          const reply = resJson.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (reply) {
+            console.log(`[JMPL AI] Successfully connected using model: ${model}`);
+            return { ok: true, text: reply, modelUsed: model };
+          }
+        }
+
+        const errJson = await response.json().catch(() => ({}));
+        const errMsg = errJson.error?.message || response.statusText || 'Unknown error';
+        lastError = new Error(errMsg);
+
+        // If error is 404 / model not supported for generateContent, continue to next candidate
+        if (response.status === 404 || errMsg.toLowerCase().includes('not found') || errMsg.toLowerCase().includes('not supported') || errMsg.toLowerCase().includes('call modelservice.listmodels')) {
+          console.warn(`[JMPL AI] Model ${model} not available (${errMsg}), trying next candidate model...`);
+          continue;
+        }
+
+        // If error is authentication or invalid key, stop immediately
+        if (response.status === 401 || response.status === 403 || errMsg.toLowerCase().includes('api key') || errMsg.toLowerCase().includes('invalid authentication')) {
+          throw new Error("Authentication Error: The Gemini API Key is invalid, restricted, or expired. Please check your API key in the AI Settings panel.");
+        }
+      } catch (err) {
+        lastError = err;
+        if (err.message && (err.message.toLowerCase().includes('api key') || err.message.toLowerCase().includes('authentication'))) {
+          throw err;
+        }
+      }
+    }
+
+    // Dynamic discovery fallback: query ListModels API
+    try {
+      console.log("[JMPL AI] Attempting dynamic model discovery via ListModels...");
+      const listResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+      if (listResp.ok) {
+        const listData = await listResp.json();
+        const available = (listData.models || [])
+          .filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
+          .map(m => m.name.replace(/^models\//, ''));
+
+        if (available.length > 0) {
+          const dynamicModel = available[0];
+          console.log(`[JMPL AI] Discovered supported model: ${dynamicModel}, executing request...`);
+          const dynResp = await executeGeminiRequest(apiKey, dynamicModel, contents, systemInstruction);
+          if (dynResp.ok) {
+            const dynJson = await dynResp.json();
+            const reply = dynJson.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (reply) {
+              return { ok: true, text: reply, modelUsed: dynamicModel };
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[JMPL AI] Dynamic discovery failed:", e);
+    }
+
+    throw lastError || new Error("No supported Gemini model found for this API key. Please check your API key permissions in Google AI Studio.");
+  }
+
   async function sendMessage() {
     const input = document.getElementById('ai-query-input');
     if (!input) return;
@@ -607,7 +824,7 @@ const AIAgentModule = (() => {
     try {
       const apiKey = getApiKey();
       if (!apiKey) {
-        throw new Error("API Key is missing. Enter a Gemini API Key in the settings sidebar.");
+        throw new Error("API Key is missing. Enter a valid Gemini API Key in the settings sidebar.");
       }
 
       const context = compileDataContext();
@@ -624,37 +841,11 @@ ${JSON.stringify(context, null, 2)}
 </DATA>
 `;
 
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          systemInstruction: {
-            parts: [{ text: systemInstruction }]
-          },
-          contents: chatHistory,
-          generationConfig: {
-            temperature: 0.15
-          }
-        })
-      });
+      const result = await callGeminiWithAutoFallback(apiKey, chatHistory, systemInstruction);
 
       removeTypingIndicator(typingId);
 
-      if (!response.ok) {
-        let errMsg = "Error communication with Gemini API.";
-        try {
-          const errJson = await response.json();
-          errMsg = errJson.error?.message || errMsg;
-        } catch (e) {}
-        
-        if (response.status === 401 || errMsg.toLowerCase().includes("invalid authentication credentials") || errMsg.toLowerCase().includes("api key")) {
-          errMsg = "Authentication Error: The pre-configured Gemini API Key is invalid, expired, or restricted. Please enter a valid Gemini API Key in the 'AI Settings' panel on the right.";
-        }
-        throw new Error(errMsg);
-      }
-
-      const resJson = await response.json();
-      const aiReply = resJson.candidates?.[0]?.content?.parts?.[0]?.text || "I was unable to formulate a response.";
+      const aiReply = result.text || "I was unable to formulate a response.";
 
       appendMessage('model', aiReply);
       
@@ -752,10 +943,10 @@ ${JSON.stringify(context, null, 2)}
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
-      if (line.startsWith('|')) {
+      if (line.startsWith('|') && line.endsWith('|')) {
         if (!inTable) {
           inTable = true;
-          tableHtml = '<table><thead>';
+          tableHtml = '<div class="ai-table-wrap"><table><thead>';
         }
 
         const cells = line.split('|').slice(1, -1).map(c => c.trim());
@@ -769,30 +960,33 @@ ${JSON.stringify(context, null, 2)}
       } else {
         if (inTable) {
           inTable = false;
-          tableHtml += '</tbody></table>';
+          tableHtml += '</tbody></table></div>';
           newLines.push(tableHtml);
         }
         newLines.push(lines[i]);
       }
     }
     if (inTable) {
-      tableHtml += '</tbody></table>';
+      tableHtml += '</tbody></table></div>';
       newLines.push(tableHtml);
     }
 
     html = newLines.join('\n');
 
-    // Headers
-    html = html.replace(/^### (.*$)/gim, '<h4 style="margin-top:12px; margin-bottom:6px; font-weight:700;">$1</h4>');
-    html = html.replace(/^## (.*$)/gim, '<h3 style="margin-top:16px; margin-bottom:8px; font-weight:700; border-bottom:1px solid var(--border); padding-bottom:4px; color:#f8fafc;">$1</h3>');
-    html = html.replace(/^# (.*$)/gim, '<h2 style="margin-top:20px; margin-bottom:10px; font-weight:800; color:#fff;">$1</h2>');
+    // Headers with strong dark contrast
+    html = html.replace(/^### (.*$)/gim, '<h4 style="margin-top:12px; margin-bottom:6px; font-weight:700; color:#0f172a;">$1</h4>');
+    html = html.replace(/^## (.*$)/gim, '<h3 style="margin-top:16px; margin-bottom:8px; font-weight:700; border-bottom:1px solid #e2e8f0; padding-bottom:4px; color:#0f172a;">$1</h3>');
+    html = html.replace(/^# (.*$)/gim, '<h2 style="margin-top:20px; margin-bottom:10px; font-weight:800; color:#0f172a;">$1</h2>');
 
     // Bold / Italic
-    html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/\*\*(.*?)\*\*/g, '<strong style="font-weight:750; color:inherit;">$1</strong>');
     html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
 
+    // Inline Code
+    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
     // Lists
-    html = html.replace(/^\s*-\s+(.*$)/gim, '<li>$1</li>');
+    html = html.replace(/^\s*[-*]\s+(.*$)/gim, '<li>$1</li>');
     html = html.replace(/(<li>.*<\/li>)/gim, '<ul>$1</ul>');
     html = html.replace(/<\/ul>\s*<ul>/g, ''); // Join consecutive ul items
 
@@ -809,6 +1003,7 @@ ${JSON.stringify(context, null, 2)}
     sendMessage,
     toggleVoice,
     saveApiKey,
+    changeModel,
     askSuggestion
   };
 })();

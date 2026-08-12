@@ -5,8 +5,11 @@
 const Auth = (() => {
   const SESSION_KEY = 'jmpl_session';
 
-  function login(username, password) {
-    const user = DB.Users.findByUsername(username);
+  async function login(username, password) {
+    let user = DB.Users.findByUsername(username);
+    if (!user && DB.Users.fetchByUsername) {
+      user = await DB.Users.fetchByUsername(username);
+    }
     if (!user) return { ok: false, error: 'User not found' };
     if (!user.active) return { ok: false, error: 'Account is disabled' };
     if (user.password !== password) return { ok: false, error: 'Incorrect password' };

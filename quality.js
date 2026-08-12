@@ -443,6 +443,7 @@ const QualityModule = (() => {
       content.innerHTML = pendingTab(batches);
       const inp = document.getElementById('qf-pending-search');
       if (inp) {
+        inp.value = val;
         inp.focus();
         inp.setSelectionRange(inp.value.length, inp.value.length);
       }
@@ -451,4 +452,5 @@ const QualityModule = (() => {
 
   return { render, openPass, calcPassLoss, passBatch, openReject, rejectBatch, openRecheck, calcRecheckLoss, sendRecheck, filterRechecks, filterRejects, filterPending };
 })();
+window.QualityModule = QualityModule;
 

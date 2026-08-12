@@ -635,6 +635,10 @@ const StockModule = (() => {
             activeBatches.forEach(b => {
               DB.Batches.update(b.id, {
                 status: 'completed',
+                currentStage: 'store',
+                initialQty: 0,
+                remainingQty: 0,
+                isArchived: true,
                 completedAt: timeISO,
                 notes: 'Closed via stock adjustment zeroing'
               });
@@ -645,6 +649,17 @@ const StockModule = (() => {
                 outputQty: 0,
                 lossQty: 0,
                 movedTo: 'store',
+                movedFrom: item.stage,
+                date: dateInput,
+                recordedBy: session && session.userId,
+                notes: 'Zeroed via stock adjustment'
+              });
+              DB.StageRecords.insert({
+                batchId: b.id,
+                stage: 'store',
+                inputQty: 0,
+                outputQty: 0,
+                lossQty: 0,
                 movedFrom: item.stage,
                 date: dateInput,
                 recordedBy: session && session.userId,

@@ -481,6 +481,7 @@ const CryogenicModule = (() => {
       content.innerHTML = pendingTab(batches);
       const inp = document.getElementById('cryo-pending-search');
       if (inp) {
+        inp.value = val;
         inp.focus();
         inp.setSelectionRange(inp.value.length, inp.value.length);
       }
@@ -489,3 +490,4 @@ const CryogenicModule = (() => {
 
   return { render, openProcess, calcLoss, process, openReject, rejectBatch, filterHistory, filterPending, updateDynamicBatchNo, onDestinationChange };
 })();
+window.CryogenicModule = CryogenicModule;
