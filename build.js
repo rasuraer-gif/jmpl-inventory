@@ -22,6 +22,7 @@ const filesToCopy = [
   'production.js',
   'cryogenic.js',
   'deflashing.js',
+  'waiting-trimming.js',
   'trimming.js',
   'post-curing.js',
   'waiting-visual.js',

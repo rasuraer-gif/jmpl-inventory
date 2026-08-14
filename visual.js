@@ -233,6 +233,7 @@ const VisualModule = (() => {
             <select id="vis-reprocess-destination" class="form-control" onchange="VisualModule.onDestinationChange()">
               <option value="cryogenic">Cryogenic</option>
               <option value="deflashing">Flash Removal (DE Flashing)</option>
+              <option value="waiting-trimming">Waiting for Trimming</option>
               <option value="trimming">Trimming</option>
             </select>
           </div>

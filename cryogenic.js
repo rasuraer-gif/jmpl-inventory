@@ -155,6 +155,7 @@ const CryogenicModule = (() => {
           <div class="form-group"><label class="form-label">Loss Quantity (Auto)</label><input type="text" id="cryo-loss-qty" class="form-control" readonly style="color:var(--accent-red);font-weight:700;"></div>
           <div class="form-group"><label class="form-label">Destination <span class="required">*</span></label>
             <select id="cryo-destination" class="form-control" onchange="CryogenicModule.onDestinationChange()">
+              <option value="waiting-trimming">Waiting for Trimming</option>
               <option value="trimming">Trimming</option>
               <option value="deflashing">Flash Removal (DE Flashing)</option>
               <option value="post-curing">Post Curing</option>
@@ -274,7 +275,7 @@ const CryogenicModule = (() => {
     document.getElementById('cryo-output-qty').value = '';
     document.getElementById('cryo-loss-qty').value = '';
     document.getElementById('cryo-notes').value = '';
-    document.getElementById('cryo-destination').value = 'trimming';
+    document.getElementById('cryo-destination').value = 'waiting-trimming';
     onDestinationChange();
     document.getElementById('cryo-process-modal').classList.remove('hidden');
   }

@@ -193,6 +193,7 @@ const DeflashingModule = (() => {
             <div class="form-group" style="flex:1;">
               <label class="form-label">Destination <span class="required">*</span></label>
               <select id="de-destination" class="form-control" onchange="DeflashingModule.onDestinationChange()">
+                <option value="waiting-trimming">Waiting for Trimming</option>
                 <option value="trimming">Trimming</option>
                 <option value="cryogenic">Cryogenic</option>
                 <option value="post-curing">Post Curing</option>
@@ -338,7 +339,7 @@ const DeflashingModule = (() => {
     }
 
     document.getElementById('de-batch-info').innerHTML = `<strong>${b.batchNo}</strong> — ${b.jmrefNo}<br><span class="text-muted text-sm">Input Qty: <strong>${formatNum(inputQty)}</strong></span>`;
-    document.getElementById('de-destination').value = 'trimming';
+    document.getElementById('de-destination').value = 'waiting-trimming';
     onDestinationChange();
     document.getElementById('de-output-qty').value = '';
     document.getElementById('de-loss-qty').value = '';

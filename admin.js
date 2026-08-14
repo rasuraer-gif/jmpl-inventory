@@ -11,6 +11,7 @@ const AdminModule = (() => {
         { key: 'production', label: 'Production / Moulding' },
         { key: 'cryogenic', label: 'Cryogenic' },
         { key: 'deflashing', label: 'Flash Removal (DE Flashing)' },
+        { key: 'waiting-trimming', label: 'Waiting for Trimming' },
         { key: 'trimming', label: 'Trimming' },
         { key: 'post-curing', label: 'Post Curing' },
         { key: 'waiting-visual', label: 'Waiting for Visual inspection' },

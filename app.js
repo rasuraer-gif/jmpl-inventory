@@ -42,6 +42,7 @@ const STAGE_LABELS = {
   production: 'Moulding',
   cryogenic: 'Cryogenic',
   deflashing: 'Manual DE Flashing',
+  'waiting-trimming': 'Waiting for Trimming',
   trimming: 'Trimming',
   'post-curing': 'Post Curing',
   'waiting-visual': 'Waiting for Visual',
@@ -434,6 +435,7 @@ const NAV = [
   { id:'production', label:'Production',          icon:'🏭', module:'production',section:'dept', perm:'production' },
   { id:'cryogenic',  label:'Cryogenic',           icon:'❄️', module:'cryogenic', section:'dept', perm:'cryogenic' },
   { id:'deflashing', label:'Flash Removal',       icon:'🔧', module:'deflashing',section:'dept', perm:'deflashing' },
+  { id:'waiting-trimming', label:'Waiting for Trimming', icon:'⏳', module:'waiting-trimming', section:'dept', perm:'waiting-trimming' },
   { id:'trimming',   label:'Trimming',            icon:'✂️', module:'trimming',  section:'dept', perm:'trimming' },
   { id:'post-curing', label:'Post Curing',          icon:'🔥', module:'post-curing',section:'dept', perm:'post-curing' },
   { id:'waiting-visual', label:'Waiting for Visual inspection', icon:'⏳', module:'waiting-visual',section:'dept', perm:'waiting-visual' },
@@ -503,6 +505,7 @@ const App = (() => {
     production: () => ProductionModule?.render(),
     cryogenic:  () => CryogenicModule?.render(),
     deflashing: () => DeflashingModule?.render(),
+    'waiting-trimming': () => WaitingTrimmingModule?.render(),
     trimming:   () => TrimmingModule?.render(),
     'post-curing': () => PostCuringModule?.render(),
     'waiting-visual': () => WaitingVisualModule?.render(),
@@ -554,7 +557,7 @@ const App = (() => {
 
   const PAGE_TITLES = {
     dashboard:'Dashboard', master:'Inventory Master', 'mould-tracking':'Mould Tracking', production:'Production',
-    cryogenic:'Cryogenic', deflashing:'Flash Removal', trimming:'Trimming',
+    cryogenic:'Cryogenic', deflashing:'Flash Removal', 'waiting-trimming':'Waiting for Trimming', trimming:'Trimming',
     visual:'Visual Inspection', gauge:'Gauge Inspection', quality:'Quality Final',
     'post-curing':'Post Curing',
     'waiting-visual':'Waiting for Visual inspection',

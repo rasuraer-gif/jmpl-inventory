@@ -212,6 +212,7 @@ const ProductionModule = (() => {
                 <option value="production">Production</option>
                 <option value="cryogenic">Cryogenic</option>
                 <option value="deflashing">Manual DE Flashing</option>
+                <option value="waiting-trimming">Waiting for Trimming</option>
                 <option value="trimming">Trimming</option>
               </select>
             </div>
@@ -344,6 +345,7 @@ const ProductionModule = (() => {
               <select id="move-destination" class="form-control" onchange="ProductionModule.onDestinationChange()">
                 <option value="cryogenic">Cryogenic</option>
                 <option value="deflashing">Manual DE Flashing</option>
+                <option value="waiting-trimming">Waiting for Trimming</option>
                 <option value="trimming">Trimming</option>
                 <option value="post-curing">Post Curing</option>
               </select>
@@ -852,6 +854,7 @@ const ProductionModule = (() => {
         destSelect.innerHTML = `
           <option value="cryogenic">Cryogenic</option>
           <option value="deflashing">Manual DE Flashing</option>
+          <option value="waiting-trimming">Waiting for Trimming</option>
           <option value="trimming">Trimming</option>
           <option value="visual">Visual Inspection</option>
         `;
@@ -861,6 +864,7 @@ const ProductionModule = (() => {
           <option value="production">Production</option>
           <option value="cryogenic">Cryogenic</option>
           <option value="deflashing">Manual DE Flashing</option>
+          <option value="waiting-trimming">Waiting for Trimming</option>
           <option value="trimming">Trimming</option>
           <option value="visual">Visual Inspection</option>
         `;
@@ -1042,6 +1046,17 @@ const ProductionModule = (() => {
     const notes = document.getElementById('prod-notes')?.value.trim() || '';
     const session = Auth.getSession();
     
+    let defaultNotes = '';
+    if (type === 'subcontractor') {
+      const sub = DB.Subcontractors.find(subId);
+      const subName = sub ? sub.name : 'Unknown';
+      defaultNotes = `Subcontractor initial batch (Sub: ${subName})`;
+    } else {
+      const op = DB.Operators.find(opId);
+      const opName = op ? op.name : 'Unknown';
+      defaultNotes = `In-House initial batch (Op: ${opName})`;
+    }
+
     updateDynamicBatchNo();
     const batchNo = document.getElementById('prod-batch-no')?.value;
     if (!batchNo) { showToast('Batch No could not be generated. Check fields.', 'error'); return; }
@@ -1068,6 +1083,7 @@ const ProductionModule = (() => {
       recheckCount: 0,
       mouldNo,
       vendorId: vendorId || '',
+      notes: notes || defaultNotes,
       internalBatchNo: DB.Batches.nextInternalBatchNo()
     });
     
@@ -1084,7 +1100,7 @@ const ProductionModule = (() => {
         movedFrom: 'production',
         date: prodDate,
         recordedBy: session?.userId,
-        notes: notes || (type === 'subcontractor' ? 'Subcontractor initial batch' : 'In-house initial batch with subcontractor dispatch')
+        notes: notes || defaultNotes
       });
     }
 

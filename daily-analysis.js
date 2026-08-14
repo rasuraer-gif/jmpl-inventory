@@ -18,6 +18,7 @@ const DailyAnalysisModule = (() => {
     production: 'Moulding',
     cryogenic: 'Cryogenic',
     deflashing: 'Manual DE Flashing',
+    'waiting-trimming': 'Waiting for Trimming',
     trimming: 'Trimming',
     'post-curing': 'Post Curing',
     'waiting-visual': 'Waiting for Visual',
@@ -27,7 +28,7 @@ const DailyAnalysisModule = (() => {
     store: 'Store'
   };
 
-  const STAGE_ORDER = ['quality', 'gauge', 'visual', 'waiting-visual', 'post-curing', 'trimming', 'deflashing', 'cryogenic', 'production'];
+  const STAGE_ORDER = ['quality', 'gauge', 'visual', 'waiting-visual', 'post-curing', 'trimming', 'waiting-trimming', 'deflashing', 'cryogenic', 'production'];
 
   function normJmref(val) {
     if (val == null) return '';

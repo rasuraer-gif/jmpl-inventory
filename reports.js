@@ -12,7 +12,7 @@ const ReportsModule = (() => {
   ];
 
   const STAGE_LABELS = {
-    production:'Production', cryogenic:'Cryogenic', deflashing:'Manual DE Flashing',
+    production:'Production', cryogenic:'Cryogenic', deflashing:'Manual DE Flashing', 'waiting-trimming':'Waiting for Trimming',
     trimming:'Trimming', 'post-curing':'Post Curing', 'waiting-visual':'Waiting for Visual', visual:'Visual', gauge:'Gauge', quality:'Quality Final', store:'Store'
   };
 
@@ -78,7 +78,7 @@ const ReportsModule = (() => {
     const master = DB.Master.all();
     const batches = DB.Batches.all();
     const stageRecords = DB.StageRecords.all();
-    const wipStages = ['production','cryogenic','deflashing','trimming','post-curing','waiting-visual','visual','gauge','quality'];
+    const wipStages = ['production','cryogenic','deflashing','waiting-trimming','trimming','post-curing','waiting-visual','visual','gauge','quality'];
 
     let parts = master.filter(p => {
       if (jmref) {

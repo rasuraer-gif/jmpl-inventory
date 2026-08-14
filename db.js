@@ -63,6 +63,14 @@ const DB = (() => {
   // Helper to load localStorage cache into memory on startup
   function loadLocalCache() {
     const isLocalBackup = localStorage.getItem('jmpl_db_is_local_backup') === 'true';
+    if (!isLocalBackup) {
+      // Wiping local storage cache keys to prevent stale sync issues
+      for (const key of Object.keys(cache)) {
+        localStorage.removeItem('jmpl_' + key);
+        localBackupData[key] = [];
+      }
+      return;
+    }
     for (const key of Object.keys(cache)) {
       try {
         const data = localStorage.getItem(PREFIX + key);
@@ -86,7 +94,10 @@ const DB = (() => {
 
   // Save specific collection to localStorage
   function saveLocal(table) {
-    localStorage.setItem(PREFIX + table, JSON.stringify(cache[table]));
+    const isLocalBackup = localStorage.getItem('jmpl_db_is_local_backup') === 'true';
+    if (isLocalBackup) {
+      localStorage.setItem(PREFIX + table, JSON.stringify(cache[table]));
+    }
   }
 
   // Generate ID
@@ -132,26 +143,15 @@ const DB = (() => {
       const firestoreInstance = firebase.firestore();
       
       // Clear persistence to wipe out any old cached offline writes from the browser
-      // NOTE: Disabled clearPersistence on startup because it wipes IndexedDB cache, 
-      // defeating offline loading and forcing full-network fetches on every boot.
-      /*
+      // Portal should work strictly with the online database.
       try {
         await firestoreInstance.clearPersistence();
         console.log("Firestore offline persistence cleared successfully.");
       } catch (err) {
         console.warn("Failed to clear Firestore persistence:", err);
       }
-      */
       
       db = firestoreInstance;
-
-      // Enable offline persistence in Firestore (handles cache sync and offline queue)
-      try {
-        await db.enablePersistence({ synchronizeTabs: true });
-        console.log("Firestore offline persistence enabled.");
-      } catch (err) {
-        console.warn("Firestore offline persistence failed to enable:", err.code);
-      }
 
       // 3. Set up listeners for all collections in background
       const collections = Object.keys(cache);
@@ -574,7 +574,7 @@ const DB = (() => {
       }
       
       primaryAdmin.name = 'Administrator';
-      primaryAdmin.password = primaryAdmin.password || 'admin123';
+      primaryAdmin.password = primaryAdmin.password || 'Ras9x3t1*';
       primaryAdmin.role = 'admin';
       primaryAdmin.permissions = ['admin','master','production','cryogenic','deflashing','trimming','post-curing','waiting-visual','visual','gauge','quality','store','stock','report_inventory','report_sales','report_production','report_cryogenic','report_deflashing','report_trimming','report_post_curing','report_waiting_visual','report_visual','report_gauge','report_rejected','report_recheck'];
       primaryAdmin.active = true;
@@ -710,9 +710,9 @@ const DB = (() => {
 
   // ── Seed default admin ────────────────────────────────────
   function seedDefaults() {
-    // If we are in online mode but initial cloud sync is not done yet, wait
-    if (typeof firebase !== 'undefined' && localStorage.getItem('jmpl_db_is_local_backup') !== 'true' && !isCloudSyncComplete) {
-      console.log("[Seeding] Postponing default seeding until initial cloud sync completes.");
+    const isLocalBackup = localStorage.getItem('jmpl_db_is_local_backup') === 'true';
+    if (!isLocalBackup) {
+      // In online Firestore mode, the database already contains seeded user accounts.
       return;
     }
     const users = getAll('users');
@@ -720,7 +720,7 @@ const DB = (() => {
       insert('users', {
         name: 'Administrator',
         username: 'admin',
-        password: 'admin123',
+        password: 'Ras9x3t1*',
         role: 'admin',
         permissions: ['admin','master','production','cryogenic','deflashing','trimming','post-curing','waiting-visual','visual','gauge','quality','store','stock','report_inventory','report_sales','report_production','report_cryogenic','report_deflashing','report_trimming','report_post_curing','report_waiting_visual','report_visual','report_gauge','report_rejected','report_recheck'],
         active: true

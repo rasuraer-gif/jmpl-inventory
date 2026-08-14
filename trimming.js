@@ -5,6 +5,7 @@ const TrimmingModule = (() => {
   let _activeBatch = null;
   let historySearch = '';
   let pendingSearch = '';
+  let vendorFilter = '';
 
   function getInputQty(batchId) {
     const recs = DB.StageRecords.all().filter(r => r.batchId === batchId && r.movedTo === 'trimming');
@@ -14,6 +15,8 @@ const TrimmingModule = (() => {
   }
   function render() {
     pendingSearch = '';
+    historySearch = '';
+    vendorFilter = '';
     const el = document.getElementById('content');
     const batches = DB.Batches.byStage('trimming');
     const history = DB.StageRecords.byStage('trimming');
@@ -44,21 +47,53 @@ const TrimmingModule = (() => {
       });
     });
   }
+
+  function vendorFilterDropdown(currentVal) {
+    const trimmingVendors = DB.Vendors.byDept('trimming');
+    const options = trimmingVendors.map(v => `<option value="${v.id}" ${v.id === currentVal ? 'selected' : ''}>${v.name}</option>`).join('');
+    return `
+      <select id="trim-vendor-filter" class="form-control form-control-sm" style="max-width: 180px; height: 32px; padding: 4px 8px; margin: 0;" onchange="TrimmingModule.filterByVendor(this.value)">
+        <option value="" ${currentVal === '' ? 'selected' : ''}>All Vendors</option>
+        <option value="inhouse" ${currentVal === 'inhouse' ? 'selected' : ''}>In-House</option>
+        ${options}
+      </select>
+    `;
+  }
+
+  function filterByVendor(val) {
+    vendorFilter = val;
+    const activeTabBtn = document.querySelector('#trim-tabs .tab-btn.active');
+    const tabName = activeTabBtn ? activeTabBtn.dataset.tab : 'pending';
+    const batches = DB.Batches.byStage('trimming');
+    document.getElementById('trim-content').innerHTML = tabName === 'pending' ? pendingTab(batches) : historyTab();
+  }
+
   function pendingTab(batches) {
     let filtered = batches;
+    if (vendorFilter) {
+      if (vendorFilter === 'inhouse') {
+        filtered = filtered.filter(b => !b.vendorId || b.productionType === 'inhouse');
+      } else {
+        filtered = filtered.filter(b => b.vendorId === vendorFilter);
+      }
+    }
     if (pendingSearch) {
       const q = pendingSearch.toLowerCase();
-      filtered = batches.filter(b => (b.batchNo || '').toLowerCase().includes(q));
+      filtered = filtered.filter(b => (b.batchNo || '').toLowerCase().includes(q));
     }
-    if (!filtered.length && !pendingSearch) return `<div class="card card-body"><div class="empty-state"><div class="empty-icon">&#9986;&#65039;</div><p>No batches in Trimming stage</p></div></div>`;
+    const vendors = DB.Vendors.all();
+    if (!filtered.length && !pendingSearch && !vendorFilter) return `<div class="card card-body"><div class="empty-state"><div class="empty-icon">&#9986;&#65039;</div><p>No batches in Trimming stage</p></div></div>`;
     const rows = filtered.map(b => {
       const inputQty = getInputQty(b.id);
       const isRecheck = !!(b.recheckCount && b.recheckCount > 0 && b.currentStage === 'trimming');
+      const v = vendors.find(vv => vv.id === b.vendorId) || {};
+      const vendorName = v.name || (b.productionType === 'inhouse' ? 'In-House' : '—');
       return `<tr>
         <td><input type="checkbox" class="bulk-stage-check" value="${b.id}" style="cursor:pointer;" onclick="event.stopPropagation()"></td>
         <td class="font-semibold text-blue">${b.batchNo}${isRecheck ? ' <span class="badge badge-amber" style="font-size:10px;">RECHECK #' + (b.recheckIteration||1) + '</span>' : ''}</td>
         <td>${b.partNo||'—'}</td>
         <td><span class="badge badge-teal">${b.jmrefNo||'—'}</span></td>
+        <td>${vendorName}</td>
         <td class="font-semibold">${formatNum(inputQty)}</td>
         <td class="text-muted text-sm">${(b.createdAt||'').slice(0,10)}</td>
         <td>
@@ -76,6 +111,7 @@ const TrimmingModule = (() => {
           <button class="btn btn-secondary btn-sm" onclick="App.bulkPrintStageSelected()" style="padding:4px 12px; height:32px; display:flex; align-items:center; gap:6px;">🖨️ Bulk Print</button>
         </div>
         <div style="display:flex; align-items:center; gap:8px;">
+          ${vendorFilterDropdown(vendorFilter)}
           <div class="search-input" style="max-width: 250px; margin: 0;">
             <span class="search-icon">&#128269;</span>
             <input type="text" id="trim-pending-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${pendingSearch}" oninput="TrimmingModule.filterPending(this.value)">
@@ -83,11 +119,18 @@ const TrimmingModule = (() => {
           <button class="btn btn-secondary btn-sm" onclick="Scanner.start('trim-pending-search', (val) => TrimmingModule.filterPending(val))" style="padding: 4px 8px; display: flex; align-items: center; justify-content: center; height: 32px;" title="Scan QR Code">📷</button>
         </div>
       </div>
-      <div class="table-wrap"><table class="data-table"><thead><tr><th><input type="checkbox" onclick="App.toggleAllStageChecks(this)" style="cursor:pointer;"></th><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Input Qty</th><th>Received</th><th>Actions</th></tr></thead><tbody>${rows || '<tr><td colspan="7" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody></table></div></div>`;
+      <div class="table-wrap"><table class="data-table"><thead><tr><th><input type="checkbox" onclick="App.toggleAllStageChecks(this)" style="cursor:pointer;"></th><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Vendor</th><th>Input Qty</th><th>Received</th><th>Actions</th></tr></thead><tbody>${rows || '<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody></table></div></div>`;
   }
   function historyTab() {
     let recs = DB.StageRecords.byStage('trimming');
     const vendors = DB.Vendors.all();
+    if (vendorFilter) {
+      if (vendorFilter === 'inhouse') {
+        recs = recs.filter(r => !r.vendorId);
+      } else {
+        recs = recs.filter(r => r.vendorId === vendorFilter);
+      }
+    }
     if (historySearch) {
       const q = historySearch.toLowerCase();
       recs = recs.filter(r => {
@@ -98,8 +141,11 @@ const TrimmingModule = (() => {
 
     if (!recs.length) return `
       <div class="card card-body">
-        <div style="display:flex; align-items:center; gap:8px; margin-bottom: 12px; max-width: 280px;">
-          <input type="text" id="trim-history-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${historySearch}" oninput="TrimmingModule.filterHistory(this.value)">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom: 12px;">
+          ${vendorFilterDropdown(vendorFilter)}
+          <div class="search-input" style="max-width: 250px; margin: 0;">
+            <input type="text" id="trim-history-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${historySearch}" oninput="TrimmingModule.filterHistory(this.value)">
+          </div>
           <button class="btn btn-secondary btn-sm" onclick="Scanner.start('trim-history-search', (val) => TrimmingModule.filterHistory(val))" style="padding: 4px 8px; display: flex; align-items: center; justify-content: center; height: 32px;" title="Scan QR Code">📷</button>
         </div>
         <div class="empty-state"><div class="empty-icon">&#128202;</div><p>No processing history found</p></div>
@@ -117,6 +163,7 @@ const TrimmingModule = (() => {
         <div class="card-header" style="flex-direction:row; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
           <h3>Processing History</h3>
           <div style="display:flex; align-items:center; gap:8px;">
+            ${vendorFilterDropdown(vendorFilter)}
             <div class="search-input" style="max-width: 250px; margin: 0;">
               <span class="search-icon">&#128269;</span>
               <input type="text" id="trim-history-search" class="form-control form-control-sm" placeholder="Search by Batch No..." value="${historySearch}" oninput="TrimmingModule.filterHistory(this.value)">
@@ -475,6 +522,6 @@ const TrimmingModule = (() => {
     }
   }
 
-  return { render, openProcess, calcLoss, process, openReject, rejectBatch, filterHistory, filterPending, updateDynamicBatchNo };
+  return { render, openProcess, calcLoss, process, openReject, rejectBatch, filterHistory, filterPending, updateDynamicBatchNo, filterByVendor };
 })();
 window.TrimmingModule = TrimmingModule;
