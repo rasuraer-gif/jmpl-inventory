@@ -38,8 +38,8 @@ const filesToCopy = [
   'reports.js',
   'daily-analysis.js',
   'ai-agent.js',
-  'task-tracking.js',
-  'stock-audit.js'
+  'stock-audit.js',
+  'delivery-challan.js'
 ];
 
 filesToCopy.forEach(file => {

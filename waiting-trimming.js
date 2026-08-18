@@ -175,7 +175,7 @@ const WaitingTrimmingModule = (() => {
   }
 
   function processModal() {
-    const vendors = DB.Vendors.byDept('trimming');
+    const vendors = DB.Vendors.byDept('trimming').filter(v => v.name.toLowerCase().includes('in house'));
     const vendorOpts = vendors.map(v => `<option value="${v.id}">${v.name}</option>`).join('');
 
     return `<div class="modal-overlay hidden" id="wt-process-modal">
@@ -204,7 +204,7 @@ const WaitingTrimmingModule = (() => {
 
           <div class="form-group">
             <label class="form-label">Destination</label>
-            <input type="text" class="form-control" value="Trimming Department" readonly style="opacity:0.6;">
+            <input type="text" class="form-control" value="Trimming" readonly style="opacity:0.6;">
           </div>
 
           <div class="form-group">
@@ -227,7 +227,10 @@ const WaitingTrimmingModule = (() => {
     
     document.getElementById('wt-process-batch-id').value = batchId;
     document.getElementById('wt-output-qty').value = inputQty;
-    document.getElementById('wt-vendor').value = b.vendorId || '';
+    const trimmingVendors = DB.Vendors.byDept('trimming').filter(v => v.name.toLowerCase().includes('in house'));
+    const defaultVendorId = trimmingVendors.length ? trimmingVendors[0].id : '';
+    const hasVendor = trimmingVendors.some(v => v.id === b.vendorId);
+    document.getElementById('wt-vendor').value = hasVendor ? b.vendorId : defaultVendorId;
     document.getElementById('wt-notes').value = '';
     
     document.getElementById('wt-batch-info').innerHTML = `

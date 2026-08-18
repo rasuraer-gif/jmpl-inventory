@@ -451,6 +451,7 @@ const NAV = [
   { id:'replenishment',label:'Replenishment Planner',icon:'🎯', module:'replenishment',section:'tools', perm:'replenishment' },
   { id:'task-tracking',label:'Task Tracking',     icon:'📋', module:'task-tracking',section:'tools', perm:'task-tracking' },
   { id:'stock-audit',  label:'Monthly Stock Taking', icon:'📋', module:'stock-audit',  section:'tools', perm:'stock-audit' },
+  { id:'delivery-challan', label:'Delivery Challan', icon:'🚚', module:'delivery-challan', section:'tools', perm:'delivery-challan' },
   { id:'reports',    label:'Reports',             icon:'📊', module:'reports',   section:'tools' },
   // Sub-reports
   { id:'rpt-inventory', label:'Inventory Report',  icon:'📦', module:'report_inventory', section:'tools', parent:'reports', perm:'report_inventory' },
@@ -520,6 +521,7 @@ const App = (() => {
     replenishment:  () => ReplenishmentModule?.render(),
     'task-tracking': () => TaskTrackingModule?.render(),
     'stock-audit':   () => StockAuditModule?.render(),
+    'delivery-challan': () => DeliveryChallanModule?.render(),
     reports:    () => ReportsModule?.render('inventory'),
     admin:      () => AdminModule?.render(),
     'ai-agent': () => AIAgentModule?.render(),
@@ -567,6 +569,7 @@ const App = (() => {
     'monthly-plan':'Monthly Plan',
     'prod-sched':'Production Schedule',
     replenishment:'Replenishment Planner',
+    'delivery-challan': 'Delivery Challan',
     'task-tracking':'Task Tracking',
     'stock-audit':'Monthly Physical Stock Taking & Audit',
     report_inventory:'Inventory Report',
@@ -1089,6 +1092,13 @@ const App = (() => {
             if (inp) inp.value = batchNo;
           }
           break;
+        case 'waiting-trimming':
+          if (typeof WaitingTrimmingModule !== 'undefined' && typeof WaitingTrimmingModule.filterPending === 'function') {
+            WaitingTrimmingModule.filterPending(batchNo);
+            const inp = document.getElementById('wt-pending-search');
+            if (inp) inp.value = batchNo;
+          }
+          break;
         case 'post-curing':
           if (typeof PostCuringModule !== 'undefined' && typeof PostCuringModule.filterPending === 'function') {
             PostCuringModule.filterPending(batchNo);
@@ -1369,6 +1379,7 @@ const App = (() => {
                       production: 'Production',
                       cryogenic: 'Cryogenic',
                       deflashing: 'DE Flashing',
+                      'waiting-trimming': 'Waiting for Trimming',
                       trimming: 'Trimming',
                       'post-curing': 'Post Curing',
                       'waiting-visual': 'Waiting for Visual',
@@ -1449,6 +1460,7 @@ const App = (() => {
 
   return { navigate, init, toggleReportsMenu, openChangePasswordModal, changePassword, runQuickScan, showBatchGenealogy, formatBatchCell, applyBatchTagsToContainer, get current() { return currentModule; }, changeDashboardMonth: (val) => { dashboardMonth = val; renderDashboard(); }, toggleAllStageChecks, bulkPrintStageSelected, onGlobalSearchFocus, onGlobalSearchInput, selectBatchFromSearch, closeGlobalSearch };
 })();
+window.App = App;
 
 // ── Login Page ─────────────────────────────────────────────
 function showLoginPage() {
@@ -1750,7 +1762,7 @@ function renderDashboard() {
 
   // Critical replenishments (stock < 30% of target level) - Optimized O(N) indexing
   let criticalCount = 0;
-  const STAGES = ['production', 'cryogenic', 'deflashing', 'trimming', 'post-curing', 'waiting-visual', 'visual', 'gauge', 'quality'];
+  const STAGES = ['production', 'cryogenic', 'deflashing', 'waiting-trimming', 'trimming', 'post-curing', 'waiting-visual', 'visual', 'gauge', 'quality'];
   
   const allStageRecords = DB.StageRecords.all();
   const allBatches = batches;
@@ -1825,8 +1837,8 @@ function renderDashboard() {
   });
 
   // Stage pipeline
-  const STAGE_ICONS = { production:'🏭', cryogenic:'❄️', deflashing:'🔧', trimming:'✂️', 'post-curing':'🔥', 'waiting-visual':'⏳', visual:'👁️', gauge:'📏', quality:'⭐', store:'🏪' };
-  const STAGE_NAMES = { production:'Production', cryogenic:'Cryogenic', deflashing:'DE Flashing', trimming:'Trimming', 'post-curing':'Post Curing', 'waiting-visual':'Waiting for Visual', visual:'Visual', gauge:'Gauge', quality:'QC Final', store:'Store' };
+  const STAGE_ICONS = { production:'🏭', cryogenic:'❄️', deflashing:'🔧', 'waiting-trimming':'⏳', trimming:'✂️', 'post-curing':'🔥', 'waiting-visual':'⏳', visual:'👁️', gauge:'📏', quality:'⭐', store:'🏪' };
+  const STAGE_NAMES = { production:'Production', cryogenic:'Cryogenic', deflashing:'DE Flashing', 'waiting-trimming':'Waiting for Trimming', trimming:'Trimming', 'post-curing':'Post Curing', 'waiting-visual':'Waiting for Visual', visual:'Visual', gauge:'Gauge', quality:'QC Final', store:'Store' };
 
   const pipelineHtml = STAGES.map(stage => {
     const count = batches.filter(b => b.currentStage === stage && b.status === 'active').length;

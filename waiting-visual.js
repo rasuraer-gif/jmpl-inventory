@@ -588,8 +588,8 @@ const WaitingVisualModule = (() => {
     }
 
     document.getElementById('wv-batch-info').innerHTML = '<strong>' + b.batchNo + '</strong> &#x2014; ' + b.jmrefNo + '<br><span class="text-muted text-sm">Input Qty: <strong>' + formatNum(inputQty) + '</strong></span>';
-    document.getElementById('wv-output-qty').value = '';
-    document.getElementById('wv-loss-qty').value = '';
+    document.getElementById('wv-output-qty').value = inputQty;
+    document.getElementById('wv-loss-qty').value = '0';
     document.getElementById('wv-notes').value = '';
     document.getElementById('wv-process-modal').classList.remove('hidden');
   }

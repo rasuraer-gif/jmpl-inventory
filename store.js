@@ -6,7 +6,8 @@ const StoreModule = (() => {
   // ── FIFO engine ────────────────────────────────────────────
   // Returns available qty per jmref and FIFO batch breakdown
   function fifoAvailable(jmrefNo, partId) {
-    return DB.StoreInventory.availableByJmref(jmrefNo, partId);
+    const list = fifoBatches(jmrefNo, partId);
+    return list.reduce((sum, b) => sum + b.remaining, 0);
   }
 
   // Build FIFO batch list with remaining quantities (pure in-memory calculation)
@@ -307,6 +308,7 @@ const StoreModule = (() => {
 
         const master = DB.Master.all();
         const rows = [];
+        const runningAvail = {};
 
         for (let i = 1; i < raw.length; i++) {
           const r = raw[i];
@@ -345,15 +347,32 @@ const StoreModule = (() => {
           let price = priceIdx >= 0 ? parseFloat(r[priceIdx]) : (part?.salePrice || 0);
           if (isNaN(price)) price = part?.salePrice || 0;
 
-          const available = fifoAvailable(jmrefNo, partId);
+          // Track running available stock originally and currently
+          const normKey = String(jmrefNo || '').trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+          if (runningAvail[normKey] === undefined) {
+            runningAvail[normKey] = fifoAvailable(jmrefNo, partId);
+          }
+          const available = runningAvail[normKey];
 
           // Validate
           let errors = [];
+          let warnings = [];
+          let adjustedQty = qty;
+
           if (!parsedDate || !/^\d{4}-\d{2}-\d{2}$/.test(parsedDate)) errors.push('Invalid date (use DD-MM-YYYY)');
           if (!rawIdentifier) errors.push('JMREF/Part No is empty');
           if (!part) errors.push('Part/JMREF not found in master');
           if (isNaN(qty) || qty < 1) errors.push('Qty must be ≥ 1');
-          if (part && qty > available) errors.push(`Qty (${qty}) exceeds available stock (${available})`);
+
+          if (part && !errors.length) {
+            if (qty > available) {
+              warnings.push(`Qty (${qty}) exceeds remaining stock (${available})`);
+              adjustedQty = available;
+              runningAvail[normKey] = 0;
+            } else {
+              runningAvail[normKey] = available - qty;
+            }
+          }
 
           rows.push({
             row: i + 1,
@@ -362,9 +381,12 @@ const StoreModule = (() => {
             partNo,
             partId,
             qty,
+            adjustedQty,
             price,
-            available,
-            errors
+            available: fifoAvailable(jmrefNo, partId),
+            remainingAvailable: available,
+            errors,
+            warnings
           });
         }
 
@@ -384,21 +406,35 @@ const StoreModule = (() => {
 
     const validRows = rows.filter(r => r.errors.length === 0);
     const errorRows = rows.filter(r => r.errors.length > 0);
-    const totalQty  = validRows.reduce((s, r) => s + r.qty, 0);
-    const totalVal  = validRows.reduce((s, r) => s + (r.qty * r.price), 0);
+    
+    // Total qty & val should use adjustedQty
+    const totalQty  = validRows.reduce((s, r) => s + r.adjustedQty, 0);
+    const totalVal  = validRows.reduce((s, r) => s + (r.adjustedQty * r.price), 0);
 
     const tableRows = rows.map(r => {
       const hasErr = r.errors.length > 0;
-      const rowStyle = hasErr ? 'background:rgba(255,71,87,0.06);' : '';
-      const statusCell = hasErr
-        ? '<td style="color:var(--accent-red);font-size:12px;">' + r.errors.join(', ') + '</td>'
-        : '<td><span class="badge badge-green">&#10003; OK</span></td>';
+      const hasWarn = r.warnings.length > 0;
+      const rowStyle = hasErr ? 'background:rgba(255,71,87,0.06);' : (hasWarn ? 'background:rgba(245,158,11,0.06);' : '');
+      
+      let statusCell = '';
+      if (hasErr) {
+        statusCell = `<td style="color:var(--accent-red);font-size:12px;">❌ ${r.errors.join(', ')}</td>`;
+      } else if (hasWarn) {
+        statusCell = `<td style="color:var(--accent-amber);font-size:12px;">⚠️ ${r.warnings.join(', ')} (will adjust to ${r.adjustedQty})</td>`;
+      } else {
+        statusCell = `<td><span class="badge badge-green">&#10003; OK</span></td>`;
+      }
+
+      const qtyCell = hasWarn
+        ? `<span style="text-decoration:line-through;color:var(--text-muted);font-size:11px;margin-right:4px;">${r.qty}</span><span style="color:var(--accent-amber);font-weight:700;">${r.adjustedQty}</span>`
+        : formatNum(r.qty);
+
       return `<tr style="${rowStyle}">
         <td class="text-muted">${r.row}</td>
         <td>${r.dateVal}</td>
         <td><span class="badge badge-teal">${r.jmref}</span></td>
         <td>${r.partNo}</td>
-        <td class="font-semibold">${formatNum(r.qty)}</td>
+        <td class="font-semibold">${qtyCell}</td>
         <td class="font-semibold">${isNaN(r.price) ? '—' : '₹' + formatNum(r.price)}</td>
         <td class="text-muted">${formatNum(r.available)}</td>
         ${statusCell}
@@ -444,7 +480,19 @@ const StoreModule = (() => {
     const validRows = JSON.parse(preview.dataset.validRows);
     if (!validRows.length) { showToast('No valid rows to save', 'error'); return; }
 
-    // Re-validate available stock at the moment of confirmation
+    // Check for stock adjustment warnings
+    const needsAdjustment = validRows.some(r => r.adjustedQty !== r.qty);
+    if (needsAdjustment) {
+      const details = validRows
+        .filter(r => r.adjustedQty !== r.qty)
+        .map(r => `• Row ${r.row} [JMREF: ${r.jmref}]: Sold qty ${r.qty} exceeds stock. Adjusting to ${r.adjustedQty}.`)
+        .join('\n');
+
+      const msg = `⚠️ The following rows exceed available store stock:\n\n${details}\n\nDo you want to adjust the sold quantities to match the available stock and make the store inventory zero for these items?`;
+      if (!confirm(msg)) return;
+    }
+
+    // Re-validate final available stock
     const errors = [];
     const partQtys = {};
     validRows.forEach(r => {
@@ -452,7 +500,7 @@ const StoreModule = (() => {
       if (!partQtys[key]) {
         partQtys[key] = { jmref: r.jmref, partId: r.partId, qty: 0 };
       }
-      partQtys[key].qty += r.qty;
+      partQtys[key].qty += Number(r.adjustedQty);
     });
 
     for (const item of Object.values(partQtys)) {
@@ -469,12 +517,19 @@ const StoreModule = (() => {
 
     // Save each row as a sale record and deduct stock
     let saved = 0;
+    let skipped = 0;
     validRows.forEach(r => {
+      const finalQty = Number(r.adjustedQty);
+      if (finalQty <= 0) {
+        skipped++;
+        return; // Skip 0 quantity transactions
+      }
+
       DB.Sales.insert({
         jmrefNo: r.jmref,
         partNo:  r.partNo,
         partId:  r.partId,
-        qty:     Number(r.qty),
+        qty:     finalQty,
         salePrice: Number(r.price) || 0,
         saleDate: r.dateVal,
         uploadedViaExcel: true,
@@ -483,7 +538,11 @@ const StoreModule = (() => {
       saved++;
     });
 
-    showToast(`✓ ${saved} sale record${saved !== 1 ? 's' : ''} saved and deducted from Store stock`, 'success');
+    let msg = `✓ ${saved} sale record${saved !== 1 ? 's' : ''} saved and deducted from Store stock.`;
+    if (skipped > 0) {
+      msg += ` (${skipped} row${skipped !== 1 ? 's' : ''} with 0 stock skipped).`;
+    }
+    showToast(msg, 'success');
 
     // Reset preview and re-render
     if (preview) { preview.innerHTML = ''; delete preview.dataset.validRows; }
@@ -804,7 +863,9 @@ const StoreModule = (() => {
     onFileSelected,
     confirmSales,
     _salesFilter,
-    filterCompletedBatches
+    filterCompletedBatches,
+    fifoBatches,
+    fifoAvailable
   };
 })();
 window.StoreModule = StoreModule;

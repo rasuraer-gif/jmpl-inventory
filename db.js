@@ -56,7 +56,8 @@ const DB = (() => {
     mouldMaintenance: [],
     tasks: [],
     auditSessions: [],
-    auditRecords: []
+    auditRecords: [],
+    deliveryChallans: []
   };
   let localBackupData = {};
 
@@ -830,8 +831,44 @@ const DB = (() => {
 
   // ── VENDORS ───────────────────────────────────────────────
   const Vendors = {
-    all: () => getAll('vendors'),
-    byDept: (dept) => getAll('vendors').filter(r => r.department === dept && r.active),
+    all: () => {
+      const list = getAll('vendors');
+      if (window.App && typeof App.current === 'string') {
+        return list.filter(v => {
+          if (!v.name) return false;
+          const nameLower = v.name.toLowerCase();
+          if (nameLower.includes('chitra trimming')) {
+            const allowed = ['delivery-challan', 'trimming', 'admin', 'reports', 'dashboard'];
+            return allowed.includes(App.current);
+          }
+          if (nameLower.includes('shanthi flash')) {
+            const allowed = ['delivery-challan', 'admin', 'reports', 'dashboard'];
+            return allowed.includes(App.current);
+          }
+          return true;
+        });
+      }
+      return list;
+    },
+    byDept: (dept) => {
+      const list = getAll('vendors').filter(r => r.department === dept && r.active);
+      if (window.App && typeof App.current === 'string') {
+        return list.filter(v => {
+          if (!v.name) return false;
+          const nameLower = v.name.toLowerCase();
+          if (nameLower.includes('chitra trimming')) {
+            const allowed = ['delivery-challan', 'trimming', 'admin', 'reports', 'dashboard'];
+            return allowed.includes(App.current);
+          }
+          if (nameLower.includes('shanthi flash')) {
+            const allowed = ['delivery-challan', 'admin', 'reports', 'dashboard'];
+            return allowed.includes(App.current);
+          }
+          return true;
+        });
+      }
+      return list;
+    },
     find: (id) => findById('vendors', id),
     insert: (r) => insert('vendors', r),
     update: (id, c) => update('vendors', id, c),
@@ -1183,47 +1220,8 @@ const DB = (() => {
 
     allParts: () => {
       const master = getAll('master');
-      const stageRecords = getAll('stageRecords');
-      const batches = getAll('batches');
-      const sales = getAll('sales');
-
-      // Pre-aggregate store received qty by master id / jmref in O(N)
-      const receivedMap = {};
-      batches.forEach(b => {
-        if (b.status !== 'completed' && b.currentStage !== 'store') return;
-        if (b.notes && (b.notes.includes('Closed via stock') || b.notes.includes('Zeroed via stock') || b.notes.includes('zeroing'))) return;
-        
-        const storeRecs = stageRecords.filter(r => r.batchId === b.id && r.stage === 'store');
-        const storeQty = storeRecs.length ? (storeRecs[0].inputQty !== undefined ? Number(storeRecs[0].inputQty) : Number(b.initialQty || 0)) : Number(b.initialQty || 0);
-        
-        if (b.partId) {
-          receivedMap[b.partId] = (receivedMap[b.partId] || 0) + storeQty;
-        }
-        if (b.jmrefNo) {
-          const norm = 'jmref_' + String(b.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
-          receivedMap[norm] = (receivedMap[norm] || 0) + storeQty;
-        }
-      });
-
-      // Pre-aggregate sales qty by master id / jmref in O(N)
-      const salesMap = {};
-      sales.forEach(s => {
-        if (s.partId) {
-          salesMap[s.partId] = (salesMap[s.partId] || 0) + (Number(s.qty) || 0);
-        }
-        if (s.jmrefNo) {
-          const norm = 'jmref_' + String(s.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
-          salesMap[norm] = (salesMap[norm] || 0) + (Number(s.qty) || 0);
-        }
-      });
-
       return master.map(m => {
-        const normJmref = 'jmref_' + String(m.jmrefNo || '').trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
-        
-        const received = (receivedMap[m.id] || 0) || (receivedMap[normJmref] || 0);
-        const sold = (salesMap[m.id] || 0) || (salesMap[normJmref] || 0);
-        const available = Math.max(0, received - sold);
-
+        const available = StoreInventory.availableByJmref(m.jmrefNo, m.id);
         return {
           ...m,
           available
@@ -1296,6 +1294,14 @@ const DB = (() => {
     insert: (r) => insert('auditRecords', r),
     update: (id, c) => update('auditRecords', id, c),
     remove: (id) => remove('auditRecords', id)
+  };
+
+  const DeliveryChallans = {
+    all: () => getAll('deliveryChallans'),
+    find: (id) => findById('deliveryChallans', id),
+    insert: (r) => insert('deliveryChallans', r),
+    update: (id, c) => update('deliveryChallans', id, c),
+    remove: (id) => remove('deliveryChallans', id)
   };
 
   function exportBackupJSON() {
@@ -1406,7 +1412,7 @@ const DB = (() => {
     Batches, StageRecords, LossTracker, RejectionTracker,
     RecheckTracker, StockUploads, Sales, StoreInventory,
     ProductionRecords, MonthlyPlans, ProductionSchedules,
-    Moulds, MouldMovements, MouldMaintenance, Tasks, AuditSessions, AuditRecords, exportBackupJSON, importBackupJSON, restoreToOnlineDB,
+    Moulds, MouldMovements, MouldMaintenance, Tasks, AuditSessions, AuditRecords, DeliveryChallans, exportBackupJSON, importBackupJSON, restoreToOnlineDB,
     raw: { getAll, setAll, insert, update, remove, findById, findWhere }
   };
 })();

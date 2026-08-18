@@ -32,6 +32,7 @@ const AdminModule = (() => {
         { key: 'task-tracking', label: 'Task Tracking' },
         { key: 'stock-audit', label: 'Monthly Stock Taking & Audit' },
         { key: 'print-batch', label: 'Print Label' },
+        { key: 'delivery-challan', label: 'Delivery Challan' },
         { key: 'ai-agent', label: 'AI Assistant' }
       ]
     },
@@ -1204,6 +1205,7 @@ const AdminModule = (() => {
       production: 'Moulding',
       cryogenic: 'Cryogenic',
       deflashing: 'Manual DE Flashing',
+      'waiting-trimming': 'Waiting for Trimming',
       trimming: 'Trimming',
       'post-curing': 'Post Curing',
       'waiting-visual': 'Waiting for Visual',
@@ -1256,8 +1258,36 @@ const AdminModule = (() => {
     }
     
     const status = newStage === 'store' ? 'completed' : 'active';
+    const oldStage = batch.currentStage;
     
     try {
+      if (oldStage !== newStage) {
+        // Find latest quantity from stage records
+        const recs = DB.StageRecords.all().filter(r => r.batchId === batchId);
+        let qty = batch.initialQty || 0;
+        if (recs.length > 0) {
+          const sorted = [...recs].sort((x, y) => (x.createdAt || x.date || '').localeCompare(y.createdAt || y.date || ''));
+          const latest = sorted[sorted.length - 1];
+          qty = Number(latest.outputQty) || qty;
+        }
+
+        const session = typeof Auth !== 'undefined' ? Auth.getSession() : null;
+        const dateStr = new Date().toISOString().slice(0, 10);
+
+        DB.StageRecords.insert({
+          batchId: batchId,
+          stage: oldStage,
+          inputQty: qty,
+          outputQty: qty,
+          lossQty: 0,
+          movedFrom: oldStage,
+          movedTo: newStage,
+          date: dateStr,
+          recordedBy: session?.userId,
+          notes: `Admin manually updated stage from "${oldStage}" to "${newStage}"`
+        });
+      }
+
       DB.Batches.update(batchId, { currentStage: newStage, status: status });
       showToast('Batch stage updated successfully', 'success');
       

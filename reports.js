@@ -2360,6 +2360,7 @@ const ReportsModule = (() => {
           <option value="production">Production</option>
           <option value="cryogenic">Cryogenic</option>
           <option value="deflashing">Manual DE Flashing</option>
+          <option value="waiting-trimming">Waiting for Trimming</option>
           <option value="trimming">Trimming</option>
           <option value="post-curing">Post Curing</option>
           <option value="waiting-visual">Waiting for Visual</option>
