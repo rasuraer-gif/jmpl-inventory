@@ -49,7 +49,7 @@ const TrimmingModule = (() => {
   }
 
   function vendorFilterDropdown(currentVal) {
-    const trimmingVendors = DB.Vendors.byDept('trimming');
+    const trimmingVendors = DB.Vendors.byDept('trimming').filter(v => !v.name.toLowerCase().includes('in house'));
     const options = trimmingVendors.map(v => `<option value="${v.id}" ${v.id === currentVal ? 'selected' : ''}>${v.name}</option>`).join('');
     return `
       <select id="trim-vendor-filter" class="form-control form-control-sm" style="max-width: 180px; height: 32px; padding: 4px 8px; margin: 0;" onchange="TrimmingModule.filterByVendor(this.value)">
@@ -69,10 +69,16 @@ const TrimmingModule = (() => {
   }
 
   function pendingTab(batches) {
+    const vendors = DB.Vendors.all();
     let filtered = batches;
     if (vendorFilter) {
       if (vendorFilter === 'inhouse') {
-        filtered = filtered.filter(b => !b.vendorId || b.productionType === 'inhouse');
+        filtered = filtered.filter(b => {
+          if (!b.vendorId) return true;
+          if (b.productionType === 'inhouse') return true;
+          const v = vendors.find(vv => vv.id === b.vendorId);
+          return v && v.name && v.name.toLowerCase().includes('in house');
+        });
       } else {
         filtered = filtered.filter(b => b.vendorId === vendorFilter);
       }
@@ -81,10 +87,12 @@ const TrimmingModule = (() => {
       const q = pendingSearch.toLowerCase();
       filtered = filtered.filter(b => (b.batchNo || '').toLowerCase().includes(q));
     }
-    const vendors = DB.Vendors.all();
     if (!filtered.length && !pendingSearch && !vendorFilter) return `<div class="card card-body"><div class="empty-state"><div class="empty-icon">&#9986;&#65039;</div><p>No batches in Trimming stage</p></div></div>`;
+    
+    let totalWIP = 0;
     const rows = filtered.map(b => {
       const inputQty = getInputQty(b.id);
+      totalWIP += inputQty;
       const isRecheck = !!(b.recheckCount && b.recheckCount > 0 && b.currentStage === 'trimming');
       const v = vendors.find(vv => vv.id === b.vendorId) || {};
       const vendorName = v.name || (b.productionType === 'inhouse' ? 'In-House' : '—');
@@ -104,6 +112,22 @@ const TrimmingModule = (() => {
         </td>
       </tr>`;
     }).join('');
+
+    let tbodyHtml = '<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>';
+    if (filtered.length > 0) {
+      tbodyHtml = rows + `
+        <tr style="background: rgba(59, 130, 246, 0.05); font-weight: bold; border-top: 2px solid var(--border);">
+          <td></td>
+          <td class="text-blue">TOTAL WIP:</td>
+          <td></td>
+          <td></td>
+          <td></td>
+          <td class="text-blue">${formatNum(totalWIP)}</td>
+          <td></td>
+          <td></td>
+        </tr>`;
+    }
+
     return `<div class="card">
       <div class="card-header" style="flex-direction:row; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
         <div style="display:flex; align-items:center; gap:16px;">
@@ -119,14 +143,18 @@ const TrimmingModule = (() => {
           <button class="btn btn-secondary btn-sm" onclick="Scanner.start('trim-pending-search', (val) => TrimmingModule.filterPending(val))" style="padding: 4px 8px; display: flex; align-items: center; justify-content: center; height: 32px;" title="Scan QR Code">📷</button>
         </div>
       </div>
-      <div class="table-wrap"><table class="data-table"><thead><tr><th><input type="checkbox" onclick="App.toggleAllStageChecks(this)" style="cursor:pointer;"></th><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Vendor</th><th>Input Qty</th><th>Received</th><th>Actions</th></tr></thead><tbody>${rows || '<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody></table></div></div>`;
+      <div class="table-wrap"><table class="data-table"><thead><tr><th><input type="checkbox" onclick="App.toggleAllStageChecks(this)" style="cursor:pointer;"></th><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Vendor</th><th>Input Qty</th><th>Received</th><th>Actions</th></tr></thead><tbody>${tbodyHtml}</tbody></table></div></div>`;
   }
   function historyTab() {
     let recs = DB.StageRecords.byStage('trimming');
     const vendors = DB.Vendors.all();
     if (vendorFilter) {
       if (vendorFilter === 'inhouse') {
-        recs = recs.filter(r => !r.vendorId);
+        recs = recs.filter(r => {
+          if (!r.vendorId) return true;
+          const v = vendors.find(vv => vv.id === r.vendorId);
+          return v && v.name && v.name.toLowerCase().includes('in house');
+        });
       } else {
         recs = recs.filter(r => r.vendorId === vendorFilter);
       }
@@ -151,12 +179,32 @@ const TrimmingModule = (() => {
         <div class="empty-state"><div class="empty-icon">&#128202;</div><p>No processing history found</p></div>
       </div>`;
 
+    let totalInput = 0;
+    let totalOutput = 0;
+    let totalLoss = 0;
+
     const rows = recs.map(r => {
       const b = DB.Batches.find(r.batchId)||{};
       const v = vendors.find(vv=>vv.id===r.vendorId)||{};
       const pct = r.inputQty ? ((r.lossQty / r.inputQty) * 100).toFixed(1) + '%' : '0.0%';
+      totalInput += (r.inputQty || 0);
+      totalOutput += (r.outputQty || 0);
+      totalLoss += (r.lossQty || 0);
       return `<tr><td class="font-semibold">${b.batchNo||'—'}</td><td>${b.jmrefNo||'—'}</td><td>${v.name||'—'}</td><td>${formatNum(r.inputQty)}</td><td>${formatNum(r.outputQty)}</td><td class="text-danger font-semibold">${formatNum(r.lossQty)}</td><td><span class="badge badge-red">${pct}</span></td><td class="text-muted text-sm">${(r.date||'').slice(0,10)}</td></tr>`;
     }).join('');
+
+    const totalPct = totalInput ? ((totalLoss / totalInput) * 100).toFixed(1) + '%' : '0.0%';
+    const summaryRow = `
+      <tr style="background: rgba(59, 130, 246, 0.05); font-weight: bold; border-top: 2px solid var(--border);">
+        <td class="text-blue">TOTAL:</td>
+        <td></td>
+        <td></td>
+        <td class="text-blue">${formatNum(totalInput)}</td>
+        <td class="text-success">${formatNum(totalOutput)}</td>
+        <td class="text-danger">${formatNum(totalLoss)}</td>
+        <td class="text-danger">${totalPct}</td>
+        <td></td>
+      </tr>`;
 
     return `
       <div class="card animate-in">
@@ -176,7 +224,7 @@ const TrimmingModule = (() => {
             <thead>
               <tr><th>Batch</th><th>JMREF</th><th>Vendor</th><th>Input</th><th>Output</th><th>Loss</th><th>% Loss</th><th>Date</th></tr>
             </thead>
-            <tbody>${rows}</tbody>
+            <tbody>${rows + summaryRow}</tbody>
           </table>
         </div>
       </div>`;

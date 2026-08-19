@@ -24,6 +24,7 @@ const DB = (() => {
   let isInitialized = false;
   let isCloudSyncComplete = false;
   let syncStateListener = null;
+  let refreshTimeout = null;
   function onSyncStateChange(callback) {
     syncStateListener = callback;
   }
@@ -184,8 +185,11 @@ const DB = (() => {
                               (document.activeElement.tagName === 'INPUT' || 
                                document.activeElement.tagName === 'TEXTAREA');
               
-              if (!modalOpen && !isTyping && !window.preventAutoRefresh) {
-                App.navigate(App.current);
+              if (!modalOpen && !isTyping && !window.preventAutoRefresh && App.current !== 'reports' && App.current !== 'daily-analysis') {
+                if (refreshTimeout) clearTimeout(refreshTimeout);
+                refreshTimeout = setTimeout(() => {
+                  App.navigate(App.current);
+                }, 300);
               }
             }
           }
@@ -839,11 +843,11 @@ const DB = (() => {
           const nameLower = v.name.toLowerCase();
           if (nameLower.includes('chitra trimming')) {
             const allowed = ['delivery-challan', 'trimming', 'admin', 'reports', 'dashboard'];
-            return allowed.includes(App.current);
+            return allowed.includes(App.current) || App.current.startsWith('report');
           }
           if (nameLower.includes('shanthi flash')) {
             const allowed = ['delivery-challan', 'admin', 'reports', 'dashboard'];
-            return allowed.includes(App.current);
+            return allowed.includes(App.current) || App.current.startsWith('report');
           }
           return true;
         });
@@ -858,11 +862,11 @@ const DB = (() => {
           const nameLower = v.name.toLowerCase();
           if (nameLower.includes('chitra trimming')) {
             const allowed = ['delivery-challan', 'trimming', 'admin', 'reports', 'dashboard'];
-            return allowed.includes(App.current);
+            return allowed.includes(App.current) || App.current.startsWith('report');
           }
           if (nameLower.includes('shanthi flash')) {
             const allowed = ['delivery-challan', 'admin', 'reports', 'dashboard'];
-            return allowed.includes(App.current);
+            return allowed.includes(App.current) || App.current.startsWith('report');
           }
           return true;
         });
@@ -928,6 +932,12 @@ const DB = (() => {
         fields.remainingQty = Number(fields.initialQty) || 0;
       }
       
+      const checkStage = fields.currentStage !== undefined ? fields.currentStage : currentBatch.currentStage;
+      const INTERNAL_STAGES = ['post-curing', 'waiting-visual', 'visual', 'gauge', 'quality', 'store'];
+      if (INTERNAL_STAGES.includes(checkStage)) {
+        fields.vendorId = null;
+      }
+
       const checkStatus = fields.status !== undefined ? fields.status : currentBatch.status;
       const checkRemaining = fields.remainingQty !== undefined ? fields.remainingQty : (currentBatch.remainingQty !== undefined ? currentBatch.remainingQty : currentBatch.initialQty || 0);
       
@@ -976,6 +986,61 @@ const DB = (() => {
         console.error("Error fetching batches by date range:", err);
       }
     },
+    fetchByIds: async (ids) => {
+      if (!db || !ids || !ids.length) return;
+      const uniqueIds = [...new Set(ids)].filter(id => id && !cache.batches.some(b => b.id === id));
+      if (!uniqueIds.length) return;
+      const chunks = [];
+      for (let i = 0; i < uniqueIds.length; i += 10) {
+        chunks.push(uniqueIds.slice(i, i + 10));
+      }
+      try {
+        let changed = false;
+        for (const chunk of chunks) {
+          const snapshot = await db.collection('batches')
+            .where(firebase.firestore.FieldPath.documentId(), 'in', chunk)
+            .get();
+          snapshot.forEach(doc => {
+            const data = { id: doc.id, ...doc.data() };
+            const existingIdx = cache.batches.findIndex(b => b.id === doc.id);
+            if (existingIdx === -1) {
+              cache.batches.push(data);
+              changed = true;
+            } else if (JSON.stringify(cache.batches[existingIdx]) !== JSON.stringify(data)) {
+              cache.batches[existingIdx] = data;
+              changed = true;
+            }
+          });
+        }
+        if (changed) {
+          saveLocal('batches');
+          if (typeof window !== 'undefined') {
+            const current = window.App?.current;
+            if (current) {
+              const moduleMap = {
+                'cryogenic': { name: 'CryogenicModule', searchId: 'cryo-history-search' },
+                'deflashing': { name: 'DeflashingModule', searchId: 'de-history-search' },
+                'gauge': { name: 'GaugeModule', searchId: 'gauge-history-search' },
+                'post-curing': { name: 'PostCuringModule', searchId: 'pc-history-search' },
+                'trimming': { name: 'TrimmingModule', searchId: 'trim-history-search' },
+                'visual': { name: 'VisualModule', searchId: 'vis-history-search' },
+                'waiting-visual': { name: 'WaitingVisualModule', searchId: 'wv-history-search' },
+                'waiting-trimming': { name: 'WaitingTrimmingModule', searchId: 'wt-history-search' }
+              };
+              const m = moduleMap[current];
+              if (m && window[m.name] && typeof window[m.name].filterHistory === 'function') {
+                const searchInput = document.getElementById(m.searchId);
+                if (searchInput) {
+                  window[m.name].filterHistory(searchInput.value || '');
+                }
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Error fetching batches by IDs:", err);
+      }
+    },
     nextBatchNo: () => {
       const batches = getAll('batches');
       let maxNum = 0;
@@ -1009,7 +1074,14 @@ const DB = (() => {
     all: () => getAll('stageRecords'),
     find: (id) => findById('stageRecords', id),
     byBatch: (batchId) => getAll('stageRecords').filter(r => r.batchId === batchId),
-    byStage: (stage) => getAll('stageRecords').filter(r => r.stage === stage),
+    byStage: (stage) => {
+      const recs = getAll('stageRecords').filter(r => r.stage === stage);
+      const missingBatchIds = [...new Set(recs.map(r => r.batchId).filter(id => id && !cache.batches.some(b => b.id === id)))];
+      if (missingBatchIds.length > 0 && typeof Batches.fetchByIds === 'function') {
+        Batches.fetchByIds(missingBatchIds);
+      }
+      return recs;
+    },
     byBatchAndStage: (batchId, stage) => getAll('stageRecords').filter(r => r.batchId === batchId && r.stage === stage),
     insert: (r) => insert('stageRecords', r),
     update: (id, c) => update('stageRecords', id, c),
@@ -1156,6 +1228,120 @@ const DB = (() => {
       }
       
       return res;
+    },
+    insertBulk: (recs) => {
+      const salesRows = recs.map(r => ({
+        ...r,
+        id: r.id || genId(),
+        createdAt: r.createdAt || new Date().toISOString()
+      }));
+
+      const batchesToUpdate = {};
+      const batchesCache = [...cache['batches']];
+
+      salesRows.forEach(r => {
+        let qtyToDeduct = Number(r.qty) || 0;
+        const normTarget = String(r.jmrefNo || '').trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+        const partNoTarget = String(r.partNo || '').trim().toUpperCase();
+
+        const completedBatches = batchesCache
+          .filter(b => {
+            if (b.status !== 'completed') return false;
+            const isArch = batchesToUpdate[b.id] ? batchesToUpdate[b.id].isArchived : b.isArchived;
+            if (isArch) return false;
+
+            if (r.partId && b.partId === r.partId) return true;
+            if (b.jmrefNo) {
+              const bNorm = String(b.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+              if (normTarget && (bNorm === normTarget || String(b.jmrefNo).trim().toUpperCase() === String(r.jmrefNo).trim().toUpperCase())) return true;
+            }
+            if (partNoTarget && b.partNo && String(b.partNo).trim().toUpperCase() === partNoTarget) return true;
+            return false;
+          })
+          .sort((a, b) => (a.completedAt || a.createdAt || '').localeCompare(b.completedAt || b.createdAt || ''));
+
+        for (const batch of completedBatches) {
+          if (qtyToDeduct <= 0) break;
+
+          const currentRemaining = batchesToUpdate[batch.id] !== undefined
+            ? batchesToUpdate[batch.id].remainingQty
+            : (batch.remainingQty !== undefined ? Number(batch.remainingQty) : Number(batch.initialQty || 0));
+
+          if (currentRemaining <= 0) continue;
+
+          const deduct = Math.min(currentRemaining, qtyToDeduct);
+          qtyToDeduct -= deduct;
+
+          const newRemaining = currentRemaining - deduct;
+          batchesToUpdate[batch.id] = {
+            remainingQty: newRemaining,
+            isArchived: newRemaining === 0
+          };
+        }
+      });
+
+      cache['sales'].push(...salesRows);
+      saveLocal('sales');
+
+      const batchIdsToUpdate = Object.keys(batchesToUpdate);
+      batchIdsToUpdate.forEach(id => {
+        const idx = cache['batches'].findIndex(b => b.id === id);
+        if (idx !== -1) {
+          cache['batches'][idx] = {
+            ...cache['batches'][idx],
+            ...batchesToUpdate[id],
+            updatedAt: new Date().toISOString()
+          };
+        }
+      });
+      if (batchIdsToUpdate.length > 0) {
+        saveLocal('batches');
+      }
+
+      if (db) {
+        const allWrites = [];
+        salesRows.forEach(row => {
+          const docData = { ...row };
+          delete docData.id;
+          allWrites.push({
+            type: 'set',
+            collection: 'sales',
+            id: row.id,
+            data: docData
+          });
+        });
+
+        batchIdsToUpdate.forEach(id => {
+          const idx = cache['batches'].findIndex(b => b.id === id);
+          if (idx !== -1) {
+            const docData = { ...cache['batches'][idx] };
+            delete docData.id;
+            allWrites.push({
+              type: 'set',
+              collection: 'batches',
+              id: id,
+              data: docData
+            });
+          }
+        });
+
+        const chunkSize = 400;
+        for (let i = 0; i < allWrites.length; i += chunkSize) {
+          const chunk = allWrites.slice(i, i + chunkSize);
+          const fBatch = db.batch();
+          chunk.forEach(w => {
+            const docRef = db.collection(w.collection).doc(w.id);
+            if (w.type === 'set') {
+              fBatch.set(docRef, w.data);
+            }
+          });
+          fBatch.commit().catch(err => {
+            console.error(`Firebase bulk batch commit error:`, err);
+          });
+        }
+      }
+
+      return salesRows;
     },
     getFifoStock: (jmrefNo, partId) => {
       const normTarget = String(jmrefNo || '').trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();

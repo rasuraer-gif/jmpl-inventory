@@ -118,7 +118,13 @@ const ReportsModule = (() => {
       const storeAvail = DB.StoreInventory.availableByJmref(p.jmrefNo, p.id);
 
       return [p.partNo, p.jmrefNo, p.description, ...stageCounts, totalWip, storeAvail];
+    }).filter(r => {
+      const totalWip = r[3 + wipStages.length];
+      const storeAvail = r[3 + wipStages.length + 1];
+      return totalWip > 0 || storeAvail > 0;
     });
+
+    if (!dataRows.length) return emptyState('No inventory found. All parts have 0 WIP and Store stock.');
 
     const wipLen = wipStages.length;
     const theadCols = headers.map((h, i) => {
@@ -595,6 +601,9 @@ const ReportsModule = (() => {
   function renderStageLoss(stage, filters, extraCols=[]) {
     const { from, to, jmref, vendorId, rejectionRate } = filters;
     let records = DB.StageRecords.all().filter(r => r.stage === stage);
+    if (stage === 'visual') {
+      records = records.filter(r => r.inspectorName);
+    }
     
     if (vendorId) {
       records = records.filter(r => r.vendorId === vendorId);
@@ -1186,14 +1195,27 @@ const ReportsModule = (() => {
 
   function renderPendingBatches(filters) {
     const { pendingStage, pendingTimeframe } = filters;
+    let filterStage = pendingStage;
+    let filterVendorId = null;
+    if (pendingStage && pendingStage.includes('_')) {
+      const idx = pendingStage.indexOf('_');
+      filterStage = pendingStage.substring(0, idx);
+      filterVendorId = pendingStage.substring(idx + 1);
+    }
+
     const batches = DB.Batches.all().filter(b => {
-      if (pendingStage === 'store') {
-        return b.status === 'completed' && b.currentStage === 'store';
+      if (filterStage) {
+        if (filterStage === 'store') {
+          return b.status === 'completed' && b.currentStage === 'store';
+        }
+        return b.status === 'active' && b.currentStage === filterStage;
       }
-      return b.status === 'active';
+      return b.status === 'active' || (b.status === 'completed' && b.currentStage === 'store');
     });
+
     const stageRecs = DB.StageRecords.all();
     const master = DB.Master.all();
+    const vendors = DB.Vendors.all();
     const today = new Date();
     today.setHours(0,0,0,0);
 
@@ -1216,7 +1238,8 @@ const ReportsModule = (() => {
     const headers = ['#', 'Batch No', 'JMREF No', 'Part No', 'Current Stage', 'Current Qty', 'Date Received', 'Days Pending'];
 
     batches.forEach(b => {
-      if (pendingStage && b.currentStage !== pendingStage) return;
+      if (filterStage && b.currentStage !== filterStage) return;
+      if (filterVendorId && b.vendorId !== filterVendorId) return;
 
       let entryDateStr = '';
       const recs = stageRecs.filter(r => r.batchId === b.id && r.movedTo === b.currentStage)
@@ -1258,11 +1281,21 @@ const ReportsModule = (() => {
       }
 
       const p = master.find(m => m.jmrefNo === b.jmrefNo) || {};
+      
+      let stageText = STAGE_LABELS[b.currentStage] || b.currentStage;
+      const VENDOR_ELIGIBLE_STAGES = ['production', 'cryogenic', 'deflashing', 'waiting-trimming', 'trimming'];
+      if (b.vendorId && VENDOR_ELIGIBLE_STAGES.includes(b.currentStage)) {
+        const v = vendors.find(vv => vv.id === b.vendorId);
+        if (v && v.name) {
+          stageText += ` → ${v.name}`;
+        }
+      }
+
       dataRows.push({
         batchNo: b.batchNo,
         jmrefNo: b.jmrefNo,
         partNo: p.partNo || b.partNo || '—',
-        currentStage: STAGE_LABELS[b.currentStage] || b.currentStage,
+        currentStage: stageText,
         qty: qty,
         dateReceived: entryDateStr.slice(0, 10),
         daysPending: days
@@ -1389,7 +1422,8 @@ const ReportsModule = (() => {
       const totalBatches = batchIds.size;
       const inputQty = inRangeRecords.reduce((sum, r) => sum + (r.inputQty || 0), 0);
       const lossQty = inRangeRecords.reduce((sum, r) => sum + (r.lossQty || 0), 0);
-      const outputQty = Math.max(0, inputQty - lossQty);
+      const reprocessQty = inRangeRecords.reduce((sum, r) => sum + (r.reprocessQty || 0), 0);
+      const outputQty = Math.max(0, inputQty - lossQty - reprocessQty);
       const yieldRate = inputQty > 0 ? (outputQty / inputQty) * 100 : 100;
       let grade = 'C';
       if (yieldRate >= 98) grade = 'A';
@@ -2352,22 +2386,65 @@ const ReportsModule = (() => {
         </select>
       </div>`;
 
+    const buildPendingStageOptions = () => {
+      const activeBatches = DB.Batches.all();
+      const vendors = DB.Vendors.all();
+      const combos = [];
+      const keys = new Set();
+      const VENDOR_ELIGIBLE_STAGES = ['production', 'cryogenic', 'deflashing', 'waiting-trimming', 'trimming'];
+      activeBatches.forEach(b => {
+        const isStore = b.currentStage === 'store' && b.status === 'completed';
+        const isActive = b.status === 'active';
+        if ((isActive || isStore) && b.vendorId && VENDOR_ELIGIBLE_STAGES.includes(b.currentStage)) {
+          const v = vendors.find(vv => vv.id === b.vendorId);
+          if (v && v.name) {
+            const key = `${b.currentStage}_${b.vendorId}`;
+            if (!keys.has(key)) {
+              keys.add(key);
+              combos.push({ stage: b.currentStage, vendorId: b.vendorId, vendorName: v.name });
+            }
+          }
+        }
+      });
+      const stages = [
+        { value: 'production', label: 'Production' },
+        { value: 'cryogenic', label: 'Cryogenic' },
+        { value: 'deflashing', label: 'Manual DE Flashing' },
+        { value: 'waiting-trimming', label: 'Waiting for Trimming' },
+        { value: 'trimming', label: 'Trimming' },
+        { value: 'post-curing', label: 'Post Curing' },
+        { value: 'waiting-visual', label: 'Waiting for Visual' },
+        { value: 'visual', label: 'Visual' },
+        { value: 'gauge', label: 'Gauge' },
+        { value: 'quality', label: 'Quality Final' },
+        { value: 'store', label: 'Store' }
+      ];
+      let html = '<option value="">All Stages</option>';
+      stages.forEach(st => {
+        html += `<option value="${st.value}">${st.label}</option>`;
+        const stageCombos = combos.filter(c => c.stage === st.value);
+        if (st.value === 'deflashing') {
+          if (!stageCombos.some(c => c.vendorId === 'mqz4se5hgymm8')) {
+            stageCombos.push({ stage: 'deflashing', vendorId: 'mqz4se5hgymm8', vendorName: 'Shanthi Flash' });
+          }
+        }
+        if (st.value === 'trimming') {
+          if (!stageCombos.some(c => c.vendorId === 'mqz4s4ah0g64p')) {
+            stageCombos.push({ stage: 'trimming', vendorId: 'mqz4s4ah0g64p', vendorName: 'Chitra Trimming' });
+          }
+        }
+        stageCombos.forEach(c => {
+          html += `<option value="${st.value}_${c.vendorId}">&nbsp;&nbsp;&nbsp;&nbsp;${st.label} → ${c.vendorName}</option>`;
+        });
+      });
+      return html;
+    };
+
     const pendingStageFilter = `
       <div class="form-group mb-0">
         <label class="form-label">Stage</label>
         <select class="form-control" id="rpt-pending-stage">
-          <option value="">All Stages</option>
-          <option value="production">Production</option>
-          <option value="cryogenic">Cryogenic</option>
-          <option value="deflashing">Manual DE Flashing</option>
-          <option value="waiting-trimming">Waiting for Trimming</option>
-          <option value="trimming">Trimming</option>
-          <option value="post-curing">Post Curing</option>
-          <option value="waiting-visual">Waiting for Visual</option>
-          <option value="visual">Visual</option>
-          <option value="gauge">Gauge</option>
-          <option value="quality">Quality Final</option>
-          <option value="store">Store</option>
+          ${buildPendingStageOptions()}
         </select>
       </div>`;
 
@@ -2569,7 +2646,7 @@ const ReportsModule = (() => {
 
   function renderQtyLossReport(filters) {
     const { from, to, jmref } = filters;
-    let recs = DB.StageRecords.all().filter(r => r.lossQty > 0);
+    let recs = DB.StageRecords.all().filter(r => r.lossQty > 0 || (r.reprocessQty || 0) > 0);
 
     recs = filterByDateRange(recs, 'date', from, to);
 
@@ -2585,13 +2662,18 @@ const ReportsModule = (() => {
 
     if (!recs.length) return emptyState('No quantity loss transactions found matching the selected filters.');
 
-    const headers = ['Batch No', 'Part No', 'JMREF No', 'Stage Name', 'Input Qty', 'Output Qty', 'Qty Lost', 'Date', 'Recorded By'];
+    const headers = ['Batch No', 'Part No', 'JMREF No', 'Stage Name', 'Input Qty', 'Output Qty', 'Qty Lost', 'Reprocess Qty', '% Loss', 'Date', 'Recorded By'];
     const users = DB.Users.all();
 
     // Map to normalized transactions objects
     const transactions = recs.map(r => {
       const b = DB.Batches.find(r.batchId) || {};
       const u = users.find(usr => usr.id === r.recordedBy);
+      const input = r.inputQty || 0;
+      const loss = r.lossQty || 0;
+      const reprocess = r.reprocessQty || 0;
+      const totalDefects = Math.max(loss + reprocess, Math.max(0, input - (r.outputQty || 0)));
+      const pct = input ? ((totalDefects / input) * 100).toFixed(1) + '%' : '0.0%';
       return {
         batchNo: b.batchNo || '—',
         partNo: b.partNo || '—',
@@ -2601,6 +2683,8 @@ const ReportsModule = (() => {
         inputQty: r.inputQty,
         outputQty: r.isRecheck ? r.recheckQty : r.outputQty,
         loss: r.lossQty,
+        reprocess: r.reprocessQty || 0,
+        pct: pct,
         date: (r.date || '').slice(0, 10),
         recordedBy: u ? u.name : '—'
       };
@@ -2615,10 +2699,12 @@ const ReportsModule = (() => {
           partNo: t.partNo,
           jmrefNo: t.jmrefNo,
           totalLoss: 0,
+          totalReprocess: 0,
           entries: []
         };
       }
       groups[t.batchNo].totalLoss += t.loss;
+      groups[t.batchNo].totalReprocess += t.reprocess;
       groups[t.batchNo].entries.push(t);
     });
 
@@ -2626,6 +2712,7 @@ const ReportsModule = (() => {
 
     // Build grouped rows HTML representation
     const rowsHtml = groupList.map(g => {
+      const reprocessInfo = g.totalReprocess > 0 ? ` | Reprocessed: ${formatNum(g.totalReprocess)}` : '';
       const groupHeader = `
         <tr style="background: rgba(255, 71, 87, 0.04); font-weight: bold; border-left: 4px solid var(--accent-red);">
           <td colspan="4" class="font-bold text-blue" style="padding: 12px 14px; font-size: 13px;">
@@ -2634,21 +2721,33 @@ const ReportsModule = (() => {
             <span class="badge badge-teal" style="margin-left: 8px;">JMREF: ${g.jmrefNo}</span>
           </td>
           <td colspan="5" class="font-bold text-danger" style="padding: 12px 14px; font-size: 13px; text-align: right;">
-            Total Lost: -${formatNum(g.totalLoss)}
+            Total Lost: -${formatNum(g.totalLoss)}${reprocessInfo}
           </td>
         </tr>`;
 
-      const entriesHtml = g.entries.map(e => `
-        <tr style="border-bottom: 1px solid var(--border);">
-          <td style="padding-left: 20px; color: var(--text-muted); font-size: 12px; font-style: italic;">↳ ${e.batchNo}</td>
-          <td><span class="stage-chip ${e.stage.toLowerCase().replace(/\s+/g, '')}">${e.stageLabel}</span></td>
-          <td>${formatNum(e.inputQty)}</td>
-          <td>${formatNum(e.outputQty)}</td>
-          <td class="font-bold text-danger">-${formatNum(e.loss)}</td>
-          <td class="text-muted text-sm">${e.date}</td>
-          <td class="text-sm" colspan="3">${e.recordedBy}</td>
-        </tr>
-      `).join('');
+      const entriesHtml = g.entries.map(e => {
+        const lossVal = e.loss > 0 ? `-${formatNum(e.loss)}` : '—';
+        const repVal = e.reprocess > 0 ? formatNum(e.reprocess) : '—';
+        const pctNum = parseFloat(e.pct) || 0;
+        let badgeClass = 'badge-green';
+        if (pctNum >= 50) badgeClass = 'badge-red font-bold';
+        else if (pctNum >= 20) badgeClass = 'badge-amber';
+        else if (pctNum > 0) badgeClass = 'badge-blue';
+
+        return `
+          <tr style="border-bottom: 1px solid var(--border);">
+            <td style="padding-left: 20px; color: var(--text-muted); font-size: 12px; font-style: italic;">↳ ${e.batchNo}</td>
+            <td><span class="stage-chip ${e.stage.toLowerCase().replace(/\s+/g, '')}">${e.stageLabel}</span></td>
+            <td>${formatNum(e.inputQty)}</td>
+            <td>${formatNum(e.outputQty)}</td>
+            <td class="font-bold text-danger">${lossVal}</td>
+            <td class="font-bold text-warning">${repVal}</td>
+            <td><span class="badge ${badgeClass}">${e.pct}</span></td>
+            <td class="text-muted text-sm">${e.date}</td>
+            <td>${e.recordedBy}</td>
+          </tr>
+        `;
+      }).join('');
 
       return groupHeader + entriesHtml;
     }).join('');
@@ -2663,8 +2762,10 @@ const ReportsModule = (() => {
               <th>Input Qty</th>
               <th>Output Qty</th>
               <th>Qty Lost</th>
+              <th>Reprocess Qty</th>
+              <th>% Loss</th>
               <th>Date</th>
-              <th colspan="3">Recorded By</th>
+              <th>Recorded By</th>
             </tr>
           </thead>
           <tbody>
@@ -2681,6 +2782,8 @@ const ReportsModule = (() => {
       String(t.inputQty),
       String(t.outputQty),
       String(t.loss),
+      String(t.reprocess),
+      t.pct,
       t.date,
       t.recordedBy
     ]);
@@ -2711,7 +2814,15 @@ const ReportsModule = (() => {
     const filters = collectFilters();
 
     // Fetch historical batches on-demand if online and DB method is available
-    if (typeof DB !== 'undefined' && DB.Batches && DB.Batches.fetchByDateRange) {
+    const reportsWithDateRange = [
+      'reprocess', 'sales', 'production', 'cryogenic', 'deflashing', 'trimming',
+      'post-curing', 'waiting-visual', 'visual', 'gauge', 'recheck',
+      'sub-pending', 'sub-performance', 'qty-gain', 'qty-loss', 'op-efficiency',
+      'cycle-time', 'sub-vs-inhouse', 'daily-summary', 'analytics'
+    ];
+    const needsDateFetch = reportsWithDateRange.includes(reportKey);
+
+    if (needsDateFetch && typeof DB !== 'undefined' && DB.Batches && DB.Batches.fetchByDateRange) {
       const runBtn = document.getElementById('rpt-run-btn');
       const originalText = runBtn ? runBtn.textContent : '🔍 Generate Report';
       if (runBtn) {

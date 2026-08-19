@@ -2,6 +2,8 @@
 // store.js — Store & Sales Module (Excel Bulk Upload)
 // ============================================================
 const StoreModule = (() => {
+  let activeTab = 'inventory';
+  let parsedSalesRows = [];
 
   // ── FIFO engine ────────────────────────────────────────────
   // Returns available qty per jmref and FIFO batch breakdown
@@ -101,26 +103,37 @@ const StoreModule = (() => {
 
         <!-- Tabs -->
         <div class="tabs" id="store-tabs">
-          <button class="tab-btn active" data-tab="inventory">Inventory</button>
-          <button class="tab-btn" data-tab="upload">📤 Upload Sales (Excel)</button>
-          <button class="tab-btn" data-tab="batches">Completed Batches</button>
-          <button class="tab-btn" data-tab="sales">Sales History</button>
+          <button class="tab-btn ${activeTab === 'inventory' ? 'active' : ''}" data-tab="inventory">Inventory</button>
+          <button class="tab-btn ${activeTab === 'upload' ? 'active' : ''}" data-tab="upload">📤 Upload Sales (Excel)</button>
+          <button class="tab-btn ${activeTab === 'batches' ? 'active' : ''}" data-tab="batches">Completed Batches</button>
+          <button class="tab-btn ${activeTab === 'sales' ? 'active' : ''}" data-tab="sales">Sales History</button>
         </div>
-        <div id="store-content">${inventoryTab(parts)}</div>
+        <div id="store-content">${renderTabContent(parts)}</div>
       </div>`;
 
     document.querySelectorAll('#store-tabs .tab-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         document.querySelectorAll('#store-tabs .tab-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
-        const tab = btn.dataset.tab;
+        activeTab = btn.dataset.tab;
         const cont = document.getElementById('store-content');
-        if (tab === 'inventory') cont.innerHTML = inventoryTab(parts);
-        if (tab === 'upload')    { cont.innerHTML = uploadTab(); attachUploadEvents(); }
-        if (tab === 'batches')   cont.innerHTML = batchesTab();
-        if (tab === 'sales')     cont.innerHTML = salesTab();
+        if (cont) {
+          cont.innerHTML = renderTabContent(parts);
+          if (activeTab === 'upload') attachUploadEvents();
+        }
       });
     });
+
+    if (activeTab === 'upload') {
+      attachUploadEvents();
+    }
+  }
+
+  function renderTabContent(parts) {
+    if (activeTab === 'inventory') return inventoryTab(parts);
+    if (activeTab === 'upload')    return uploadTab();
+    if (activeTab === 'batches')   return batchesTab();
+    if (activeTab === 'sales')     return salesTab();
   }
 
   // ── Inventory Tab ──────────────────────────────────────────
@@ -202,7 +215,9 @@ const StoreModule = (() => {
   }
 
   function attachUploadEvents() {
-    // nothing extra needed — inline handlers cover it
+    if (parsedSalesRows && parsedSalesRows.length > 0) {
+      showPreview(parsedSalesRows);
+    }
   }
 
   // ── Excel template download ────────────────────────────────
@@ -390,6 +405,7 @@ const StoreModule = (() => {
           });
         }
 
+        parsedSalesRows = rows;
         showPreview(rows);
       } catch(err) {
         showToast('Error reading file: ' + err.message, 'error');
@@ -515,40 +531,65 @@ const StoreModule = (() => {
       return;
     }
 
-    // Save each row as a sale record and deduct stock
-    let saved = 0;
-    let skipped = 0;
+    // Save in bulk and deduct stock
+    const salesToInsert = [];
     validRows.forEach(r => {
       const finalQty = Number(r.adjustedQty);
-      if (finalQty <= 0) {
-        skipped++;
-        return; // Skip 0 quantity transactions
+      if (finalQty > 0) {
+        salesToInsert.push({
+          jmrefNo: r.jmref,
+          partNo:  r.partNo,
+          partId:  r.partId,
+          qty:     finalQty,
+          salePrice: Number(r.price) || 0,
+          saleDate: r.dateVal,
+          uploadedViaExcel: true,
+          notes: 'Excel bulk upload'
+        });
       }
-
-      DB.Sales.insert({
-        jmrefNo: r.jmref,
-        partNo:  r.partNo,
-        partId:  r.partId,
-        qty:     finalQty,
-        salePrice: Number(r.price) || 0,
-        saleDate: r.dateVal,
-        uploadedViaExcel: true,
-        notes: 'Excel bulk upload'
-      });
-      saved++;
     });
 
-    let msg = `✓ ${saved} sale record${saved !== 1 ? 's' : ''} saved and deducted from Store stock.`;
-    if (skipped > 0) {
-      msg += ` (${skipped} row${skipped !== 1 ? 's' : ''} with 0 stock skipped).`;
+    if (salesToInsert.length === 0) {
+      showToast('No valid sales records with quantity > 0 to save', 'warning');
+      return;
     }
-    showToast(msg, 'success');
 
-    // Reset preview and re-render
-    if (preview) { preview.innerHTML = ''; delete preview.dataset.validRows; }
+    // Prevent auto-refresh during save
+    window.preventAutoRefresh = true;
 
-    // Refresh inventory tab immediately
-    render();
+    // Show loading spinner on Confirm button
+    const confirmBtn = document.querySelector('#store-preview button.btn-primary');
+    if (confirmBtn) {
+      confirmBtn.disabled = true;
+      confirmBtn.innerHTML = `
+        <span class="spinner" style="display:inline-block;width:12px;height:12px;border:2px solid white;border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite;margin-right:6px;vertical-align:middle;"></span>
+        Saving...
+      `;
+    }
+
+    // Perform bulk insertion
+    try {
+      DB.Sales.insertBulk(salesToInsert);
+      showToast(`✓ ${salesToInsert.length} sale record(s) saved and deducted from Store stock.`, 'success');
+      
+      // Reset preview
+      parsedSalesRows = [];
+      if (preview) { preview.innerHTML = ''; delete preview.dataset.validRows; }
+    } catch (err) {
+      showToast(`Error saving sales: ${err.message}`, 'error');
+      if (confirmBtn) {
+        confirmBtn.disabled = false;
+        confirmBtn.innerHTML = `&#10003; Confirm &amp; Save (${validRows.length} rows)`;
+      }
+      window.preventAutoRefresh = false;
+      return;
+    }
+
+    // Wait 1.5s for database listeners to settle, then restore auto-refresh and render
+    setTimeout(() => {
+      window.preventAutoRefresh = false;
+      render();
+    }, 1500);
   }
 
   // ── Completed Batches Tab ──────────────────────────────────

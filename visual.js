@@ -93,7 +93,7 @@ const VisualModule = (() => {
   }
 
   function historyTab() {
-    let recs = DB.StageRecords.byStage('visual');
+    let recs = DB.StageRecords.byStage('visual').filter(r => r.inspectorName);
     if (historySearch) {
       const q = historySearch.toLowerCase();
       recs = recs.filter(r => {
@@ -113,7 +113,7 @@ const VisualModule = (() => {
 
     const rows = recs.map(r => {
       const b = DB.Batches.find(r.batchId)||{};
-      const pct = r.inputQty ? ((r.lossQty / r.inputQty) * 100).toFixed(1) + '%' : '0.0%';
+      const pct = r.inputQty ? (((r.lossQty + (r.reprocessQty || 0)) / r.inputQty) * 100).toFixed(1) + '%' : '0.0%';
       return `<tr>
         <td class="font-semibold">${b.batchNo||'—'}</td>
         <td>${b.jmrefNo||'—'}</td>

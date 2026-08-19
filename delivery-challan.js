@@ -21,10 +21,9 @@ const DeliveryChallanModule = (() => {
     store: 'Store & Sales'
   };
 
-  // Helpers to calculate the received quantity from the batch's last completed stage record
-  function getBatchCurrentQty(b) {
-    const stageRecords = DB.StageRecords.all();
-    const recs = stageRecords.filter(r => r.batchId === b.id && r.movedTo === b.currentStage);
+  function getBatchCurrentQty(b, stageRecords = null) {
+    const records = stageRecords || DB.StageRecords.all();
+    const recs = records.filter(r => r.batchId === b.id && r.movedTo === b.currentStage);
     if (!recs.length) return Number(b.initialQty || 0);
     const lastRec = recs[recs.length - 1];
     return lastRec.isRecheck ? Number(lastRec.recheckQty || 0) : Number(lastRec.outputQty || 0);
@@ -301,9 +300,11 @@ const DeliveryChallanModule = (() => {
     // Sort batches alphabetically by Batch No
     eligibleBatches.sort((a,b) => a.batchNo.localeCompare(b.batchNo));
 
+    const stageRecords = DB.StageRecords.all();
+
     let html = '';
     eligibleBatches.forEach(b => {
-      const qty = getBatchCurrentQty(b);
+      const qty = getBatchCurrentQty(b, stageRecords);
       const stageName = STAGE_NAMES[b.currentStage] || b.currentStage;
       html += `<option value="${b.batchNo}">${b.batchNo} [${b.jmrefNo}] (${qty} pcs) - Stage: ${stageName}</option>`;
     });
@@ -452,27 +453,34 @@ const DeliveryChallanModule = (() => {
     // Process dispatches and stage record insertions
     challanItems.forEach(item => {
       const b = item.batch;
-      if (moveBatches && !item.isAlreadyAtDestination) {
-        // Record transition
-        DB.StageRecords.insert({
-          batchId: b.id,
-          stage: b.currentStage,
-          inputQty: item.qty,
-          outputQty: item.qty,
-          lossQty: 0,
-          vendorId: selectedVendorId,
-          movedTo: destStage,
-          movedFrom: b.currentStage,
-          date: dateStr,
-          recordedBy: session?.userId || 'unknown',
-          notes: `Dispatched via ${dcNo}`
-        });
+      if (moveBatches) {
+        if (!item.isAlreadyAtDestination) {
+          // Record transition
+          DB.StageRecords.insert({
+            batchId: b.id,
+            stage: b.currentStage,
+            inputQty: item.qty,
+            outputQty: item.qty,
+            lossQty: 0,
+            vendorId: selectedVendorId,
+            movedTo: destStage,
+            movedFrom: b.currentStage,
+            date: dateStr,
+            recordedBy: session?.userId || 'unknown',
+            notes: `Dispatched via ${dcNo}`
+          });
 
-        // Advance stage
-        DB.Batches.update(b.id, {
-          currentStage: destStage,
-          vendorId: selectedVendorId
-        });
+          // Advance stage
+          DB.Batches.update(b.id, {
+            currentStage: destStage,
+            vendorId: selectedVendorId
+          });
+        } else {
+          // Update vendor even if it is already in the destination stage
+          DB.Batches.update(b.id, {
+            vendorId: selectedVendorId
+          });
+        }
       }
     });
 

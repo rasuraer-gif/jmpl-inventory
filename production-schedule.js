@@ -14,12 +14,15 @@ const ProductionScheduleModule = (() => {
     const schedules = DB.ProductionSchedules.byMonth(selectedMonth);
     const batches = DB.Batches.all();
 
+    // Pre-filter batches for the selected month once
+    const monthlyBatches = batches.filter(b => {
+      const bd = (b.productionDate || b.createdAt || '').slice(0, 7);
+      return bd === selectedMonth;
+    });
+
     // Filter plans to only show JMREF if % of completion is lesser than 200% (for dropdown)
     const plansUnder200 = plans.filter(p => {
-      const matchedBatches = batches.filter(b => {
-        const bd = (b.productionDate || b.createdAt || '').slice(0, 7);
-        return b.jmrefNo === p.jmrefNo && bd === selectedMonth;
-      });
+      const matchedBatches = monthlyBatches.filter(b => b.jmrefNo === p.jmrefNo);
       const produced = matchedBatches.reduce((s, b) => s + (b.initialQty || 0), 0);
       const pct = p.qty > 0 ? (produced / p.qty) * 100 : 0;
       return pct < 200;
@@ -29,10 +32,7 @@ const ProductionScheduleModule = (() => {
     const schedulesUnder200 = schedules.filter(s => {
       const p = plans.find(plan => plan.jmrefNo === s.jmrefNo);
       if (!p) return true; // If no plan target is set for this JMREF, keep it
-      const matchedBatches = batches.filter(b => {
-        const bd = (b.productionDate || b.createdAt || '').slice(0, 7);
-        return b.jmrefNo === p.jmrefNo && bd === selectedMonth;
-      });
+      const matchedBatches = monthlyBatches.filter(b => b.jmrefNo === p.jmrefNo);
       const produced = matchedBatches.reduce((s, b) => s + (b.initialQty || 0), 0);
       const pct = p.qty > 0 ? (produced / p.qty) * 100 : 0;
       return pct < 200;
@@ -41,32 +41,8 @@ const ProductionScheduleModule = (() => {
     const stageRecords = DB.StageRecords.all();
     const wipStages = ['production','cryogenic','deflashing','trimming','visual','gauge','quality'];
 
-    // Filter plans specifically for the Summary Tab: ONLY display JMREF where (Monthly Target * 2) >= Total Qty in hand
-    const summaryPlans = plans.filter(p => {
-      const part = master.find(m => m.jmrefNo === p.jmrefNo);
-      if (!part) return false;
-
-      // 1. Store stock
-      const storeQty = DB.StoreInventory.availableByJmref(p.jmrefNo);
-
-      // 2. WIP stock across all WIP stages
-      let wipQty = 0;
-      wipStages.forEach(stage => {
-        const activeBatches = batches.filter(b =>
-          b.partId === part.id && b.currentStage === stage && b.status === 'active'
-        );
-        wipQty += activeBatches.reduce((sum, b) => {
-          const incoming = stageRecords.filter(r => r.batchId === b.id && r.movedTo === stage);
-          if (incoming.length) {
-            return sum + (incoming[incoming.length - 1].outputQty || 0);
-          }
-          return sum + (b.initialQty || 0);
-        }, 0);
-      });
-
-      const totalQtyInHand = storeQty + wipQty;
-      return p.qty === 0 || (p.qty * 2) >= totalQtyInHand;
-    });
+    // Filter plans specifically for the Summary Tab: display only where monthly target is greater than 0
+    const summaryPlans = plans.filter(p => p.qty > 0);
 
     const tabContent = 
       activeTab === 'summary' ? renderSummaryTab(summaryPlans, schedules, master) :
@@ -110,12 +86,15 @@ const ProductionScheduleModule = (() => {
   function renderSummaryTab(plans, schedules, master) {
     const batches = DB.Batches.all();
 
+    // Pre-filter batches for the selected month once
+    const monthlyBatches = batches.filter(b => {
+      const bd = (b.productionDate || b.createdAt || '').slice(0, 7);
+      return bd === selectedMonth;
+    });
+
     // Map plans to include pre-computed Produced quantity and achievement percentage for sorting
     const plansWithData = plans.map(p => {
-      const matchedBatches = batches.filter(b => {
-        const bd = (b.productionDate || b.createdAt || '').slice(0, 7);
-        return b.jmrefNo === p.jmrefNo && bd === selectedMonth;
-      });
+      const matchedBatches = monthlyBatches.filter(b => b.jmrefNo === p.jmrefNo);
       const producedQty = matchedBatches.reduce((sum, b) => sum + (b.initialQty || 0), 0);
       const totalTargetPct = p.qty > 0 ? (producedQty / p.qty) * 100 : 0;
       return { p, producedQty, totalTargetPct };
@@ -135,10 +114,7 @@ const ProductionScheduleModule = (() => {
       
       // Matched schedules & batches
       const matchedSchedules = schedules.filter(s => s.jmrefNo === p.jmrefNo);
-      const matchedBatches = batches.filter(b => {
-        const bd = (b.productionDate || b.createdAt || '').slice(0, 7);
-        return b.jmrefNo === p.jmrefNo && bd === selectedMonth;
-      });
+      const matchedBatches = monthlyBatches.filter(b => b.jmrefNo === p.jmrefNo);
 
       const scheduledQty = matchedSchedules.reduce((sum, s) => sum + (s.qty || 0), 0);
 
@@ -203,7 +179,7 @@ const ProductionScheduleModule = (() => {
               </tr>
             </thead>
             <tbody>
-              ${rows || `<tr><td colspan="8" class="text-center text-muted" style="padding:32px;">No monthly plans found where twice the target is greater than or equal to the total quantity in hand.</td></tr>`}
+              ${rows || `<tr><td colspan="8" class="text-center text-muted" style="padding:32px;">No monthly plans found with a target greater than 0.</td></tr>`}
             </tbody>
           </table>
         </div>
@@ -475,12 +451,15 @@ const ProductionScheduleModule = (() => {
     const schedules = DB.ProductionSchedules.byMonth(selectedMonth);
     const batches = DB.Batches.all();
 
+    // Pre-filter batches for the selected month once
+    const monthlyBatches = batches.filter(b => {
+      const bd = (b.productionDate || b.createdAt || '').slice(0, 7);
+      return bd === selectedMonth;
+    });
+
     // Map plans to include pre-computed Produced quantity and achievement percentage for sorting
-    const plansWithData = plans.map(p => {
-      const matchedBatches = batches.filter(b => {
-        const bd = (b.productionDate || b.createdAt || '').slice(0, 7);
-        return b.jmrefNo === p.jmrefNo && bd === selectedMonth;
-      });
+    const plansWithData = plans.filter(p => p.qty > 0).map(p => {
+      const matchedBatches = monthlyBatches.filter(b => b.jmrefNo === p.jmrefNo);
       const producedQty = matchedBatches.reduce((sum, b) => sum + (b.initialQty || 0), 0);
       const totalTargetPct = p.qty > 0 ? (producedQty / p.qty) * 100 : 0;
       return { p, producedQty, totalTargetPct };
@@ -507,20 +486,14 @@ const ProductionScheduleModule = (() => {
       // In-House calculations
       const matchedSchedulesInHouse = matchedSchedules.filter(s => s.producedBy === 'inhouse');
       const scheduledInHouse = matchedSchedulesInHouse.reduce((sum, s) => sum + (s.qty || 0), 0);
-      const matchedBatchesInHouse = batches.filter(b => {
-        const bd = (b.productionDate || b.createdAt || '').slice(0, 7);
-        return b.jmrefNo === p.jmrefNo && bd === selectedMonth && b.productionType === 'inhouse';
-      });
+      const matchedBatchesInHouse = monthlyBatches.filter(b => b.jmrefNo === p.jmrefNo && b.productionType === 'inhouse');
       const producedInHouse = matchedBatchesInHouse.reduce((sum, b) => sum + (b.initialQty || 0), 0);
       const inHouseTargetPct = p.qty > 0 ? ((producedInHouse / p.qty) * 100).toFixed(1) : '0.0';
 
       // Subcontractor calculations
       const matchedSchedulesSub = matchedSchedules.filter(s => s.producedBy === 'subcontractor');
       const scheduledSub = matchedSchedulesSub.reduce((sum, s) => sum + (s.qty || 0), 0);
-      const matchedBatchesSub = batches.filter(b => {
-        const bd = (b.productionDate || b.createdAt || '').slice(0, 7);
-        return b.jmrefNo === p.jmrefNo && bd === selectedMonth && b.productionType === 'subcontractor';
-      });
+      const matchedBatchesSub = monthlyBatches.filter(b => b.jmrefNo === p.jmrefNo && b.productionType === 'subcontractor');
       const producedSub = matchedBatchesSub.reduce((sum, b) => sum + (b.initialQty || 0), 0);
       const subTargetPct = p.qty > 0 ? ((producedSub / p.qty) * 100).toFixed(1) : '0.0';
 
