@@ -214,6 +214,8 @@ const ProductionModule = (() => {
                 <option value="deflashing">Manual DE Flashing</option>
                 <option value="waiting-trimming">Waiting for Trimming</option>
                 <option value="trimming">Trimming</option>
+                <option value="post-curing">Post Curing</option>
+                <option value="visual">Visual Inspection</option>
               </select>
             </div>
           </div>
@@ -856,6 +858,7 @@ const ProductionModule = (() => {
           <option value="deflashing">Manual DE Flashing</option>
           <option value="waiting-trimming">Waiting for Trimming</option>
           <option value="trimming">Trimming</option>
+          <option value="post-curing">Post Curing</option>
           <option value="visual">Visual Inspection</option>
         `;
         destSelect.value = (prevVal && prevVal !== 'production') ? prevVal : 'cryogenic';
@@ -866,6 +869,7 @@ const ProductionModule = (() => {
           <option value="deflashing">Manual DE Flashing</option>
           <option value="waiting-trimming">Waiting for Trimming</option>
           <option value="trimming">Trimming</option>
+          <option value="post-curing">Post Curing</option>
           <option value="visual">Visual Inspection</option>
         `;
         destSelect.value = prevVal || 'production';

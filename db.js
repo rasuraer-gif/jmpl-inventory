@@ -185,7 +185,7 @@ const DB = (() => {
                               (document.activeElement.tagName === 'INPUT' || 
                                document.activeElement.tagName === 'TEXTAREA');
               
-              if (!modalOpen && !isTyping && !window.preventAutoRefresh && App.current !== 'reports' && App.current !== 'daily-analysis') {
+              if (!modalOpen && !isTyping && !window.preventAutoRefresh && !App.current.startsWith('report') && App.current !== 'daily-analysis') {
                 if (refreshTimeout) clearTimeout(refreshTimeout);
                 refreshTimeout = setTimeout(() => {
                   App.navigate(App.current);

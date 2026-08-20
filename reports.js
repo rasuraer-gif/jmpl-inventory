@@ -1283,10 +1283,16 @@ const ReportsModule = (() => {
       const p = master.find(m => m.jmrefNo === b.jmrefNo) || {};
       
       let stageText = STAGE_LABELS[b.currentStage] || b.currentStage;
-      const VENDOR_ELIGIBLE_STAGES = ['production', 'cryogenic', 'deflashing', 'waiting-trimming', 'trimming'];
+      const VENDOR_ELIGIBLE_STAGES = ['production', 'cryogenic', 'deflashing', 'trimming'];
+      const STAGE_DEPT_MAP = {
+        'production': 'production',
+        'cryogenic': 'cryogenic',
+        'deflashing': 'deflashing',
+        'trimming': 'trimming'
+      };
       if (b.vendorId && VENDOR_ELIGIBLE_STAGES.includes(b.currentStage)) {
         const v = vendors.find(vv => vv.id === b.vendorId);
-        if (v && v.name) {
+        if (v && v.name && v.department === STAGE_DEPT_MAP[b.currentStage]) {
           stageText += ` → ${v.name}`;
         }
       }
@@ -2391,13 +2397,19 @@ const ReportsModule = (() => {
       const vendors = DB.Vendors.all();
       const combos = [];
       const keys = new Set();
-      const VENDOR_ELIGIBLE_STAGES = ['production', 'cryogenic', 'deflashing', 'waiting-trimming', 'trimming'];
+      const VENDOR_ELIGIBLE_STAGES = ['production', 'cryogenic', 'deflashing', 'trimming'];
+      const STAGE_DEPT_MAP = {
+        'production': 'production',
+        'cryogenic': 'cryogenic',
+        'deflashing': 'deflashing',
+        'trimming': 'trimming'
+      };
       activeBatches.forEach(b => {
         const isStore = b.currentStage === 'store' && b.status === 'completed';
         const isActive = b.status === 'active';
         if ((isActive || isStore) && b.vendorId && VENDOR_ELIGIBLE_STAGES.includes(b.currentStage)) {
           const v = vendors.find(vv => vv.id === b.vendorId);
-          if (v && v.name) {
+          if (v && v.name && v.department === STAGE_DEPT_MAP[b.currentStage]) {
             const key = `${b.currentStage}_${b.vendorId}`;
             if (!keys.has(key)) {
               keys.add(key);
@@ -2986,14 +2998,6 @@ const ReportsModule = (() => {
       exportExcel(JSON.parse(out.dataset.headers), JSON.parse(out.dataset.rows), `JMPL_${reportKey}_${new Date().toISOString().slice(0,10)}`, report.label);
     });
 
-    // Auto-run if no filters needed (e.g. rejected report)
-    if (!buildFilters(reportKey)) runReport(reportKey);
-    // Auto-run inventory & store reports immediately (no date filters needed)
-    if (reportKey === 'inventory') runReport(reportKey);
-    if (reportKey === 'store-stock') runReport(reportKey);
-    if (reportKey === 'pending-batches') runReport(reportKey);
-    if (reportKey === 'sub-pending') runReport(reportKey);
-    if (reportKey === 'sub-performance') runReport(reportKey);
   }
 
   function filterAging(val) {

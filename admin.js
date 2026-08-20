@@ -1158,8 +1158,15 @@ const AdminModule = (() => {
           <h3>📦 Manage Batch Stages</h3>
         </div>
         <div class="card-body">
-          <div class="form-group">
-            <input type="text" id="admin-batch-search" class="form-control" placeholder="Search by Batch No or JM Ref No..." oninput="AdminModule.filterAdminBatches(this.value)">
+          <div class="form-group" style="display:flex; gap:8px; align-items:center; margin-bottom:16px;">
+            <input type="text" id="admin-batch-search" class="form-control" placeholder="Search by Batch No or JM Ref No..." oninput="AdminModule.filterAdminBatches(this.value)" style="flex:1; margin-bottom:0;">
+            <button class="btn btn-secondary" onclick="Scanner.start('admin-batch-search', (val) => {
+              const inp = document.getElementById('admin-batch-search');
+              if (inp) {
+                inp.value = val;
+                AdminModule.filterAdminBatches(val);
+              }
+            })" style="padding: 4px 12px; display: flex; align-items: center; justify-content: center; height: 38px;" title="Scan QR Code">📷 Scan</button>
           </div>
           <div class="table-responsive">
             <table class="table">
@@ -1262,13 +1269,36 @@ const AdminModule = (() => {
     
     try {
       if (oldStage !== newStage) {
-        // Find latest quantity from stage records
+        // Find historical quantity for newStage
         const recs = DB.StageRecords.all().filter(r => r.batchId === batchId);
-        let qty = batch.initialQty || 0;
-        if (recs.length > 0) {
-          const sorted = [...recs].sort((x, y) => (x.createdAt || x.date || '').localeCompare(y.createdAt || y.date || ''));
-          const latest = sorted[sorted.length - 1];
-          qty = Number(latest.outputQty) || qty;
+        const sorted = [...recs].sort((x, y) => (x.createdAt || x.date || '').localeCompare(y.createdAt || y.date || ''));
+        
+        let targetQty = null;
+        
+        // 1. Try finding latest record where movedTo === newStage
+        const entryRecs = sorted.filter(r => r.movedTo === newStage);
+        if (entryRecs.length > 0) {
+          const latestEntry = entryRecs[entryRecs.length - 1];
+          targetQty = latestEntry.isRecheck ? (latestEntry.recheckQty ?? latestEntry.outputQty) : latestEntry.outputQty;
+        }
+        
+        // 2. Try finding latest record where stage === newStage
+        if (targetQty === null) {
+          const exitRecs = sorted.filter(r => r.stage === newStage);
+          if (exitRecs.length > 0) {
+            const latestExit = exitRecs[exitRecs.length - 1];
+            targetQty = latestExit.inputQty;
+          }
+        }
+        
+        // 3. Fallback to batch initialQty or current output qty
+        if (targetQty === null) {
+          if (sorted.length > 0) {
+            const latest = sorted[sorted.length - 1];
+            targetQty = Number(latest.outputQty) || batch.initialQty || 0;
+          } else {
+            targetQty = batch.initialQty || 0;
+          }
         }
 
         const session = typeof Auth !== 'undefined' ? Auth.getSession() : null;
@@ -1277,18 +1307,24 @@ const AdminModule = (() => {
         DB.StageRecords.insert({
           batchId: batchId,
           stage: oldStage,
-          inputQty: qty,
-          outputQty: qty,
+          inputQty: targetQty,
+          outputQty: targetQty,
           lossQty: 0,
           movedFrom: oldStage,
           movedTo: newStage,
           date: dateStr,
           recordedBy: session?.userId,
-          notes: `Admin manually updated stage from "${oldStage}" to "${newStage}"`
+          notes: `changed via batch by admin`
         });
-      }
 
-      DB.Batches.update(batchId, { currentStage: newStage, status: status });
+        DB.Batches.update(batchId, { 
+          currentStage: newStage, 
+          status: status,
+          remainingQty: targetQty
+        });
+      } else {
+        DB.Batches.update(batchId, { currentStage: newStage, status: status });
+      }
       showToast('Batch stage updated successfully', 'success');
       
       const searchInput = document.getElementById('admin-batch-search');
