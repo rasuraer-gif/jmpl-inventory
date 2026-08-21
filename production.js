@@ -1540,6 +1540,6 @@ const ProductionModule = (() => {
     printWindow.document.close();
   }
 
-  return { render, openMove, calcLoss, moveBatch, openReject, rejectBatch, onTypeChange, createBatch, resetForm, showPartDropdown, filterParts, selectPart, updateDynamicBatchNo, updateMoveDynamicBatchNo, printBarcode, filterPending, showJmrefDropdown, filterJmrefs, onDestinationChange, onMouldChange, onSubDestinationChange, openEditBatch, onEditTypeChange, saveBatchEdit, calculateInhouseQty, calculateEditInhouseQty, toggleAllActive, toggleAllCompleted, bulkPrintBarcodes };
+  return { render, openMove, calcLoss, moveBatch, openReject, rejectBatch, onTypeChange, createBatch, resetForm, showPartDropdown, filterParts, selectPart, updateDynamicBatchNo, updateMoveDynamicBatchNo, printBarcode, filterPending, showJmrefDropdown, filterJmrefs, onDestinationChange, onMouldChange, onSubDestinationChange, openEditBatch, onEditTypeChange, saveBatchEdit, calculateInhouseQty, calculateEditInhouseQty, toggleAllActive, toggleAllCompleted, bulkPrintBarcodes, get activeTab() { return activeTab; } };
 })();
 window.ProductionModule = ProductionModule;

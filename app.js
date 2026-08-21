@@ -1946,22 +1946,171 @@ function renderDashboard() {
     `;
   });
   
-  const dashboardChartHtml = `
-    <div class="card" style="margin-bottom:28px; padding: 16px;">
+  // Option 2: WIP stage chart
+  const wipSvgWidth = 500;
+  const wipSvgHeight = 240;
+  const wipPaddingLeft = 110;
+  const wipPaddingRight = 40;
+  const wipPaddingTop = 15;
+  const wipPaddingBottom = 20;
+  
+  const wipChartInnerWidth = wipSvgWidth - wipPaddingLeft - wipPaddingRight;
+  const wipChartInnerHeight = wipSvgHeight - wipPaddingTop - wipPaddingBottom;
+  
+  const wipStageData = STAGES.filter(s => s !== 'store').map(stage => {
+    const stageBatches = batches.filter(b => b.currentStage === stage && b.status === 'active');
+    const totalQty = stageBatches.reduce((sum, b) => {
+      if (b.currentStage !== 'production') {
+        const incoming = DB.StageRecords.all().filter(r => r.batchId === b.id && r.movedTo === stage);
+        if (incoming.length > 0) {
+          const lastRec = incoming[incoming.length - 1];
+          return sum + (lastRec.isRecheck ? (lastRec.recheckQty ?? lastRec.outputQty) : lastRec.outputQty || 0);
+        }
+      }
+      return sum + (b.initialQty || 0);
+    }, 0);
+    return { label: STAGE_NAMES[stage] || stage, qty: totalQty };
+  });
+  
+  const maxWipQty = Math.max(...wipStageData.map(s => s.qty), 100);
+  const wipGroupHeight = wipChartInnerHeight / wipStageData.length;
+  const wipBarHeight = wipGroupHeight * 0.6;
+  
+  let wipBarsHtml = '';
+  wipStageData.forEach((d, idx) => {
+    const yPos = wipPaddingTop + wipGroupHeight * idx + (wipGroupHeight - wipBarHeight) / 2;
+    const barWidth = (d.qty / maxWipQty) * wipChartInnerWidth;
+    
+    wipBarsHtml += `
+      <text x="${wipPaddingLeft - 8}" y="${yPos + wipBarHeight / 2 + 3}" font-size="8.5" fill="var(--text-primary)" text-anchor="end">${d.label}</text>
+      <rect x="${wipPaddingLeft}" y="${yPos}" width="${barWidth}" height="${wipBarHeight}" fill="var(--accent-teal)" rx="2" />
+      <text x="${wipPaddingLeft + barWidth + 6}" y="${yPos + wipBarHeight / 2 + 3}" font-size="8.5" fill="var(--text-secondary)" text-anchor="start" font-weight="600">${formatNum(d.qty)}</text>
+    `;
+  });
+  
+  const wipChartHtml = `
+    <div class="card" style="padding: 16px; display: flex; flex-direction: column;">
       <div class="card-header" style="padding-bottom: 8px;">
-        <h3>📊 Monthly Stage Yield &amp; Defect Analysis</h3>
+        <h3>📊 WIP Bottleneck Stage Distribution</h3>
       </div>
-      <div style="display:flex; justify-content:center; align-items:center; overflow-x:auto;">
-        <svg viewBox="0 0 ${svgWidth} ${svgHeight}" style="width:100%; max-width:550px; height:auto; overflow:visible;">
-          ${gridLines}
-          ${barsHtml}
-          <line x1="${paddingLeft}" y1="${svgHeight - paddingBottom}" x2="${svgWidth - paddingRight}" y2="${svgHeight - paddingBottom}" stroke="var(--border-strong)" stroke-width="2" />
+      <div style="display:flex; justify-content:center; align-items:center; overflow-x:auto; flex: 1;">
+        <svg viewBox="0 0 ${wipSvgWidth} ${wipSvgHeight}" style="width:100%; max-width:550px; height:auto; overflow:visible;">
+          ${wipBarsHtml}
+          <line x1="${wipPaddingLeft}" y1="${wipPaddingTop}" x2="${wipPaddingLeft}" y2="${wipSvgHeight - wipPaddingBottom}" stroke="var(--border-strong)" stroke-width="1.5" />
+        </svg>
+      </div>
+    </div>
+  `;
+
+  // Option 3: Weekly Production Volume & Loss Trend
+  const weeksData = [
+    { name: 'W1 (1-7)', startDay: 1, endDay: 7, prod: 0, loss: 0 },
+    { name: 'W2 (8-14)', startDay: 8, endDay: 14, prod: 0, loss: 0 },
+    { name: 'W3 (15-21)', startDay: 15, endDay: 21, prod: 0, loss: 0 },
+    { name: 'W4 (22+)', startDay: 22, endDay: 31, prod: 0, loss: 0 }
+  ];
+
+  weeksData.forEach(w => {
+    const recs = stageRecordsThisMonth.filter(r => {
+      const dateStr = r.date || r.createdAt?.slice(0, 10);
+      if (!dateStr) return false;
+      const day = parseInt(dateStr.split('-')[2], 10);
+      return day >= w.startDay && day <= w.endDay;
+    });
+
+    w.prod = recs.filter(r => r.stage === 'production').reduce((sum, r) => sum + (r.outputQty || 0), 0);
+    w.loss = recs.reduce((sum, r) => sum + (r.lossQty || 0), 0);
+  });
+
+  const maxTrendVal = Math.max(...weeksData.map(w => Math.max(w.prod, w.loss)), 100);
+  
+  let trendGridLines = '';
+  const trendChartInnerWidth = 500 - 60 - 20;
+  const trendChartInnerHeight = 240 - 20 - 40;
+  for (let i = 0; i <= 4; i++) {
+    const yVal = 20 + (trendChartInnerHeight / 4) * i;
+    const tickLabel = Math.round(maxTrendVal - (maxTrendVal / 4) * i);
+    trendGridLines += `
+      <line x1="60" y1="${yVal}" x2="480" y2="${yVal}" stroke="var(--border)" stroke-width="1" stroke-dasharray="4" />
+      <text x="52" y="${yVal + 4}" font-size="9" fill="var(--text-secondary)" text-anchor="end">${formatNum(tickLabel)}</text>
+    `;
+  }
+
+  const prodPoints = weeksData.map((w, idx) => {
+    const x = 60 + (trendChartInnerWidth / 3) * idx;
+    const y = 20 + trendChartInnerHeight - (w.prod / maxTrendVal) * trendChartInnerHeight;
+    return { x, y };
+  });
+  const prodPathD = `M ${prodPoints.map(p => `${p.x} ${p.y}`).join(' L ')}`;
+  
+  let prodCircles = '';
+  prodPoints.forEach(p => {
+    prodCircles += `<circle cx="${p.x}" cy="${p.y}" r="4" fill="var(--accent-blue)" stroke="#fff" stroke-width="1" />`;
+  });
+
+  const lossPoints = weeksData.map((w, idx) => {
+    const x = 60 + (trendChartInnerWidth / 3) * idx;
+    const y = 20 + trendChartInnerHeight - (w.loss / maxTrendVal) * trendChartInnerHeight;
+    return { x, y };
+  });
+  const lossPathD = `M ${lossPoints.map(p => `${p.x} ${p.y}`).join(' L ')}`;
+  
+  let lossCircles = '';
+  lossPoints.forEach(p => {
+    lossCircles += `<circle cx="${p.x}" cy="${p.y}" r="4" fill="var(--accent-red)" stroke="#fff" stroke-width="1" />`;
+  });
+
+  let trendXLabels = '';
+  weeksData.forEach((w, idx) => {
+    const x = 60 + (trendChartInnerWidth / 3) * idx;
+    trendXLabels += `<text x="${x}" y="${240 - 20}" font-size="9" fill="var(--text-primary)" text-anchor="middle" font-weight="600">${w.name}</text>`;
+  });
+
+  const trendChartHtml = `
+    <div class="card" style="padding: 16px; display: flex; flex-direction: column;">
+      <div class="card-header" style="padding-bottom: 8px;">
+        <h3>📈 Weekly Production &amp; Scrap Trend</h3>
+      </div>
+      <div style="display:flex; justify-content:center; align-items:center; overflow-x:auto; flex: 1;">
+        <svg viewBox="0 0 500 240" style="width:100%; max-width:550px; height:auto; overflow:visible;">
+          ${trendGridLines}
+          <path d="${prodPathD}" fill="none" stroke="var(--accent-blue)" stroke-width="2.5" />
+          <path d="${lossPathD}" fill="none" stroke="var(--accent-red)" stroke-width="2.5" />
+          ${prodCircles}
+          ${lossCircles}
+          ${trendXLabels}
+          <line x1="60" y1="${20 + trendChartInnerHeight}" x2="480" y2="${20 + trendChartInnerHeight}" stroke="var(--border-strong)" stroke-width="1.5" />
         </svg>
       </div>
       <div style="display:flex; justify-content:center; gap:20px; margin-top:12px; font-size:12px;">
-        <div style="display:flex; align-items:center; gap:6px;"><span style="width:12px; height:12px; background:var(--accent-green); border-radius:3px; display:inline-block;"></span><span class="font-semibold">Passed</span></div>
-        <div style="display:flex; align-items:center; gap:6px;"><span style="width:12px; height:12px; background:var(--accent-red); border-radius:3px; display:inline-block;"></span><span class="font-semibold">Loss (Reject)</span></div>
+        <div style="display:flex; align-items:center; gap:6px;"><span style="width:12px; height:12px; background:var(--accent-blue); border-radius:3px; display:inline-block;"></span><span class="font-semibold">Moulding Output</span></div>
+        <div style="display:flex; align-items:center; gap:6px;"><span style="width:12px; height:12px; background:var(--accent-red); border-radius:3px; display:inline-block;"></span><span class="font-semibold">Total Scrap Loss</span></div>
       </div>
+    </div>
+  `;
+
+  const chartsContainerHtml = `
+    <div class="dashboard-charts-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px; margin-bottom: 28px;">
+      <div class="card" style="padding: 16px; display: flex; flex-direction: column;">
+        <div class="card-header" style="padding-bottom: 8px;">
+          <h3>📊 Monthly Stage Yield &amp; Scrap</h3>
+        </div>
+        <div style="display:flex; justify-content:center; align-items:center; overflow-x:auto; flex: 1;">
+          <svg viewBox="0 0 ${svgWidth} ${svgHeight}" style="width:100%; max-width:550px; height:auto; overflow:visible;">
+            ${gridLines}
+            ${barsHtml}
+            <line x1="${paddingLeft}" y1="${svgHeight - paddingBottom}" x2="${svgWidth - paddingRight}" y2="${svgHeight - paddingBottom}" stroke="var(--border-strong)" stroke-width="2" />
+          </svg>
+        </div>
+        <div style="display:flex; justify-content:center; gap:20px; margin-top:12px; font-size:12px;">
+          <div style="display:flex; align-items:center; gap:6px;"><span style="width:12px; height:12px; background:var(--accent-green); border-radius:3px; display:inline-block;"></span><span class="font-semibold">Passed</span></div>
+          <div style="display:flex; align-items:center; gap:6px;"><span style="width:12px; height:12px; background:var(--accent-red); border-radius:3px; display:inline-block;"></span><span class="font-semibold">Loss (Reject)</span></div>
+        </div>
+      </div>
+      
+      ${wipChartHtml}
+      
+      ${trendChartHtml}
     </div>
   `;
 
@@ -2066,7 +2215,7 @@ function renderDashboard() {
         </div>
       </div>
 
-      ${dashboardChartHtml}
+      ${chartsContainerHtml}
 
       <!-- Monthly Stage Production (Selected Month) -->
       <div class="card" style="margin-bottom:28px;">

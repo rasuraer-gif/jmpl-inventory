@@ -5,6 +5,7 @@ const MouldTrackingModule = (() => {
   let activeTab = 'moulds'; // 'moulds', 'movements', 'traceability', 'reports'
   
   // Search & Filter state
+  let mouldSearchJmref = '';
   let traceJmref = '';
   let traceMouldType = '';
   
@@ -110,6 +111,7 @@ const MouldTrackingModule = (() => {
 
   function switchTab(tab) {
     activeTab = tab;
+    mouldSearchJmref = '';
     renderTabContent();
     // Update active tab class in UI
     document.querySelectorAll('#mould-tabs .tab-btn').forEach(btn => {
@@ -129,6 +131,8 @@ const MouldTrackingModule = (() => {
       container.innerHTML = renderMaintenanceTab();
     } else if (activeTab === 'traceability') {
       container.innerHTML = renderTraceabilityTab();
+      const input = document.getElementById('trace-jmref');
+      if (input) { input.focus(); input.selectionStart = input.value.length; }
     } else if (activeTab === 'reports') {
       container.innerHTML = renderReportsTab();
     }
@@ -137,7 +141,13 @@ const MouldTrackingModule = (() => {
   // ── TAB 1: MOULDS MASTER ──────────────────────────────────
   function renderMouldsTab() {
     const moulds = DB.Moulds.all() || [];
-    const rows = moulds.map((m, i) => {
+    let filtered = moulds;
+    if (mouldSearchJmref) {
+      const q = mouldSearchJmref.toLowerCase().trim();
+      filtered = filtered.filter(m => (m.jmrefNo || '').toLowerCase().includes(q));
+    }
+
+    const rows = filtered.map((m, i) => {
       const currentLoc = getMouldCurrentLocation(m.id);
       const isInternal = currentLoc === 'In-House Factory Floor';
       const locBadge = isInternal ? '<span class="badge badge-green">In-House</span>' : `<span class="badge badge-amber">${currentLoc}</span>`;
@@ -179,7 +189,13 @@ const MouldTrackingModule = (() => {
 
     return `
       <div class="card">
-        <div class="card-header"><h3>Mould Master Database</h3></div>
+        <div class="card-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+          <h3>Mould Master Database</h3>
+          <div class="search-input" style="max-width: 250px; margin: 0;">
+            <span class="search-icon">&#128269;</span>
+            <input type="text" id="mould-master-search-jmref" class="form-control form-control-sm" placeholder="Search by JMREF..." value="${mouldSearchJmref}" oninput="MouldTrackingModule.filterMouldsByJmref(this.value)">
+          </div>
+        </div>
         <div class="table-wrap">
           <table class="data-table">
             <thead>
@@ -201,7 +217,7 @@ const MouldTrackingModule = (() => {
               </tr>
             </thead>
             <tbody>
-              ${rows || '<tr><td colspan="15" style="text-align:center;padding:32px;color:var(--text-muted);">No moulds registered. Register your first mould to begin.</td></tr>'}
+              ${rows || '<tr><td colspan="14" style="text-align:center;padding:32px;color:var(--text-muted);">No moulds registered matching search query</td></tr>'}
             </tbody>
           </table>
         </div>
@@ -268,14 +284,11 @@ const MouldTrackingModule = (() => {
 
   // ── TAB 3: TRACEABILITY SEARCH ─────────────────────────────
   function renderTraceabilityTab() {
-    const master = DB.Master.all() || [];
-    const uniqueJmrefs = [...new Set(master.map(m => m.jmrefNo))].filter(Boolean);
-    const jmrefOpts = uniqueJmrefs.map(j => `<option value="${j}" ${traceJmref === j ? 'selected' : ''}>${j}</option>`).join('');
-
     // Fetch matching moulds
     let results = DB.Moulds.all() || [];
     if (traceJmref) {
-      results = results.filter(m => m.jmrefNo === traceJmref);
+      const q = traceJmref.toLowerCase().trim();
+      results = results.filter(m => (m.jmrefNo || '').toLowerCase().includes(q));
     }
     if (traceMouldType) {
       results = results.filter(m => m.mouldType === traceMouldType);
@@ -306,11 +319,8 @@ const MouldTrackingModule = (() => {
         <div class="card-body">
           <div class="form-row" style="align-items: flex-end;">
             <div class="form-group" style="flex:1;">
-              <label class="form-label">Overarching JMREF NO</label>
-              <select id="trace-jmref" class="form-control" onchange="MouldTrackingModule.filterTraceability()">
-                <option value="">All Reference Numbers...</option>
-                ${jmrefOpts}
-              </select>
+              <label class="form-label">Search JMREF NO</label>
+              <input type="text" id="trace-jmref" class="form-control" placeholder="Search JMREF No..." value="${traceJmref}" oninput="MouldTrackingModule.filterTraceability()">
             </div>
             <div class="form-group" style="flex:1;">
               <label class="form-label">Mould Type</label>
@@ -928,13 +938,36 @@ const MouldTrackingModule = (() => {
   function filterTraceability() {
     traceJmref = document.getElementById('trace-jmref')?.value || '';
     traceMouldType = document.getElementById('trace-mould-type')?.value || '';
-    renderTabContent();
+    const container = document.getElementById('mould-tab-content');
+    if (container) {
+      container.innerHTML = renderTraceabilityTab();
+      const inp = document.getElementById('trace-jmref');
+      if (inp) {
+        inp.value = traceJmref;
+        inp.focus();
+        inp.setSelectionRange(inp.value.length, inp.value.length);
+      }
+    }
   }
 
   function clearTraceability() {
     traceJmref = '';
     traceMouldType = '';
     renderTabContent();
+  }
+
+  function filterMouldsByJmref(val) {
+    mouldSearchJmref = val;
+    const container = document.getElementById('mould-tab-content');
+    if (container) {
+      container.innerHTML = renderMouldsTab();
+      const inp = document.getElementById('mould-master-search-jmref');
+      if (inp) {
+        inp.value = val;
+        inp.focus();
+        inp.setSelectionRange(inp.value.length, inp.value.length);
+      }
+    }
   }
 
   function filterReports() {
@@ -1466,6 +1499,7 @@ const MouldTrackingModule = (() => {
     saveMaintenance,
     startMaintenanceWork,
     promptCompleteMaintenance,
-    deleteMaintenance
+    deleteMaintenance,
+    filterMouldsByJmref
   };
 })();

@@ -266,7 +266,7 @@ const ReportsModule = (() => {
       ]);
 
       const batchBadges = partBatches.map(b => {
-        const rem = b.remainingQty !== undefined ? Number(b.remainingQty) : Number(b.initialQty || 0);
+        const rem = b.remaining !== undefined ? Number(b.remaining) : (b.remainingQty !== undefined ? Number(b.remainingQty) : Number(b.initialQty || b.batchQty || 0));
         return `<span class="badge badge-gray" style="font-size:11px; margin:2px 3px 2px 0;"><strong>${b.batchNo}</strong>: <span style="color:var(--accent-green);font-weight:700;">${formatNum(rem)}</span></span>`;
       }).join('') || '<span class="text-muted text-xs">—</span>';
 
@@ -2834,19 +2834,36 @@ const ReportsModule = (() => {
     ];
     const needsDateFetch = reportsWithDateRange.includes(reportKey);
 
-    if (needsDateFetch && typeof DB !== 'undefined' && DB.Batches && DB.Batches.fetchByDateRange) {
-      const runBtn = document.getElementById('rpt-run-btn');
-      const originalText = runBtn ? runBtn.textContent : '🔍 Generate Report';
-      if (runBtn) {
+    const runBtn = document.getElementById('rpt-run-btn');
+    const originalText = runBtn ? runBtn.textContent : '🔍 Generate Report';
+
+    if (runBtn) {
+      const allStageRecs = (typeof DB !== 'undefined' && DB.StageRecords) ? DB.StageRecords.all() || [] : [];
+      const referencedBatchIds = [...new Set(allStageRecs.map(r => r.batchId).filter(Boolean))];
+      const missingIds = (typeof DB !== 'undefined' && DB.Batches) 
+        ? referencedBatchIds.filter(id => !DB.Batches.all().some(b => b.id === id) && !DB.Batches.find(id)) 
+        : [];
+
+      const shouldFetchDate = needsDateFetch && typeof DB !== 'undefined' && DB.Batches && DB.Batches.fetchByDateRange;
+      const shouldFetchMissing = missingIds.length > 0 && typeof DB !== 'undefined' && DB.Batches && DB.Batches.fetchByIds;
+
+      if (shouldFetchDate || shouldFetchMissing) {
         runBtn.disabled = true;
         runBtn.textContent = '⏳ Loading...';
-      }
-      try {
-        await DB.Batches.fetchByDateRange(filters.from, filters.to);
-      } catch (err) {
-        console.error("Failed to pre-fetch historical batches:", err);
-      } finally {
-        if (runBtn) {
+        try {
+          if (shouldFetchDate) {
+            await DB.Batches.fetchByDateRange(filters.from, filters.to);
+          }
+          // Re-evaluate missingIds after fetchByDateRange has run
+          const remainingMissingIds = shouldFetchMissing 
+            ? missingIds.filter(id => !DB.Batches.all().some(b => b.id === id) && !DB.Batches.find(id)) 
+            : [];
+          if (remainingMissingIds.length > 0) {
+            await DB.Batches.fetchByIds(remainingMissingIds);
+          }
+        } catch (err) {
+          console.error("Failed to pre-fetch batches:", err);
+        } finally {
           runBtn.disabled = false;
           runBtn.textContent = originalText;
         }

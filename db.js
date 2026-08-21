@@ -182,10 +182,14 @@ const DB = (() => {
             if (window.App && typeof App.current === 'string') {
               const modalOpen = document.querySelector('.modal-overlay:not(.hidden)');
               const isTyping = document.activeElement && 
-                              (document.activeElement.tagName === 'INPUT' || 
-                               document.activeElement.tagName === 'TEXTAREA');
+                               (document.activeElement.tagName === 'INPUT' || 
+                                document.activeElement.tagName === 'TEXTAREA');
               
-              if (!modalOpen && !isTyping && !window.preventAutoRefresh && !App.current.startsWith('report') && App.current !== 'daily-analysis') {
+              const isProductionCreate = App.current === 'production' && 
+                                         typeof ProductionModule !== 'undefined' && 
+                                         ProductionModule.activeTab === 'create';
+
+              if (!modalOpen && !isTyping && !window.preventAutoRefresh && !App.current.startsWith('report') && App.current !== 'daily-analysis' && !isProductionCreate) {
                 if (refreshTimeout) clearTimeout(refreshTimeout);
                 refreshTimeout = setTimeout(() => {
                   App.navigate(App.current);

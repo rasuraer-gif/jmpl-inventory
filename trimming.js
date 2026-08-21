@@ -75,7 +75,6 @@ const TrimmingModule = (() => {
       if (vendorFilter === 'inhouse') {
         filtered = filtered.filter(b => {
           if (!b.vendorId) return true;
-          if (b.productionType === 'inhouse') return true;
           const v = vendors.find(vv => vv.id === b.vendorId);
           return v && v.name && v.name.toLowerCase().includes('in house');
         });
