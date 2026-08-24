@@ -718,49 +718,94 @@ const MasterModule = (() => {
   }
 
   function saveBulk() {
+    const validRows = parsedRows.filter(row => row.isValid);
+    if (!validRows.length) return;
+
+    const footer = document.querySelector('#master-bulk-modal .modal-footer');
+    if (footer) {
+      footer.innerHTML = `
+        <div id="upload-progress-container" style="flex: 1; text-align: left; padding: 0 10px;">
+          <div style="font-weight: 600; font-size: 12px; margin-bottom: 4px; color: var(--text-primary);" id="upload-progress-text">Saving: 0%</div>
+          <div style="width: 100%; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; position: relative;">
+            <div id="upload-progress-bar" style="width: 0%; height: 100%; background: var(--accent-green); transition: width 0.1s ease-in-out;"></div>
+          </div>
+        </div>
+      `;
+    }
+
     let uploadedCount = 0;
     let updatedCount = 0;
-    parsedRows.forEach(row => {
-      if (row.isValid) {
-        const fields = { ...row };
-        delete fields.isValid;
-        
-        if (fields.id) {
-          const existingId = fields.id;
-          delete fields.id;
-          const existingPart = DB.Master.find(existingId);
-          if (existingPart) {
-            const merged = { ...existingPart, ...fields };
-            if (fields.moulds && fields.moulds.length > 0) {
-              merged.moulds = fields.moulds;
+    const total = validRows.length;
+    const chunkSize = 20;
+
+    window.preventAutoRefresh = true;
+
+    async function doUpload() {
+      for (let i = 0; i < total; i += chunkSize) {
+        const chunk = validRows.slice(i, i + chunkSize);
+        chunk.forEach(row => {
+          const fields = { ...row };
+          delete fields.isValid;
+          
+          if (fields.id) {
+            const existingId = fields.id;
+            delete fields.id;
+            const existingPart = DB.Master.find(existingId);
+            if (existingPart) {
+              const merged = { ...existingPart, ...fields };
+              if (fields.moulds && fields.moulds.length > 0) {
+                merged.moulds = fields.moulds;
+              }
+              DB.Master.update(existingId, merged);
+              updatedCount++;
             }
-            DB.Master.update(existingId, merged);
-            updatedCount++;
+          } else {
+            DB.Master.insert(fields);
+            uploadedCount++;
           }
-        } else {
-          DB.Master.insert(fields);
-          uploadedCount++;
-        }
+        });
+
+        const percent = Math.round(((i + chunk.length) / total) * 100);
+        const progressText = document.getElementById('upload-progress-text');
+        const progressBar = document.getElementById('upload-progress-bar');
+        if (progressText) progressText.textContent = `Saving: ${percent}% (${i + chunk.length}/${total})`;
+        if (progressBar) progressBar.style.width = `${percent}%`;
+
+        await new Promise(resolve => setTimeout(resolve, 80));
       }
-    });
 
-    if (updatedCount > 0 && uploadedCount > 0) {
-      showToast(`Successfully uploaded ${uploadedCount} new parts and updated ${updatedCount} parts!`, 'success');
-    } else if (updatedCount > 0) {
-      showToast(`Successfully updated ${updatedCount} parts!`, 'success');
-    } else {
-      showToast(`Successfully uploaded ${uploadedCount} parts!`, 'success');
+      if (updatedCount > 0 && uploadedCount > 0) {
+        showToast(`Successfully uploaded ${uploadedCount} new parts and updated ${updatedCount} parts!`, 'success');
+      } else if (updatedCount > 0) {
+        showToast(`Successfully updated ${updatedCount} parts!`, 'success');
+      } else {
+        showToast(`Successfully uploaded ${uploadedCount} parts!`, 'success');
+      }
+
+      if (footer) {
+        footer.innerHTML = `
+          <div style="flex: 1; text-align: center; color: var(--success); font-weight: 700; font-size: 13px;">
+            ✓ Upload completed successfully!
+          </div>
+        `;
+      }
+
+      setTimeout(() => {
+        document.getElementById('master-bulk-modal').classList.add('hidden');
+        const input = document.getElementById('bulk-file-input');
+        if (input) input.value = '';
+        
+        window.preventAutoRefresh = false;
+        renderStats();
+        renderTable();
+      }, 1000);
     }
-    
-    document.getElementById('master-bulk-modal').classList.add('hidden');
 
-    // Clear input
-    const input = document.getElementById('bulk-file-input');
-    if (input) input.value = '';
-
-    // Refresh stats & table
-    renderStats();
-    renderTable();
+    doUpload().catch(err => {
+      showToast('Error uploading parts: ' + err.message, 'error');
+      window.preventAutoRefresh = false;
+      renderTable();
+    });
   }
 
   return { render, search, openAdd, openEdit, save, remove, openBulk, downloadTemplate, handleFileSelect, saveBulk, addMouldRow, removeMouldRow, handleUpdateCheckboxChange };

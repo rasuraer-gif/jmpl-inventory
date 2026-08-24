@@ -428,7 +428,8 @@ const VisualModule = (() => {
         <option value="gauge">Gauge Inspection</option>
         <option value="quality">Quality Final</option>
       `;
-      destSelect.value = 'gauge';
+      const isRecheck = b.recheckCount && b.recheckCount > 0;
+      destSelect.value = isRecheck ? 'quality' : 'gauge';
     }
 
     document.getElementById('vis-batch-info').innerHTML = `<strong>${b.batchNo}</strong> — ${b.jmrefNo}<br><span class="text-muted text-sm">Input Qty: <strong>${formatNum(inputQty)}</strong></span>${b.recheckCount?` <span class="badge badge-amber">Recheck #${b.recheckIteration}</span>`:''}`;

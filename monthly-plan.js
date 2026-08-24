@@ -441,31 +441,83 @@ const MonthlyPlanModule = (() => {
 
   function saveBulk() {
     const session = Auth.getSession();
+    const validPlans = parsedPlans.filter(p => p.isValid);
+    if (!validPlans.length) return;
+
+    // Show progress bar in UI
+    const container = document.getElementById('plan-preview-container');
+    const saveBtn = document.getElementById('plan-save-bulk-btn');
+    if (saveBtn) {
+      saveBtn.style.display = 'none';
+      const progressDiv = document.createElement('div');
+      progressDiv.id = 'plan-upload-progress-container';
+      progressDiv.style.marginTop = '15px';
+      progressDiv.innerHTML = `
+        <div style="font-weight: 600; font-size: 13px; margin-bottom: 8px; color: var(--text-primary);" id="plan-progress-text">Saving: 0%</div>
+        <div style="width: 100%; max-width: 320px; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; position: relative;">
+          <div id="plan-progress-bar" style="width: 0%; height: 100%; background: var(--accent-green); transition: width 0.1s ease-in-out;"></div>
+        </div>
+      `;
+      saveBtn.parentNode.appendChild(progressDiv);
+    }
+
     let savedCount = 0;
+    const total = validPlans.length;
+    const chunkSize = 20;
 
-    parsedPlans.forEach(p => {
-      if (p.isValid) {
-        const existing = DB.MonthlyPlans.byMonthAndJmref(selectedMonth, p.jmrefNo);
-        if (existing) {
-          // Overwrite existing plan qty
-          DB.MonthlyPlans.update(existing.id, { qty: p.qty });
-        } else {
-          // Create new plan record
-          DB.MonthlyPlans.insert({
-            jmrefNo: p.jmrefNo,
-            qty: p.qty,
-            month: selectedMonth,
-            recordedBy: session && session.userId
-          });
-        }
-        savedCount++;
+    window.preventAutoRefresh = true;
+
+    async function doUpload() {
+      for (let i = 0; i < total; i += chunkSize) {
+        const chunk = validPlans.slice(i, i + chunkSize);
+        chunk.forEach(p => {
+          const existing = DB.MonthlyPlans.byMonthAndJmref(selectedMonth, p.jmrefNo);
+          if (existing) {
+            DB.MonthlyPlans.update(existing.id, { qty: p.qty });
+          } else {
+            DB.MonthlyPlans.insert({
+              jmrefNo: p.jmrefNo,
+              qty: p.qty,
+              month: selectedMonth,
+              recordedBy: session && session.userId
+            });
+          }
+          savedCount++;
+        });
+
+        const percent = Math.round(((i + chunk.length) / total) * 100);
+        const progressText = document.getElementById('plan-progress-text');
+        const progressBar = document.getElementById('plan-progress-bar');
+        if (progressText) progressText.textContent = `Saving: ${percent}% (${i + chunk.length}/${total})`;
+        if (progressBar) progressBar.style.width = `${percent}%`;
+
+        await new Promise(resolve => setTimeout(resolve, 80));
       }
-    });
 
-    showToast(`Successfully registered ${savedCount} target monthly plans!`, 'success');
-    parsedPlans = [];
-    activeTab = 'manage';
-    render();
+      showToast(`Successfully registered ${savedCount} target monthly plans!`, 'success');
+      parsedPlans = [];
+      activeTab = 'manage';
+
+      const progressDiv = document.getElementById('plan-upload-progress-container');
+      if (progressDiv) {
+        progressDiv.innerHTML = `
+          <div style="color: var(--success); font-weight: 700; font-size: 13px; margin-top: 10px;">
+            ✓ Monthly plans saved successfully!
+          </div>
+        `;
+      }
+
+      setTimeout(() => {
+        window.preventAutoRefresh = false;
+        render();
+      }, 1000);
+    }
+
+    doUpload().catch(err => {
+      showToast('Error saving plans: ' + err.message, 'error');
+      window.preventAutoRefresh = false;
+      render();
+    });
   }
 
   // --- UTILS ---

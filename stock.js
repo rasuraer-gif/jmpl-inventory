@@ -1072,10 +1072,16 @@ const StockModule = (() => {
   function formatExcelDate(val) {
     if (!val) return '';
     if (val instanceof Date) {
-      return val.toISOString().slice(0, 10);
+      const y = val.getFullYear();
+      const m = String(val.getMonth() + 1).padStart(2, '0');
+      const d = String(val.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
     }
     if (typeof val === 'number') {
-      const date = new Date((val - 25569) * 86400 * 1000);
+      if (typeof XLSX !== 'undefined') {
+        return XLSX.SSF.format('yyyy-mm-dd', val);
+      }
+      const date = new Date(Math.round((val - 25569) * 86400 * 1000));
       return date.toISOString().slice(0, 10);
     }
     if (typeof val === 'string') {
@@ -1553,67 +1559,121 @@ const StockModule = (() => {
       return;
     }
 
+    const confirmBtn = document.getElementById('btn-confirm-batches');
+    const parentNode = confirmBtn?.parentNode;
+    if (confirmBtn && parentNode) {
+      confirmBtn.style.display = 'none';
+      const progressDiv = document.createElement('div');
+      progressDiv.id = 'batch-upload-progress-container';
+      progressDiv.style.marginTop = '15px';
+      progressDiv.style.flex = '1';
+      progressDiv.style.textAlign = 'left';
+      progressDiv.innerHTML = `
+        <div style="font-weight: 600; font-size: 13px; margin-bottom: 8px; color: var(--text-primary);" id="batch-progress-text">Saving: 0%</div>
+        <div style="width: 100%; max-width: 320px; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; position: relative;">
+          <div id="batch-progress-bar" style="width: 0%; height: 100%; background: var(--accent-green); transition: width 0.1s ease-in-out;"></div>
+        </div>
+      `;
+      parentNode.appendChild(progressDiv);
+    }
+
     const session = Auth.getSession();
     const uploadedAt = new Date().toISOString();
     lastCreatedBatchIds = [];
 
     let nextIB = DB.Batches.nextInternalBatchNo();
+    const total = parsedBatchUploads.length;
+    const chunkSize = 15;
 
-    parsedBatchUploads.forEach(row => {
-      const isCompleted = row.stage === 'store';
-      const batch = DB.Batches.insert({
-        batchNo: row.batchNo,
-        partId: row.partId,
-        partNo: row.partNo,
-        jmrefNo: row.jmrefNo,
-        description: row.description,
-        currentStage: row.stage,
-        status: isCompleted ? 'completed' : 'active',
-        initialQty: row.quantity,
-        isStockUpload: true,
-        productionType: row.productionType,
-        mouldNo: row.mouldNo,
-        operatorId: row.operatorId || null,
-        subcontractorId: row.subcontractorId || null,
-        shift: row.shift || 'day',
-        pressNo: row.pressNo || '1',
-        createdAt: uploadedAt,
-        productionDate: row.productionDate,
-        notes: 'Bulk Batch Excel Upload',
-        internalBatchNo: nextIB++
-      });
+    window.preventAutoRefresh = true;
 
-      lastCreatedBatchIds.push(batch.id);
+    async function doUpload() {
+      for (let i = 0; i < total; i += chunkSize) {
+        const chunk = parsedBatchUploads.slice(i, i + chunkSize);
+        chunk.forEach(row => {
+          const isCompleted = row.stage === 'store';
+          const batch = DB.Batches.insert({
+            batchNo: row.batchNo,
+            partId: row.partId,
+            partNo: row.partNo,
+            jmrefNo: row.jmrefNo,
+            description: row.description,
+            currentStage: row.stage,
+            status: isCompleted ? 'completed' : 'active',
+            initialQty: row.quantity,
+            isStockUpload: true,
+            productionType: row.productionType,
+            mouldNo: row.mouldNo,
+            operatorId: row.operatorId || null,
+            subcontractorId: row.subcontractorId || null,
+            shift: row.shift || 'day',
+            pressNo: row.pressNo || '1',
+            createdAt: uploadedAt,
+            productionDate: row.productionDate,
+            notes: 'Bulk Batch Excel Upload',
+            internalBatchNo: nextIB++
+          });
 
-      DB.StageRecords.insert({
-        batchId: batch.id,
-        stage: row.stage,
-        inputQty: row.quantity,
-        outputQty: isCompleted ? 0 : row.quantity,
-        lossQty: 0,
-        movedTo: isCompleted ? 'store' : row.stage,
-        movedFrom: 'Stock Upload',
-        date: row.productionDate,
-        recordedBy: session && session.userId,
-        notes: 'Bulk Excel Stock Batch Initialization'
-      });
+          lastCreatedBatchIds.push(batch.id);
 
-      DB.StockUploads.insert({
-        stage: row.stage,
-        partId: row.partId,
-        jmrefNo: row.jmrefNo,
-        qty: row.quantity,
-        uploadedAt: uploadedAt,
-        uploadedBy: session && session.userId,
-        notes: 'Bulk Excel Batch Upload',
-        batchNo: row.batchNo,
-        batchDbId: batch.id
-      });
+          DB.StageRecords.insert({
+            batchId: batch.id,
+            stage: row.stage,
+            inputQty: row.quantity,
+            outputQty: isCompleted ? 0 : row.quantity,
+            lossQty: 0,
+            movedTo: isCompleted ? 'store' : row.stage,
+            movedFrom: 'Stock Upload',
+            date: row.productionDate,
+            recordedBy: session && session.userId,
+            notes: 'Bulk Excel Stock Batch Initialization'
+          });
+
+          DB.StockUploads.insert({
+            stage: row.stage,
+            partId: row.partId,
+            jmrefNo: row.jmrefNo,
+            qty: row.quantity,
+            uploadedAt: uploadedAt,
+            uploadedBy: session && session.userId,
+            notes: 'Bulk Excel Batch Upload',
+            batchNo: row.batchNo,
+            batchDbId: batch.id
+          });
+        });
+
+        const percent = Math.round(((i + chunk.length) / total) * 100);
+        const progressText = document.getElementById('batch-progress-text');
+        const progressBar = document.getElementById('batch-progress-bar');
+        if (progressText) progressText.textContent = `Saving: ${percent}% (${i + chunk.length}/${total})`;
+        if (progressBar) progressBar.style.width = `${percent}%`;
+
+        await new Promise(resolve => setTimeout(resolve, 80));
+      }
+
+      showToast(`Successfully created ${parsedBatchUploads.length} stock batches`, 'success');
+      
+      const progressDiv = document.getElementById('batch-upload-progress-container');
+      if (progressDiv) {
+        progressDiv.innerHTML = `
+          <div style="color: var(--success); font-weight: 700; font-size: 13px;">
+            ✓ Batches imported successfully!
+          </div>
+        `;
+      }
+
+      setTimeout(() => {
+        window.preventAutoRefresh = false;
+        activeTab = 'batch_success';
+        render();
+      }, 1000);
+    }
+
+    doUpload().catch(err => {
+      showToast('Error importing batches: ' + err.message, 'error');
+      window.preventAutoRefresh = false;
+      render();
     });
-
-    showToast(`Successfully created ${parsedBatchUploads.length} stock batches`, 'success');
-    activeTab = 'batch_success';
-    render();
   }
 
   function renderBatchSuccessScreen(el) {

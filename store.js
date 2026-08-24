@@ -335,7 +335,10 @@ const StoreModule = (() => {
           if (typeof dateVal === 'number') {
             parsedDate = XLSX.SSF.format('yyyy-mm-dd', dateVal);
           } else if (dateVal instanceof Date) {
-            parsedDate = dateVal.toISOString().slice(0, 10);
+            const y = dateVal.getFullYear();
+            const m = String(dateVal.getMonth() + 1).padStart(2, '0');
+            const d = String(dateVal.getDate()).padStart(2, '0');
+            parsedDate = `${y}-${m}-${d}`;
           } else {
             const str = String(dateVal || '').trim();
             // Match DD-MM-YYYY or D-M-YYYY with slashes or dashes
@@ -557,39 +560,61 @@ const StoreModule = (() => {
     // Prevent auto-refresh during save
     window.preventAutoRefresh = true;
 
-    // Show loading spinner on Confirm button
-    const confirmBtn = document.querySelector('#store-preview button.btn-primary');
-    if (confirmBtn) {
-      confirmBtn.disabled = true;
-      confirmBtn.innerHTML = `
-        <span class="spinner" style="display:inline-block;width:12px;height:12px;border:2px solid white;border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite;margin-right:6px;vertical-align:middle;"></span>
-        Saving...
+    // Show progress bar in UI
+    const actionArea = preview.querySelector('div[style*="display:flex;gap:10px;align-items:center"]');
+    if (actionArea) {
+      actionArea.innerHTML = `
+        <div id="upload-progress-container" style="width: 250px; text-align: left;">
+          <div style="font-weight: 600; font-size: 12px; margin-bottom: 4px; color: var(--text-primary);" id="upload-progress-text">Saving: 0%</div>
+          <div style="width: 100%; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; position: relative;">
+            <div id="upload-progress-bar" style="width: 0%; height: 100%; background: var(--accent-green); transition: width 0.1s ease-in-out;"></div>
+          </div>
+        </div>
       `;
     }
 
-    // Perform bulk insertion
-    try {
-      DB.Sales.insertBulk(salesToInsert);
+    // Perform bulk insertion in chunks
+    const chunkSize = 25;
+    const total = salesToInsert.length;
+
+    async function uploadChunks() {
+      for (let i = 0; i < total; i += chunkSize) {
+        const chunk = salesToInsert.slice(i, i + chunkSize);
+        DB.Sales.insertBulk(chunk);
+        
+        const percent = Math.round(((i + chunk.length) / total) * 100);
+        const progressText = document.getElementById('upload-progress-text');
+        const progressBar = document.getElementById('upload-progress-bar');
+        if (progressText) progressText.textContent = `Saving: ${percent}% (${i + chunk.length}/${total})`;
+        if (progressBar) progressBar.style.width = `${percent}%`;
+        
+        await new Promise(resolve => setTimeout(resolve, 80));
+      }
+      
       showToast(`✓ ${salesToInsert.length} sale record(s) saved and deducted from Store stock.`, 'success');
       
-      // Reset preview
+      // Reset preview and show completion screen
       parsedSalesRows = [];
-      if (preview) { preview.innerHTML = ''; delete preview.dataset.validRows; }
-    } catch (err) {
-      showToast(`Error saving sales: ${err.message}`, 'error');
-      if (confirmBtn) {
-        confirmBtn.disabled = false;
-        confirmBtn.innerHTML = `&#10003; Confirm &amp; Save (${validRows.length} rows)`;
+      if (preview) {
+        preview.innerHTML = `
+          <div style="padding: 24px; text-align: center; color: var(--success); font-weight: 700; background: rgba(16,185,129,0.05); border: 1px solid rgba(16,185,129,0.1); border-radius: 8px;">
+            <span style="font-size: 24px; margin-right: 8px; vertical-align: middle;">✓</span> Upload completed successfully! ${total} records saved.
+          </div>
+        `;
+        delete preview.dataset.validRows;
       }
-      window.preventAutoRefresh = false;
-      return;
+      
+      setTimeout(() => {
+        window.preventAutoRefresh = false;
+        render();
+      }, 1500);
     }
 
-    // Wait 1.5s for database listeners to settle, then restore auto-refresh and render
-    setTimeout(() => {
+    uploadChunks().catch(err => {
+      showToast(`Error saving sales: ${err.message}`, 'error');
       window.preventAutoRefresh = false;
       render();
-    }, 1500);
+    });
   }
 
   // ── Completed Batches Tab ──────────────────────────────────
