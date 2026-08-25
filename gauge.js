@@ -5,6 +5,8 @@ const GaugeModule = (() => {
   let historySearch = '';
   let pendingSearch = '';
   let _activeBatch = null;
+  let currentPage = 1;
+  const itemsPerPage = 50;
 
   function getInputQty(batchId) {
     const recs = DB.StageRecords.all().filter(r => r.batchId === batchId && r.movedTo === 'gauge');
@@ -15,6 +17,7 @@ const GaugeModule = (() => {
     return !isNaN(qtyVal) ? qtyVal : (batch.initialQty || 0);
   }
   function render() {
+    currentPage = 1;
     pendingSearch = '';
     const el = document.getElementById('content');
     const batches = DB.Batches.byStage('gauge');
@@ -40,6 +43,7 @@ const GaugeModule = (() => {
       ${processModal()}${rejectModal()}`;
     document.querySelectorAll('#gauge-tabs .tab-btn').forEach(btn => {
       btn.addEventListener('click', () => {
+        currentPage = 1;
         document.querySelectorAll('#gauge-tabs .tab-btn').forEach(b=>b.classList.remove('active'));
         btn.classList.add('active');
         document.getElementById('gauge-content').innerHTML = btn.dataset.tab==='pending' ? pendingTab(batches) : historyTab();
@@ -53,7 +57,16 @@ const GaugeModule = (() => {
       filtered = batches.filter(b => (b.batchNo || '').toLowerCase().includes(q));
     }
     if (!filtered.length && !pendingSearch) return '<div class="card card-body"><div class="empty-state"><div class="empty-icon">&#128207;</div><p>No batches pending gauge inspection</p></div></div>';
-    const rows = filtered.map(b => {
+    
+    const totalItems = filtered.length;
+    const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+    if (currentPage > totalPages) currentPage = totalPages;
+    if (currentPage < 1) currentPage = 1;
+    const startIdx = (currentPage - 1) * itemsPerPage;
+    const endIdx = currentPage * itemsPerPage;
+    const pageItems = filtered.slice(startIdx, endIdx);
+
+    const rows = pageItems.map(b => {
       const inputQty = getInputQty(b.id);
       return '<tr><td><input type="checkbox" class="bulk-stage-check" value="' + b.id + '" style="cursor:pointer;" onclick="event.stopPropagation()"></td><td class="font-semibold text-blue">' + b.batchNo + '</td><td>' + (b.partNo||'&#x2014;') + '</td><td><span class="badge badge-teal">' + (b.jmrefNo||'&#x2014;') + '</span></td><td class="font-semibold">' + formatNum(inputQty) + '</td><td class="text-muted text-sm">' + (b.createdAt||'').slice(0,10) + '</td><td><div class="flex gap-2"><button class="btn btn-primary btn-xs" onclick="GaugeModule.openProcess(\'' + b.id + '\',' + inputQty + ')">Inspect</button><button class="btn btn-danger btn-xs" onclick="GaugeModule.openReject(\'' + b.id + '\')">Reject</button></div></td></tr>';
     }).join('');
@@ -80,6 +93,17 @@ const GaugeModule = (() => {
             <tbody>${rows || '<tr><td colspan="7" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody>
           </table>
         </div>
+        ${totalPages > 1 ? `
+        <div class="flex justify-between items-center p-4" style="border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover);">
+          <div class="text-sm text-muted">
+            Showing <strong>${startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
+          </div>
+          <div class="flex gap-2">
+            <button class="btn btn-secondary btn-xs" onclick="GaugeModule.changePage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>◀ Previous</button>
+            <span class="text-sm font-semibold flex items-center px-2">Page ${currentPage} of ${totalPages}</span>
+            <button class="btn btn-secondary btn-xs" onclick="GaugeModule.changePage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>Next ▶</button>
+          </div>
+        </div>` : ''}
       </div>`;
   }
   function historyTab() {
@@ -101,7 +125,15 @@ const GaugeModule = (() => {
         <div class="empty-state"><div class="empty-icon">&#128202;</div><p>No processing history found</p></div>
       </div>`;
 
-    const rows = recs.map(r => {
+    const totalItems = recs.length;
+    const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+    if (currentPage > totalPages) currentPage = totalPages;
+    if (currentPage < 1) currentPage = 1;
+    const startIdx = (currentPage - 1) * itemsPerPage;
+    const endIdx = currentPage * itemsPerPage;
+    const pageItems = recs.slice(startIdx, endIdx);
+
+    const rows = pageItems.map(r => {
       const b = DB.Batches.find(r.batchId)||{};
       const pct = r.inputQty ? ((r.lossQty / r.inputQty) * 100).toFixed(1) + '%' : '0.0%';
       return '<tr><td class="font-semibold">' + (b.batchNo||'&#x2014;') + '</td><td>' + (b.jmrefNo||'&#x2014;') + '</td><td>' + formatNum(r.inputQty) + '</td><td>' + formatNum(r.outputQty) + '</td><td class="text-danger font-semibold">' + formatNum(r.lossQty) + '</td><td><span class="badge badge-red">' + pct + '</span></td><td class="text-muted text-sm">' + (r.date||'').slice(0,10) + '</td></tr>';
@@ -127,9 +159,21 @@ const GaugeModule = (() => {
             <tbody>${rows}</tbody>
           </table>
         </div>
+        ${totalPages > 1 ? `
+        <div class="flex justify-between items-center p-4" style="border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover);">
+          <div class="text-sm text-muted">
+            Showing <strong>${startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
+          </div>
+          <div class="flex gap-2">
+            <button class="btn btn-secondary btn-xs" onclick="GaugeModule.changePage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>◀ Previous</button>
+            <span class="text-sm font-semibold flex items-center px-2">Page ${currentPage} of ${totalPages}</span>
+            <button class="btn btn-secondary btn-xs" onclick="GaugeModule.changePage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>Next ▶</button>
+          </div>
+        </div>` : ''}
       </div>`;
   }
   function filterHistory(val) {
+    currentPage = 1;
     historySearch = val;
     const content = document.getElementById('gauge-content');
     if (content) {
@@ -410,6 +454,7 @@ const GaugeModule = (() => {
     render();
   }
   function filterPending(val) {
+    currentPage = 1;
     pendingSearch = val;
     const content = document.getElementById('gauge-content');
     if (content) {
@@ -424,6 +469,14 @@ const GaugeModule = (() => {
     }
   }
 
-  return { render, openProcess, calcLoss, process, openReject, rejectBatch, filterHistory, filterPending, updateDynamicBatchNo };
+  function changePage(page) {
+    currentPage = page;
+    const activeTab = document.querySelector('#gauge-tabs .tab-btn.active');
+    const tabType = activeTab ? activeTab.dataset.tab : 'pending';
+    const batches = DB.Batches.byStage('gauge');
+    document.getElementById('gauge-content').innerHTML = tabType === 'pending' ? pendingTab(batches) : historyTab();
+  }
+
+  return { render, openProcess, calcLoss, process, openReject, rejectBatch, filterHistory, filterPending, updateDynamicBatchNo, changePage };
 })();
 window.GaugeModule = GaugeModule;

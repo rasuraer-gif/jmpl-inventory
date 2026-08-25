@@ -5,12 +5,15 @@ const ProductionModule = (() => {
   let activeTab = 'active';
   let pendingSearch = '';
   let _activeBatch = null;
+  let currentPage = 1;
+  const itemsPerPage = 50;
 
   function getInputQtyForBatch(batch) {
     return batch.initialQty || 0;
   }
 
   function render() {
+    currentPage = 1;
     pendingSearch = '';
     const el = document.getElementById('content');
     el.innerHTML = `
@@ -31,6 +34,7 @@ const ProductionModule = (() => {
 
     document.querySelectorAll('#prod-tabs .tab-btn').forEach(btn => {
       btn.addEventListener('click', () => {
+        currentPage = 1;
         document.querySelectorAll('#prod-tabs .tab-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         activeTab = btn.dataset.tab;
@@ -76,7 +80,16 @@ const ProductionModule = (() => {
     const subs = DB.Subcontractors.all();
     const ops  = DB.Operators.all();
     if (!batches.length && !pendingSearch) return `<div class="card"><div class="card-body"><div class="empty-state"><div class="empty-icon">&#127981;</div><p>No active batches in Production. Create a new batch to get started.</p></div></div></div>`;
-    const rows = batches.map(b => {
+    
+    const totalItems = batches.length;
+    const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+    if (currentPage > totalPages) currentPage = totalPages;
+    if (currentPage < 1) currentPage = 1;
+    const startIdx = (currentPage - 1) * itemsPerPage;
+    const endIdx = currentPage * itemsPerPage;
+    const pageItems = batches.slice(startIdx, endIdx);
+
+    const rows = pageItems.map(b => {
       const sub = subs.find(s => s.id === b.subcontractorId);
       const op  = ops.find(o => o.id === b.operatorId);
       return `
@@ -119,6 +132,17 @@ const ProductionModule = (() => {
             <tbody>${rows || '<tr><td colspan="10" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody>
           </table>
         </div>
+        ${totalPages > 1 ? `
+        <div class="flex justify-between items-center p-4" style="border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover);">
+          <div class="text-sm text-muted">
+            Showing <strong>${startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
+          </div>
+          <div class="flex gap-2">
+            <button class="btn btn-secondary btn-xs" onclick="ProductionModule.changePage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>◀ Previous</button>
+            <span class="text-sm font-semibold flex items-center px-2">Page ${currentPage} of ${totalPages}</span>
+            <button class="btn btn-secondary btn-xs" onclick="ProductionModule.changePage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>Next ▶</button>
+          </div>
+        </div>` : ''}
       </div>`;
   }
 
@@ -284,7 +308,16 @@ const ProductionModule = (() => {
   function completedTab() {
     const batches = DB.Batches.byStatus('completed');
     if (!batches.length) return `<div class="card card-body"><div class="empty-state"><div class="empty-icon">&#9989;</div><p>No completed batches yet</p></div></div>`;
-    const rows = batches.map(b => `
+    
+    const totalItems = batches.length;
+    const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+    if (currentPage > totalPages) currentPage = totalPages;
+    if (currentPage < 1) currentPage = 1;
+    const startIdx = (currentPage - 1) * itemsPerPage;
+    const endIdx = currentPage * itemsPerPage;
+    const pageItems = batches.slice(startIdx, endIdx);
+
+    const rows = pageItems.map(b => `
       <tr>
         <td><input type="checkbox" class="bulk-batch-check" value="${b.id}" style="cursor:pointer;" onclick="event.stopPropagation()"></td>
         <td class="font-semibold text-blue">${b.batchNo}</td>
@@ -309,13 +342,33 @@ const ProductionModule = (() => {
             <tbody>${rows}</tbody>
           </table>
         </div>
+        ${totalPages > 1 ? `
+        <div class="flex justify-between items-center p-4" style="border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover);">
+          <div class="text-sm text-muted">
+            Showing <strong>${startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
+          </div>
+          <div class="flex gap-2">
+            <button class="btn btn-secondary btn-xs" onclick="ProductionModule.changePage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>◀ Previous</button>
+            <span class="text-sm font-semibold flex items-center px-2">Page ${currentPage} of ${totalPages}</span>
+            <button class="btn btn-secondary btn-xs" onclick="ProductionModule.changePage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>Next ▶</button>
+          </div>
+        </div>` : ''}
       </div>`;
   }
 
   function rejectedTab() {
     const batches = DB.Batches.byStatus('rejected');
     if (!batches.length) return `<div class="card card-body"><div class="empty-state"><div class="empty-icon">&#x1F6AB;</div><p>No rejected batches</p></div></div>`;
-    const rows = batches.map(b => `
+    
+    const totalItems = batches.length;
+    const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+    if (currentPage > totalPages) currentPage = totalPages;
+    if (currentPage < 1) currentPage = 1;
+    const startIdx = (currentPage - 1) * itemsPerPage;
+    const endIdx = currentPage * itemsPerPage;
+    const pageItems = batches.slice(startIdx, endIdx);
+
+    const rows = pageItems.map(b => `
       <tr>
         <td class="font-semibold">${b.batchNo}</td>
         <td>${b.partNo||'—'}</td>
@@ -323,7 +376,19 @@ const ProductionModule = (() => {
         <td><span class="badge badge-red">Rejected</span></td>
         <td class="text-muted text-sm">${(b.createdAt||'').slice(0,10)}</td>
       </tr>`).join('');
-    return `<div class="card"><div class="card-header"><h3>Rejected Batches</h3></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Status</th><th>Date</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    return `<div class="card"><div class="card-header"><h3>Rejected Batches</h3></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Status</th><th>Date</th></tr></thead><tbody>${rows}</tbody></table></div>
+      ${totalPages > 1 ? `
+      <div class="flex justify-between items-center p-4" style="border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover);">
+        <div class="text-sm text-muted">
+          Showing <strong>${startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
+        </div>
+        <div class="flex gap-2">
+          <button class="btn btn-secondary btn-xs" onclick="ProductionModule.changePage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>◀ Previous</button>
+          <span class="text-sm font-semibold flex items-center px-2">Page ${currentPage} of ${totalPages}</span>
+          <button class="btn btn-secondary btn-xs" onclick="ProductionModule.changePage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>Next ▶</button>
+        </div>
+      </div>` : ''}
+    </div>`;
   }
 
   function moveModal() {
@@ -1180,6 +1245,7 @@ const ProductionModule = (() => {
   }
 
   function filterPending(val) {
+    currentPage = 1;
     pendingSearch = val;
     const content = document.getElementById('prod-tab-content');
     if (content && activeTab === 'active') {
@@ -1532,7 +1598,7 @@ const ProductionModule = (() => {
           }
           window.onload = function() {
             setTimeout(triggerPrint, 2500); // 2.5s fallback to allow all QR code images to load completely
-          };
+          }
         <\/script>
       </body>
       </html>
@@ -1540,6 +1606,11 @@ const ProductionModule = (() => {
     printWindow.document.close();
   }
 
-  return { render, openMove, calcLoss, moveBatch, openReject, rejectBatch, onTypeChange, createBatch, resetForm, showPartDropdown, filterParts, selectPart, updateDynamicBatchNo, updateMoveDynamicBatchNo, printBarcode, filterPending, showJmrefDropdown, filterJmrefs, onDestinationChange, onMouldChange, onSubDestinationChange, openEditBatch, onEditTypeChange, saveBatchEdit, calculateInhouseQty, calculateEditInhouseQty, toggleAllActive, toggleAllCompleted, bulkPrintBarcodes, get activeTab() { return activeTab; } };
+  function changePage(page) {
+    currentPage = page;
+    renderTab(activeTab);
+  }
+
+  return { render, openMove, calcLoss, moveBatch, openReject, rejectBatch, onTypeChange, createBatch, resetForm, showPartDropdown, filterParts, selectPart, updateDynamicBatchNo, updateMoveDynamicBatchNo, printBarcode, filterPending, showJmrefDropdown, filterJmrefs, onDestinationChange, onMouldChange, onSubDestinationChange, openEditBatch, onEditTypeChange, saveBatchEdit, calculateInhouseQty, calculateEditInhouseQty, toggleAllActive, toggleAllCompleted, bulkPrintBarcodes, changePage, get activeTab() { return activeTab; } };
 })();
 window.ProductionModule = ProductionModule;

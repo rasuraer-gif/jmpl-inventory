@@ -1707,6 +1707,10 @@ function renderDashboard() {
   const rejected  = DB.RejectionTracker.all();
   const rechecks  = DB.RecheckTracker.all();
 
+  // Build quick batch lookups map
+  const batchMap = new Map();
+  batches.forEach(b => batchMap.set(b.id, b));
+
   const active    = batches.filter(b => b.status === 'active').length;
   const completed = batches.filter(b => b.status === 'completed' && (b.completedAt || b.createdAt || '').slice(0, 7) === thisMonth).length;
   const rejectedCount = batches.filter(b => b.status === 'rejected' && (b.updatedAt || b.createdAt || '').slice(0, 7) === thisMonth).length;
@@ -1756,7 +1760,7 @@ function renderDashboard() {
 
   // Active WIP rechecks
   const activeRechecks = rechecks.filter(r => {
-    const b = DB.Batches.find(r.batchId);
+    const b = batchMap.get(r.batchId);
     return b && b.status === 'active';
   }).length;
 
@@ -1767,9 +1771,7 @@ function renderDashboard() {
   const allStageRecords = DB.StageRecords.all();
   const allBatches = batches;
 
-  // Build quick batch lookups
-  const batchMap = new Map();
-  allBatches.forEach(b => batchMap.set(b.id, b));
+  // (Quick batch lookups map was built at function start)
 
   // Pre-index active batches by partId & stage
   const activeBatchesByPartAndStage = {};
@@ -1961,7 +1963,8 @@ function renderDashboard() {
     const stageBatches = batches.filter(b => b.currentStage === stage && b.status === 'active');
     const totalQty = stageBatches.reduce((sum, b) => {
       if (b.currentStage !== 'production') {
-        const incoming = DB.StageRecords.all().filter(r => r.batchId === b.id && r.movedTo === stage);
+        const inc = incomingRecordsByBatchId[b.id] || [];
+        const incoming = inc.filter(r => r.movedTo === stage);
         if (incoming.length > 0) {
           const lastRec = incoming[incoming.length - 1];
           return sum + (lastRec.isRecheck ? (lastRec.recheckQty ?? lastRec.outputQty) : lastRec.outputQty || 0);

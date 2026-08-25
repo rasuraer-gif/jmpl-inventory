@@ -4,54 +4,135 @@
 const StoreModule = (() => {
   let activeTab = 'inventory';
   let parsedSalesRows = [];
+  let currentPage = 1;
+  let inventoryCurrentPage = 1;
+  let salesCurrentPage = 1;
+  const itemsPerPage = 50;
+
+  // ── FIFO precomputation cache ──────────────────────────────
+  function buildFifoPrecomputed() {
+    const stageRecords = DB.StageRecords.all();
+    const sales = DB.Sales.all();
+    const allBatches = DB.Batches.all();
+
+    const storeRecordsByBatchId = {};
+    for (let i = 0; i < stageRecords.length; i++) {
+      const r = stageRecords[i];
+      if (r.batchId && r.stage === 'store') {
+        storeRecordsByBatchId[r.batchId] = r;
+      }
+    }
+
+    const batchesByPartId = {};
+    const batchesByJmref = {};
+    for (let i = 0; i < allBatches.length; i++) {
+      const b = allBatches[i];
+      if (b.status !== 'completed' && b.currentStage !== 'store') continue;
+      if (b.notes && (b.notes.includes('Closed via stock') || b.notes.includes('Zeroed via stock') || b.notes.includes('zeroing'))) continue;
+
+      if (b.partId) {
+        if (!batchesByPartId[b.partId]) batchesByPartId[b.partId] = [];
+        batchesByPartId[b.partId].push(b);
+      }
+      if (b.jmrefNo) {
+        const bNorm = String(b.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+        if (!batchesByJmref[bNorm]) batchesByJmref[bNorm] = [];
+        batchesByJmref[bNorm].push(b);
+      }
+    }
+
+    const sortByDate = (a, b) => (a.completedAt || a.createdAt || '').localeCompare(b.completedAt || b.createdAt || '');
+    Object.keys(batchesByPartId).forEach(k => batchesByPartId[k].sort(sortByDate));
+    Object.keys(batchesByJmref).forEach(k => batchesByJmref[k].sort(sortByDate));
+
+    const salesByPartId = {};
+    const salesByJmref = {};
+    for (let i = 0; i < sales.length; i++) {
+      const s = sales[i];
+      const qty = Number(s.qty) || 0;
+      if (s.partId) {
+        salesByPartId[s.partId] = (salesByPartId[s.partId] || 0) + qty;
+      }
+      if (s.jmrefNo) {
+        const sNorm = String(s.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+        salesByJmref[sNorm] = (salesByJmref[sNorm] || 0) + qty;
+      }
+    }
+
+    return {
+      storeRecordsByBatchId,
+      batchesByPartId,
+      batchesByJmref,
+      salesByPartId,
+      salesByJmref
+    };
+  }
 
   // ── FIFO engine ────────────────────────────────────────────
   // Returns available qty per jmref and FIFO batch breakdown
-  function fifoAvailable(jmrefNo, partId) {
-    const list = fifoBatches(jmrefNo, partId);
+  function fifoAvailable(jmrefNo, partId, precomputed = null) {
+    const list = fifoBatches(jmrefNo, partId, precomputed);
     return list.reduce((sum, b) => sum + b.remaining, 0);
   }
 
   // Build FIFO batch list with remaining quantities (pure in-memory calculation)
-  function fifoBatches(jmrefNo, partId) {
+  function fifoBatches(jmrefNo, partId, precomputed = null) {
     const normTarget = String(jmrefNo || '').trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
-    const stageRecords = DB.StageRecords.all();
-    const sales = DB.Sales.all();
-
-    // 1. Get completed batches sorted FIFO
-    const batches = DB.Batches.all()
-      .filter(b => {
-        if (b.status !== 'completed' && b.currentStage !== 'store') return false;
-        if (b.notes && (b.notes.includes('Closed via stock') || b.notes.includes('Zeroed via stock') || b.notes.includes('zeroing'))) return false;
-        if (partId && b.partId === partId) return true;
-        if (b.jmrefNo) {
-          const bNorm = String(b.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
-          if (normTarget && (bNorm === normTarget || String(b.jmrefNo).trim().toUpperCase() === String(jmrefNo).trim().toUpperCase())) return true;
-        }
-        return false;
-      })
-      .sort((a, b) => (a.completedAt || a.createdAt || '').localeCompare(b.completedAt || b.createdAt || ''));
-
-    // 2. Sum total sales
+    
+    let batches = [];
     let totalSold = 0;
-    sales.forEach(s => {
-      if (partId && s.partId === partId) {
-        totalSold += Number(s.qty) || 0;
-        return;
+    
+    if (precomputed) {
+      if (partId && precomputed.batchesByPartId[partId]) {
+        batches = precomputed.batchesByPartId[partId];
+        totalSold = precomputed.salesByPartId[partId] || 0;
+      } else if (normTarget && precomputed.batchesByJmref[normTarget]) {
+        batches = precomputed.batchesByJmref[normTarget];
+        totalSold = precomputed.salesByJmref[normTarget] || 0;
       }
-      if (s.jmrefNo) {
-        const sNorm = String(s.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
-        if (normTarget && (sNorm === normTarget || String(s.jmrefNo).trim().toUpperCase() === String(jmrefNo).trim().toUpperCase())) {
-          totalSold += Number(s.qty) || 0;
-        }
-      }
-    });
+    } else {
+      const stageRecords = DB.StageRecords.all();
+      const sales = DB.Sales.all();
+      const allBatches = DB.Batches.all();
+      
+      batches = allBatches
+        .filter(b => {
+          if (b.status !== 'completed' && b.currentStage !== 'store') return false;
+          if (b.notes && (b.notes.includes('Closed via stock') || b.notes.includes('Zeroed via stock') || b.notes.includes('zeroing'))) return false;
+          if (partId && b.partId === partId) return true;
+          if (b.jmrefNo) {
+            const bNorm = String(b.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+            if (normTarget && (bNorm === normTarget || String(b.jmrefNo).trim().toUpperCase() === String(jmrefNo).trim().toUpperCase())) return true;
+          }
+          return false;
+        })
+        .sort((a, b) => (a.completedAt || a.createdAt || '').localeCompare(b.completedAt || b.createdAt || ''));
 
-    // 3. FIFO deduct in memory
+      sales.forEach(s => {
+        if (partId && s.partId === partId) {
+          totalSold += Number(s.qty) || 0;
+          return;
+        }
+        if (s.jmrefNo) {
+          const sNorm = String(s.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+          if (normTarget && (sNorm === normTarget || String(s.jmrefNo).trim().toUpperCase() === String(jmrefNo).trim().toUpperCase())) {
+            totalSold += Number(s.qty) || 0;
+          }
+        }
+      });
+    }
+
     const list = [];
+    const stageRecords = precomputed?.storeRecordsByBatchId ? null : DB.StageRecords.all();
     for (const b of batches) {
-      const storeRecs = stageRecords.filter(r => r.batchId === b.id && r.stage === 'store');
-      const storeQty = storeRecs.length ? (storeRecs[0].inputQty !== undefined ? Number(storeRecs[0].inputQty) : Number(b.initialQty || 0)) : Number(b.initialQty || 0);
+      let storeQty = 0;
+      if (precomputed?.storeRecordsByBatchId) {
+        const r = precomputed.storeRecordsByBatchId[b.id];
+        storeQty = r ? (r.inputQty !== undefined ? Number(r.inputQty) : Number(b.initialQty || 0)) : Number(b.initialQty || 0);
+      } else {
+        const storeRecs = stageRecords.filter(r => r.batchId === b.id && r.stage === 'store');
+        storeQty = storeRecs.length ? (storeRecs[0].inputQty !== undefined ? Number(storeRecs[0].inputQty) : Number(b.initialQty || 0)) : Number(b.initialQty || 0);
+      }
       if (storeQty <= 0) continue;
 
       let remaining = storeQty;
@@ -78,6 +159,7 @@ const StoreModule = (() => {
 
   // ── Render ─────────────────────────────────────────────────
   function render() {
+    currentPage = 1;
     const el = document.getElementById('content');
     const parts = DB.StoreInventory.allParts();
     const sales = DB.Sales.all();
@@ -116,6 +198,8 @@ const StoreModule = (() => {
         document.querySelectorAll('#store-tabs .tab-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         activeTab = btn.dataset.tab;
+        inventoryCurrentPage = 1;
+        salesCurrentPage = 1;
         const cont = document.getElementById('store-content');
         if (cont) {
           cont.innerHTML = renderTabContent(parts);
@@ -141,8 +225,20 @@ const StoreModule = (() => {
     if (!parts.length) {
       return '<div class="card card-body"><div class="empty-state"><div class="empty-icon">&#127978;</div><p>No parts in inventory. Complete batches through Quality Final to see stock here.</p></div></div>';
     }
-    const rows = parts.map(p => {
-      const fifo = fifoBatches(p.jmrefNo, p.id);
+
+    const totalItems = parts.length;
+    const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+    if (inventoryCurrentPage > totalPages) inventoryCurrentPage = totalPages;
+    if (inventoryCurrentPage < 1) inventoryCurrentPage = 1;
+
+    const startIdx = (inventoryCurrentPage - 1) * itemsPerPage;
+    const endIdx = inventoryCurrentPage * itemsPerPage;
+    const pageItems = parts.slice(startIdx, endIdx);
+
+    const precomputed = buildFifoPrecomputed();
+
+    const rows = pageItems.map(p => {
+      const fifo = fifoBatches(p.jmrefNo, p.id, precomputed);
       const available = p.available;
       const statusClass = available === 0 ? 'text-danger' : available < 10 ? 'text-amber' : 'text-success';
       const lowBadge = available < 10 ? ' <span class="badge badge-amber" style="font-size:10px;">Low</span>' : '';
@@ -157,8 +253,25 @@ const StoreModule = (() => {
         </td>
       </tr>`;
     }).join('');
+
+    let paginationHtml = '';
+    if (totalPages > 1) {
+      paginationHtml = `
+        <div class="flex justify-between items-center p-4" style="border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover);">
+          <div class="text-sm text-muted">
+            Showing <strong>${startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
+          </div>
+          <div class="flex gap-2">
+            <button class="btn btn-secondary btn-xs" onclick="StoreModule.changePageInventory(${inventoryCurrentPage - 1})" ${inventoryCurrentPage === 1 ? 'disabled' : ''}>◀ Previous</button>
+            <span class="text-sm font-semibold flex items-center px-2">Page ${inventoryCurrentPage} of ${totalPages}</span>
+            <button class="btn btn-secondary btn-xs" onclick="StoreModule.changePageInventory(${inventoryCurrentPage + 1})" ${inventoryCurrentPage === totalPages ? 'disabled' : ''}>Next ▶</button>
+          </div>
+        </div>
+      `;
+    }
+
     return `
-      <div class="card">
+      <div class="card animate-in">
         <div class="card-header">
           <h3>Current Inventory</h3>
           <span class="text-muted text-sm">Qty = Completed Batches &#x2212; Sales (FIFO)</span>
@@ -169,6 +282,7 @@ const StoreModule = (() => {
             <tbody>${rows}</tbody>
           </table>
         </div>
+        ${paginationHtml}
       </div>`;
   }
 
@@ -323,6 +437,7 @@ const StoreModule = (() => {
 
         const master = DB.Master.all();
         const rows = [];
+        const precomputed = buildFifoPrecomputed();
         const runningAvail = {};
 
         for (let i = 1; i < raw.length; i++) {
@@ -368,7 +483,7 @@ const StoreModule = (() => {
           // Track running available stock originally and currently
           const normKey = String(jmrefNo || '').trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
           if (runningAvail[normKey] === undefined) {
-            runningAvail[normKey] = fifoAvailable(jmrefNo, partId);
+            runningAvail[normKey] = fifoAvailable(jmrefNo, partId, precomputed);
           }
           const available = runningAvail[normKey];
 
@@ -401,7 +516,7 @@ const StoreModule = (() => {
             qty,
             adjustedQty,
             price,
-            available: fifoAvailable(jmrefNo, partId),
+            available: fifoAvailable(jmrefNo, partId, precomputed),
             remainingAvailable: available,
             errors,
             warnings
@@ -522,8 +637,9 @@ const StoreModule = (() => {
       partQtys[key].qty += Number(r.adjustedQty);
     });
 
+    const precomputed = buildFifoPrecomputed();
     for (const item of Object.values(partQtys)) {
-      const avail = fifoAvailable(item.jmref, item.partId);
+      const avail = fifoAvailable(item.jmref, item.partId, precomputed);
       if (item.qty > avail) {
         errors.push(`${item.jmref}: need ${formatNum(item.qty)} but only ${formatNum(avail)} available`);
       }
@@ -692,8 +808,17 @@ const StoreModule = (() => {
       });
     });
 
-    const rows = batches
-      .sort((a, b) => (b.completedAt || b.createdAt || '').localeCompare(a.completedAt || a.createdAt || ''))
+    batches.sort((a, b) => (b.completedAt || b.createdAt || '').localeCompare(a.completedAt || a.createdAt || ''));
+    
+    const totalItems = batches.length;
+    const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+    if (currentPage > totalPages) currentPage = totalPages;
+    if (currentPage < 1) currentPage = 1;
+    const startIdx = (currentPage - 1) * itemsPerPage;
+    const endIdx = currentPage * itemsPerPage;
+    const pageItems = batches.slice(startIdx, endIdx);
+
+    const rows = pageItems
       .map(b => {
         const stats = batchStatusMap[b.id] || { initialQty: Number(b.initialQty || 0), remainingQty: Number(b.initialQty || 0), soldQty: 0 };
         const initialQty = stats.initialQty;
@@ -747,10 +872,22 @@ const StoreModule = (() => {
             <tbody>${rows}</tbody>
           </table>
         </div>
+        ${totalPages > 1 ? `
+        <div class="flex justify-between items-center p-4" style="border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover);">
+          <div class="text-sm text-muted">
+            Showing <strong>${startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
+          </div>
+          <div class="flex gap-2">
+            <button class="btn btn-secondary btn-xs" onclick="StoreModule.changePage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>◀ Previous</button>
+            <span class="text-sm font-semibold flex items-center px-2">Page ${currentPage} of ${totalPages}</span>
+            <button class="btn btn-secondary btn-xs" onclick="StoreModule.changePage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>Next ▶</button>
+          </div>
+        </div>` : ''}
       </div>`;
   }
 
   function filterCompletedBatches(val) {
+    currentPage = 1;
     completedBatchSearch = val;
     const content = document.getElementById('store-content');
     if (content) {
@@ -794,17 +931,26 @@ const StoreModule = (() => {
         return sum + (price * r.qty);
       }, 0);
 
+      const totalItems = s.length;
+      const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+      if (salesCurrentPage > totalPages) salesCurrentPage = totalPages;
+      if (salesCurrentPage < 1) salesCurrentPage = 1;
+
+      const startIdx = (salesCurrentPage - 1) * itemsPerPage;
+      const endIdx = salesCurrentPage * itemsPerPage;
+      const pageItems = s.slice(startIdx, endIdx);
+
       const tbody = document.getElementById('sales-tbody');
       const totalEl = document.getElementById('sales-total');
       const totalValEl = document.getElementById('sales-total-value');
       if (!tbody) return;
       
-      tbody.innerHTML = s.map((r, i) => {
+      tbody.innerHTML = pageItems.map((r, i) => {
         const part = master.find(m => m.jmrefNo === r.jmrefNo) || {};
         const price = r.salePrice !== undefined && r.salePrice !== null ? r.salePrice : (part.salePrice || 0);
         const totalVal = price * r.qty;
         return `<tr>
-          <td class="text-muted">${i + 1}</td>
+          <td class="text-muted">${startIdx + i + 1}</td>
           <td><span class="badge badge-teal">${r.jmrefNo || '&#x2014;'}</span></td>
           <td>${part.partNo || '&#x2014;'}</td>
           <td class="font-semibold">${formatNum(r.qty)}</td>
@@ -818,6 +964,28 @@ const StoreModule = (() => {
       
       if (totalEl) totalEl.textContent = formatNum(total);
       if (totalValEl) totalValEl.textContent = '₹' + formatNum(totalValue);
+
+      const pagEl = document.getElementById('sales-pagination');
+      if (pagEl) {
+        if (totalPages > 1) {
+          pagEl.innerHTML = `
+            <div class="flex justify-between items-center p-4" style="border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover);">
+              <div class="text-sm text-muted">
+                Showing <strong>${startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
+              </div>
+              <div class="flex gap-2">
+                <button class="btn btn-secondary btn-xs" onclick="StoreModule.changePageSales(${salesCurrentPage - 1})" ${salesCurrentPage === 1 ? 'disabled' : ''}>◀ Previous</button>
+                <span class="text-sm font-semibold flex items-center px-2">Page ${salesCurrentPage} of ${totalPages}</span>
+                <button class="btn btn-secondary btn-xs" onclick="StoreModule.changePageSales(${salesCurrentPage + 1})" ${salesCurrentPage === totalPages ? 'disabled' : ''}>Next ▶</button>
+              </div>
+            </div>
+          `;
+          pagEl.style.display = '';
+        } else {
+          pagEl.innerHTML = '';
+          pagEl.style.display = 'none';
+        }
+      }
     }
 
     const jmrefOpts = master.map(m => `<option value="${m.jmrefNo}">${m.jmrefNo}</option>`).join('');
@@ -825,7 +993,7 @@ const StoreModule = (() => {
     setTimeout(render, 0);
 
     return `
-      <div class="card">
+      <div class="card animate-in">
         <div class="card-header"><h3>Sales History</h3></div>
         <div class="card-body">
           <div class="filter-bar" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));">
@@ -866,11 +1034,15 @@ const StoreModule = (() => {
             </tfoot>
           </table>
         </div>
+        <div id="sales-pagination"></div>
       </div>`;
   }
 
   // Public filter trigger for sales tab
-  function _salesFilter() {
+  function _salesFilter(resetPage = true) {
+    if (resetPage) {
+      salesCurrentPage = 1;
+    }
     const sales = DB.Sales.all().sort((a, b) => b.saleDate.localeCompare(a.saleDate));
     const master = DB.Master.all();
     let s = sales;
@@ -898,16 +1070,25 @@ const StoreModule = (() => {
       return sum + (price * r.qty);
     }, 0);
 
+    const totalItems = s.length;
+    const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+    if (salesCurrentPage > totalPages) salesCurrentPage = totalPages;
+    if (salesCurrentPage < 1) salesCurrentPage = 1;
+
+    const startIdx = (salesCurrentPage - 1) * itemsPerPage;
+    const endIdx = salesCurrentPage * itemsPerPage;
+    const pageItems = s.slice(startIdx, endIdx);
+
     const tbody = document.getElementById('sales-tbody');
     const totalEl = document.getElementById('sales-total');
     const totalValEl = document.getElementById('sales-total-value');
     if (!tbody) return;
-    tbody.innerHTML = s.map((r, i) => {
+    tbody.innerHTML = pageItems.map((r, i) => {
       const part = master.find(m => m.jmrefNo === r.jmrefNo) || {};
       const price = r.salePrice !== undefined && r.salePrice !== null ? r.salePrice : (part.salePrice || 0);
       const totalVal = price * r.qty;
       return `<tr>
-        <td class="text-muted">${i + 1}</td>
+        <td class="text-muted">${startIdx + i + 1}</td>
         <td><span class="badge badge-teal">${r.jmrefNo || '&#x2014;'}</span></td>
         <td>${part.partNo || '&#x2014;'}</td>
         <td class="font-semibold">${formatNum(r.qty)}</td>
@@ -918,8 +1099,55 @@ const StoreModule = (() => {
         <td class="text-muted text-sm">${r.notes || '&#x2014;'}</td>
       </tr>`;
     }).join('') || '<tr><td colspan="9" style="text-align:center;padding:32px;color:var(--text-muted);">No sales match the selected filters</td></tr>';
+    
     if (totalEl) totalEl.textContent = formatNum(total);
     if (totalValEl) totalValEl.textContent = '₹' + formatNum(totalValue);
+
+    // Update pagination controls in DOM
+    const pagEl = document.getElementById('sales-pagination');
+    if (pagEl) {
+      if (totalPages > 1) {
+        pagEl.innerHTML = `
+          <div class="flex justify-between items-center p-4" style="border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover);">
+            <div class="text-sm text-muted">
+              Showing <strong>${startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
+            </div>
+            <div class="flex gap-2">
+              <button class="btn btn-secondary btn-xs" onclick="StoreModule.changePageSales(${salesCurrentPage - 1})" ${salesCurrentPage === 1 ? 'disabled' : ''}>◀ Previous</button>
+              <span class="text-sm font-semibold flex items-center px-2">Page ${salesCurrentPage} of ${totalPages}</span>
+              <button class="btn btn-secondary btn-xs" onclick="StoreModule.changePageSales(${salesCurrentPage + 1})" ${salesCurrentPage === totalPages ? 'disabled' : ''}>Next ▶</button>
+            </div>
+          </div>
+        `;
+        pagEl.style.display = '';
+      } else {
+        pagEl.innerHTML = '';
+        pagEl.style.display = 'none';
+      }
+    }
+  }
+
+
+  function changePage(page) {
+    currentPage = page;
+    const content = document.getElementById('store-content');
+    if (content) {
+      content.innerHTML = batchesTab();
+    }
+  }
+
+  function changePageInventory(page) {
+    inventoryCurrentPage = page;
+    const content = document.getElementById('store-content');
+    const parts = DB.StoreInventory.allParts();
+    if (content) {
+      content.innerHTML = inventoryTab(parts);
+    }
+  }
+
+  function changePageSales(page) {
+    salesCurrentPage = page;
+    _salesFilter(false);
   }
 
   return {
@@ -931,7 +1159,10 @@ const StoreModule = (() => {
     _salesFilter,
     filterCompletedBatches,
     fifoBatches,
-    fifoAvailable
+    fifoAvailable,
+    changePage,
+    changePageInventory,
+    changePageSales
   };
 })();
 window.StoreModule = StoreModule;

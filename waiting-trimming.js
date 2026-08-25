@@ -6,21 +6,43 @@ const WaitingTrimmingModule = (() => {
   let pendingSearch = '';
   let _activeBatch = null;
   let _wtInputQty = 0;
+  let currentPage = 1;
+  const itemsPerPage = 50;
 
-  function getInputQty(batchId) {
-    const recs = DB.StageRecords.all().filter(r => r.batchId === batchId && r.movedTo === 'waiting-trimming');
-    const batch = DB.Batches.find(batchId) || {};
+  function getInputQty(batchOrId, lastRecordMap = null) {
+    if (!batchOrId) return 0;
+    const batch = (typeof batchOrId === 'object') ? batchOrId : (DB.Batches.find(batchOrId) || {});
+    
+    if (lastRecordMap) {
+      const lastRec = lastRecordMap[batch.id];
+      if (!lastRec) return batch.initialQty || 0;
+      return Number(lastRec.outputQty) || batch.initialQty || 0;
+    }
+    
+    const recs = DB.StageRecords.all().filter(r => r.batchId === batch.id && r.movedTo === 'waiting-trimming');
     if (!recs.length) return batch.initialQty || 0;
     const lastRec = recs[recs.length - 1];
     return Number(lastRec.outputQty) || batch.initialQty || 0;
   }
 
   function render() {
+    currentPage = 1;
     pendingSearch = '';
     const el = document.getElementById('content');
     const batches = DB.Batches.byStage('waiting-trimming');
     const history = DB.StageRecords.byStage('waiting-trimming');
-    const totalQty = batches.reduce((sum, b) => sum + getInputQty(b.id), 0);
+
+    // Build the lookup map for StageRecords
+    const stageRecords = DB.StageRecords.all();
+    const lastRecordMap = {};
+    for (let i = 0; i < stageRecords.length; i++) {
+      const r = stageRecords[i];
+      if (r.batchId && r.movedTo === 'waiting-trimming') {
+        lastRecordMap[r.batchId] = r;
+      }
+    }
+
+    const totalQty = batches.reduce((sum, b) => sum + getInputQty(b, lastRecordMap), 0);
 
     el.innerHTML = `
       <div class="animate-in">
@@ -37,20 +59,21 @@ const WaitingTrimmingModule = (() => {
           <button class="tab-btn active" data-tab="pending">Pending Dispatch</button>
           <button class="tab-btn" data-tab="history">History</button>
         </div>
-        <div id="wt-content">${pendingTab(batches)}</div>
+        <div id="wt-content">${pendingTab(batches, lastRecordMap)}</div>
       </div>
       ${processModal()}`;
 
     document.querySelectorAll('#wt-tabs .tab-btn').forEach(btn => {
       btn.addEventListener('click', () => {
+        currentPage = 1;
         document.querySelectorAll('#wt-tabs .tab-btn').forEach(b=>b.classList.remove('active'));
         btn.classList.add('active');
-        document.getElementById('wt-content').innerHTML = btn.dataset.tab==='pending' ? pendingTab(batches) : historyTab();
+        document.getElementById('wt-content').innerHTML = btn.dataset.tab==='pending' ? pendingTab(batches, lastRecordMap) : historyTab();
       });
     });
   }
 
-  function pendingTab(batches) {
+  function pendingTab(batches, lastRecordMap = null) {
     let filtered = batches;
     if (pendingSearch) {
       const q = pendingSearch.toLowerCase();
@@ -58,8 +81,28 @@ const WaitingTrimmingModule = (() => {
     }
     if (!filtered.length && !pendingSearch) return '<div class="card card-body"><div class="empty-state"><div class="empty-icon">⏳</div><p>No batches waiting for trimming</p></div></div>';
 
-    const rows = filtered.map(b => {
-      const inputQty = getInputQty(b.id);
+    const recordMap = lastRecordMap || (() => {
+      const stageRecords = DB.StageRecords.all();
+      const map = {};
+      for (let i = 0; i < stageRecords.length; i++) {
+        const r = stageRecords[i];
+        if (r.batchId && r.movedTo === 'waiting-trimming') {
+          map[r.batchId] = r;
+        }
+      }
+      return map;
+    })();
+
+    const totalItems = filtered.length;
+    const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+    if (currentPage > totalPages) currentPage = totalPages;
+    if (currentPage < 1) currentPage = 1;
+    const startIdx = (currentPage - 1) * itemsPerPage;
+    const endIdx = currentPage * itemsPerPage;
+    const pageItems = filtered.slice(startIdx, endIdx);
+
+    const rows = pageItems.map(b => {
+      const inputQty = getInputQty(b, recordMap);
       return `
         <tr>
           <td class="font-semibold text-blue">${b.batchNo}</td>
@@ -95,22 +138,47 @@ const WaitingTrimmingModule = (() => {
             <tbody>${rows || '<tr><td colspan="6" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody>
           </table>
         </div>
+        ${totalPages > 1 ? `
+        <div class="flex justify-between items-center p-4" style="border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover);">
+          <div class="text-sm text-muted">
+            Showing <strong>${startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
+          </div>
+          <div class="flex gap-2">
+            <button class="btn btn-secondary btn-xs" onclick="WaitingTrimmingModule.changePage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>◀ Previous</button>
+            <span class="text-sm font-semibold flex items-center px-2">Page ${currentPage} of ${totalPages}</span>
+            <button class="btn btn-secondary btn-xs" onclick="WaitingTrimmingModule.changePage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>Next ▶</button>
+          </div>
+        </div>` : ''}
       </div>`;
   }
 
   function historyTab() {
     let list = DB.StageRecords.byStage('waiting-trimming');
+    const batches = DB.Batches.all();
+    const batchMap = {};
+    for (let i = 0; i < batches.length; i++) {
+      batchMap[batches[i].id] = batches[i];
+    }
+
     if (historySearch) {
       const q = historySearch.toLowerCase();
       list = list.filter(r => {
-        const b = DB.Batches.find(r.batchId);
+        const b = batchMap[r.batchId];
         return b && b.batchNo.toLowerCase().includes(q);
       });
     }
     if (!list.length && !historySearch) return '<div class="card card-body"><div class="empty-state"><div class="empty-icon">&#128196;</div><p>No history found</p></div></div>';
 
-    const rows = list.map(r => {
-      const b = DB.Batches.find(r.batchId)||{};
+    const totalItems = list.length;
+    const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+    if (currentPage > totalPages) currentPage = totalPages;
+    if (currentPage < 1) currentPage = 1;
+    const startIdx = (currentPage - 1) * itemsPerPage;
+    const endIdx = currentPage * itemsPerPage;
+    const pageItems = list.slice(startIdx, endIdx);
+
+    const rows = pageItems.map(r => {
+      const b = batchMap[r.batchId]||{};
       const v = DB.Vendors.find(r.vendorId)||{};
       return `
         <tr>
@@ -143,10 +211,22 @@ const WaitingTrimmingModule = (() => {
             <tbody>${rows}</tbody>
           </table>
         </div>
+        ${totalPages > 1 ? `
+        <div class="flex justify-between items-center p-4" style="border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover);">
+          <div class="text-sm text-muted">
+            Showing <strong>${startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
+          </div>
+          <div class="flex gap-2">
+            <button class="btn btn-secondary btn-xs" onclick="WaitingTrimmingModule.changePage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>◀ Previous</button>
+            <span class="text-sm font-semibold flex items-center px-2">Page ${currentPage} of ${totalPages}</span>
+            <button class="btn btn-secondary btn-xs" onclick="WaitingTrimmingModule.changePage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>Next ▶</button>
+          </div>
+        </div>` : ''}
       </div>`;
   }
 
   function filterPending(val) {
+    currentPage = 1;
     pendingSearch = val;
     const content = document.getElementById('wt-content');
     const batches = DB.Batches.byStage('waiting-trimming');
@@ -162,6 +242,7 @@ const WaitingTrimmingModule = (() => {
   }
 
   function filterHistory(val) {
+    currentPage = 1;
     historySearch = val;
     const content = document.getElementById('wt-content');
     if (content) {
@@ -287,6 +368,14 @@ const WaitingTrimmingModule = (() => {
     App.navigate(App.current);
   }
 
-  return { render, openProcess, process, filterPending, filterHistory };
+  function changePage(page) {
+    currentPage = page;
+    const activeTab = document.querySelector('#wt-tabs .tab-btn.active');
+    const tabType = activeTab ? activeTab.dataset.tab : 'pending';
+    const batches = DB.Batches.byStage('waiting-trimming');
+    document.getElementById('wt-content').innerHTML = tabType === 'pending' ? pendingTab(batches) : historyTab();
+  }
+
+  return { render, openProcess, process, filterPending, filterHistory, changePage };
 })();
 window.WaitingTrimmingModule = WaitingTrimmingModule;

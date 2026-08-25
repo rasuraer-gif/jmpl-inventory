@@ -6,10 +6,21 @@ const WaitingVisualModule = (() => {
   let pendingSearch = '';
   let _activeBatch = null;
   let _wvInputQty = 0;
+  let currentPage = 1;
+  const itemsPerPage = 50;
 
-  function getInputQty(batchId) {
-    const recs = DB.StageRecords.all().filter(r => r.batchId === batchId && r.movedTo === 'waiting-visual');
-    const batch = DB.Batches.find(batchId) || {};
+  function getInputQty(batchOrId, lastRecordMap = null) {
+    if (!batchOrId) return 0;
+    const batch = (typeof batchOrId === 'object') ? batchOrId : (DB.Batches.find(batchOrId) || {});
+    
+    if (lastRecordMap) {
+      const lastRec = lastRecordMap[batch.id];
+      if (!lastRec) return batch.initialQty || 0;
+      const qtyVal = Number(lastRec.isRecheck ? lastRec.recheckQty : lastRec.outputQty);
+      return !isNaN(qtyVal) ? qtyVal : (batch.initialQty || 0);
+    }
+    
+    const recs = DB.StageRecords.all().filter(r => r.batchId === batch.id && r.movedTo === 'waiting-visual');
     if (!recs.length) return batch.initialQty || 0;
     const lastRec = recs[recs.length - 1];
     const qtyVal = Number(lastRec.isRecheck ? lastRec.recheckQty : lastRec.outputQty);
@@ -18,12 +29,24 @@ const WaitingVisualModule = (() => {
 
   function render() {
     pendingSearch = '';
+    currentPage = 1;
     const el = document.getElementById('content');
     const batches = DB.Batches.byStage('waiting-visual');
     const history = DB.StageRecords.byStage('waiting-visual');
     const thisMonth = new Date().toISOString().slice(0,7);
     const monthLoss = DB.LossTracker.byStage('waiting-visual').filter(l=>(l.date||'').startsWith(thisMonth)).reduce((s,l)=>s+(l.lossQty||0),0);
-    const totalQty = batches.reduce((sum, b) => sum + getInputQty(b.id), 0);
+
+    // Build the lookup map for StageRecords
+    const stageRecords = DB.StageRecords.all();
+    const lastRecordMap = {};
+    for (let i = 0; i < stageRecords.length; i++) {
+      const r = stageRecords[i];
+      if (r.batchId && r.movedTo === 'waiting-visual') {
+        lastRecordMap[r.batchId] = r;
+      }
+    }
+
+    const totalQty = batches.reduce((sum, b) => sum + getInputQty(b, lastRecordMap), 0);
 
     el.innerHTML = `
       <div class="animate-in">
@@ -41,7 +64,7 @@ const WaitingVisualModule = (() => {
           <button class="tab-btn active" data-tab="pending">Pending Batches</button>
           <button class="tab-btn" data-tab="history">History</button>
         </div>
-        <div id="wv-content">${pendingTab(batches)}</div>
+        <div id="wv-content">${pendingTab(batches, lastRecordMap)}</div>
       </div>
       ${processModal()}${rejectModal()}${allocateModal()}`;
 
@@ -49,12 +72,12 @@ const WaitingVisualModule = (() => {
       btn.addEventListener('click', () => {
         document.querySelectorAll('#wv-tabs .tab-btn').forEach(b=>b.classList.remove('active'));
         btn.classList.add('active');
-        document.getElementById('wv-content').innerHTML = btn.dataset.tab==='pending' ? pendingTab(batches) : historyTab();
+        document.getElementById('wv-content').innerHTML = btn.dataset.tab==='pending' ? pendingTab(batches, lastRecordMap) : historyTab();
       });
     });
   }
 
-  function pendingTab(batches) {
+  function pendingTab(batches, lastRecordMap = null) {
     let filtered = batches;
     if (pendingSearch) {
       const q = pendingSearch.toLowerCase();
@@ -62,8 +85,29 @@ const WaitingVisualModule = (() => {
     }
     if (!filtered.length && !pendingSearch) return '<div class="card card-body"><div class="empty-state"><div class="empty-icon">⏳</div><p>No batches waiting for visual inspection</p></div></div>';
 
-    const rows = filtered.map(b => {
-      const inputQty = getInputQty(b.id);
+    const totalItems = filtered.length;
+    const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+    if (currentPage > totalPages) currentPage = totalPages;
+    if (currentPage < 1) currentPage = 1;
+
+    const startIdx = (currentPage - 1) * itemsPerPage;
+    const endIdx = startIdx + itemsPerPage;
+    const pageItems = filtered.slice(startIdx, endIdx);
+
+    const recordMap = lastRecordMap || (() => {
+      const stageRecords = DB.StageRecords.all();
+      const map = {};
+      for (let i = 0; i < stageRecords.length; i++) {
+        const r = stageRecords[i];
+        if (r.batchId && r.movedTo === 'waiting-visual') {
+          map[r.batchId] = r;
+        }
+      }
+      return map;
+    })();
+
+    const rows = pageItems.map(b => {
+      const inputQty = getInputQty(b, recordMap);
       return `
         <tr>
           <td><input type="checkbox" class="bulk-stage-check" value="${b.id}" style="cursor:pointer;" onclick="event.stopPropagation()"></td>
@@ -93,6 +137,22 @@ const WaitingVisualModule = (() => {
         </tr>`;
     }).join('');
 
+    let paginationHtml = '';
+    if (totalPages > 1) {
+      paginationHtml = `
+        <div class="flex justify-between items-center p-4" style="border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover);">
+          <div class="text-sm text-muted">
+            Showing <strong>${startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
+          </div>
+          <div class="flex gap-2">
+            <button class="btn btn-secondary btn-xs" onclick="WaitingVisualModule.changePage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>◀ Previous</button>
+            <span class="text-sm font-semibold flex items-center px-2">Page ${currentPage} of ${totalPages}</span>
+            <button class="btn btn-secondary btn-xs" onclick="WaitingVisualModule.changePage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>Next ▶</button>
+          </div>
+        </div>
+      `;
+    }
+
     return `
       <div class="card animate-in">
         <div class="card-header" style="flex-direction:row; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
@@ -116,22 +176,29 @@ const WaitingVisualModule = (() => {
             <tbody>${rows || '<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody>
           </table>
         </div>
+        ${paginationHtml}
       </div>`;
   }
 
   function historyTab() {
     let list = DB.StageRecords.byStage('waiting-visual');
+    const batches = DB.Batches.all();
+    const batchMap = {};
+    for (let i = 0; i < batches.length; i++) {
+      batchMap[batches[i].id] = batches[i];
+    }
+
     if (historySearch) {
       const q = historySearch.toLowerCase();
       list = list.filter(r => {
-        const b = DB.Batches.find(r.batchId);
+        const b = batchMap[r.batchId];
         return b && b.batchNo.toLowerCase().includes(q);
       });
     }
     if (!list.length && !historySearch) return '<div class="card card-body"><div class="empty-state"><div class="empty-icon">&#128196;</div><p>No history found</p></div></div>';
 
     const rows = list.map(r => {
-      const b = DB.Batches.find(r.batchId)||{};
+      const b = batchMap[r.batchId]||{};
       const lossRate = r.inputQty > 0 ? ((r.lossQty / r.inputQty)*100).toFixed(1) + '%' : '0.0%';
       return `
         <tr>
@@ -170,6 +237,7 @@ const WaitingVisualModule = (() => {
 
   function filterPending(val) {
     pendingSearch = val;
+    currentPage = 1;
     const content = document.getElementById('wv-content');
     const batches = DB.Batches.byStage('waiting-visual');
     if (content) {
@@ -193,6 +261,15 @@ const WaitingVisualModule = (() => {
         inp.focus();
         inp.setSelectionRange(inp.value.length, inp.value.length);
       }
+    }
+  }
+
+  function changePage(page) {
+    currentPage = page;
+    const content = document.getElementById('wv-content');
+    const batches = DB.Batches.byStage('waiting-visual');
+    if (content) {
+      content.innerHTML = pendingTab(batches);
     }
   }
 
@@ -777,6 +854,6 @@ const WaitingVisualModule = (() => {
     render();
   }
 
-  return { render, openProcess, openReject, openAllocate, saveRackDetails, process, rejectBatch, filterPending, filterHistory, calcLoss, updateDynamicBatchNo, updateAllocateDynamicBatchNo };
+  return { render, openProcess, openReject, openAllocate, saveRackDetails, process, rejectBatch, filterPending, filterHistory, calcLoss, updateDynamicBatchNo, updateAllocateDynamicBatchNo, changePage };
 })();
 window.WaitingVisualModule = WaitingVisualModule;

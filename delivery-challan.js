@@ -22,6 +22,12 @@ const DeliveryChallanModule = (() => {
   };
 
   function getBatchCurrentQty(b, stageRecords = null) {
+    if (stageRecords && typeof stageRecords.filter !== 'function') {
+      const key = `${b.id}_${b.currentStage}`;
+      const lastRec = stageRecords[key];
+      if (!lastRec) return Number(b.initialQty || 0);
+      return lastRec.isRecheck ? Number(lastRec.recheckQty || 0) : Number(lastRec.outputQty || 0);
+    }
     const records = stageRecords || DB.StageRecords.all();
     const recs = records.filter(r => r.batchId === b.id && r.movedTo === b.currentStage);
     if (!recs.length) return Number(b.initialQty || 0);
@@ -301,10 +307,18 @@ const DeliveryChallanModule = (() => {
     eligibleBatches.sort((a,b) => a.batchNo.localeCompare(b.batchNo));
 
     const stageRecords = DB.StageRecords.all();
+    // Build a map of the last record for each batch/stage combination to avoid nested loops (O(N^2))
+    const lastRecordMap = {};
+    for (let i = 0; i < stageRecords.length; i++) {
+      const r = stageRecords[i];
+      if (r.batchId && r.movedTo) {
+        lastRecordMap[`${r.batchId}_${r.movedTo}`] = r;
+      }
+    }
 
     let html = '';
     eligibleBatches.forEach(b => {
-      const qty = getBatchCurrentQty(b, stageRecords);
+      const qty = getBatchCurrentQty(b, lastRecordMap);
       const stageName = STAGE_NAMES[b.currentStage] || b.currentStage;
       html += `<option value="${b.batchNo}">${b.batchNo} [${b.jmrefNo}] (${qty} pcs) - Stage: ${stageName}</option>`;
     });

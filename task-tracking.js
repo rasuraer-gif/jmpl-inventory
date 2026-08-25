@@ -292,6 +292,11 @@ const TaskTrackingModule = (() => {
   function filterSearch(val) {
     searchTerm = val;
     render();
+    const inp = document.getElementById('task-search-input');
+    if (inp) {
+      inp.focus();
+      inp.setSelectionRange(inp.value.length, inp.value.length);
+    }
   }
 
   function filterUser(val) {

@@ -14,8 +14,11 @@ const VisualModule = (() => {
 
   let historySearch = '';
   let pendingSearch = '';
+  let currentPage = 1;
+  const itemsPerPage = 50;
 
   function render() {
+    currentPage = 1;
     pendingSearch = '';
     const el = document.getElementById('content');
     const batches = DB.Batches.byStage('visual');
@@ -43,6 +46,7 @@ const VisualModule = (() => {
       ${processModal()}${rejectModal()}`;
     document.querySelectorAll('#vis-tabs .tab-btn').forEach(btn => {
       btn.addEventListener('click', () => {
+        currentPage = 1;
         document.querySelectorAll('#vis-tabs .tab-btn').forEach(b=>b.classList.remove('active'));
         btn.classList.add('active');
         document.getElementById('vis-content').innerHTML = btn.dataset.tab==='pending' ? pendingTab(batches) : historyTab();
@@ -57,7 +61,16 @@ const VisualModule = (() => {
       filtered = batches.filter(b => (b.batchNo || '').toLowerCase().includes(q));
     }
     if (!filtered.length && !pendingSearch) return `<div class="card card-body"><div class="empty-state"><div class="empty-icon">&#128065;&#65039;</div><p>No batches pending visual inspection</p></div></div>`;
-    const rows = filtered.map(b => {
+    
+    const totalItems = filtered.length;
+    const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+    if (currentPage > totalPages) currentPage = totalPages;
+    if (currentPage < 1) currentPage = 1;
+    const startIdx = (currentPage - 1) * itemsPerPage;
+    const endIdx = currentPage * itemsPerPage;
+    const pageItems = filtered.slice(startIdx, endIdx);
+
+    const rows = pageItems.map(b => {
       const inputQty = getInputQty(b.id);
       const isRecheck = !!(b.recheckCount && b.recheckCount > 0);
       return `<tr>
@@ -89,7 +102,20 @@ const VisualModule = (() => {
           <button class="btn btn-secondary btn-sm" onclick="Scanner.start('vis-pending-search', (val) => VisualModule.filterPending(val))" style="padding: 4px 8px; display: flex; align-items: center; justify-content: center; height: 32px;" title="Scan QR Code">📷</button>
         </div>
       </div>
-      <div class="table-wrap"><table class="data-table"><thead><tr><th><input type="checkbox" onclick="App.toggleAllStageChecks(this)" style="cursor:pointer;"></th><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Input Qty</th><th>Received</th><th>Actions</th></tr></thead><tbody>${rows || '<tr><td colspan="7" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody></table></div></div>`;
+      </div>
+      <div class="table-wrap"><table class="data-table"><thead><tr><th><input type="checkbox" onclick="App.toggleAllStageChecks(this)" style="cursor:pointer;"></th><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Input Qty</th><th>Received</th><th>Actions</th></tr></thead><tbody>${rows || '<tr><td colspan="7" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody></table></div>
+      ${totalPages > 1 ? `
+      <div class="flex justify-between items-center p-4" style="border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover);">
+        <div class="text-sm text-muted">
+          Showing <strong>${startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
+        </div>
+        <div class="flex gap-2">
+          <button class="btn btn-secondary btn-xs" onclick="VisualModule.changePage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>◀ Previous</button>
+          <span class="text-sm font-semibold flex items-center px-2">Page ${currentPage} of ${totalPages}</span>
+          <button class="btn btn-secondary btn-xs" onclick="VisualModule.changePage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>Next ▶</button>
+        </div>
+      </div>` : ''}
+    </div>`;
   }
 
   function historyTab() {
@@ -111,7 +137,15 @@ const VisualModule = (() => {
         <div class="empty-state"><div class="empty-icon">&#128202;</div><p>No inspection history found</p></div>
       </div>`;
 
-    const rows = recs.map(r => {
+    const totalItems = recs.length;
+    const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+    if (currentPage > totalPages) currentPage = totalPages;
+    if (currentPage < 1) currentPage = 1;
+    const startIdx = (currentPage - 1) * itemsPerPage;
+    const endIdx = currentPage * itemsPerPage;
+    const pageItems = recs.slice(startIdx, endIdx);
+
+    const rows = pageItems.map(r => {
       const b = DB.Batches.find(r.batchId)||{};
       const pct = r.inputQty ? (((r.lossQty + (r.reprocessQty || 0)) / r.inputQty) * 100).toFixed(1) + '%' : '0.0%';
       return `<tr>
@@ -148,10 +182,22 @@ const VisualModule = (() => {
             <tbody>${rows}</tbody>
           </table>
         </div>
+        ${totalPages > 1 ? `
+        <div class="flex justify-between items-center p-4" style="border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover);">
+          <div class="text-sm text-muted">
+            Showing <strong>${startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
+          </div>
+          <div class="flex gap-2">
+            <button class="btn btn-secondary btn-xs" onclick="VisualModule.changePage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>◀ Previous</button>
+            <span class="text-sm font-semibold flex items-center px-2">Page ${currentPage} of ${totalPages}</span>
+            <button class="btn btn-secondary btn-xs" onclick="VisualModule.changePage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>Next ▶</button>
+          </div>
+        </div>` : ''}
       </div>`;
   }
 
   function filterHistory(val) {
+    currentPage = 1;
     historySearch = val;
     const content = document.getElementById('vis-content');
     if (content) {
@@ -856,6 +902,7 @@ const VisualModule = (() => {
   });
 
   function filterPending(val) {
+    currentPage = 1;
     pendingSearch = val;
     const content = document.getElementById('vis-content');
     if (content) {
@@ -870,6 +917,14 @@ const VisualModule = (() => {
     }
   }
 
-  return { render, openProcess, calcLoss, process, openReject, rejectBatch, showInspectorDropdown, filterInspectors, selectInspector, filterHistory, filterPending, updateDynamicBatchNo, onDestinationChange };
+  function changePage(page) {
+    currentPage = page;
+    const activeTab = document.querySelector('#vis-tabs .tab-btn.active');
+    const tabType = activeTab ? activeTab.dataset.tab : 'pending';
+    const batches = DB.Batches.byStage('visual');
+    document.getElementById('vis-content').innerHTML = tabType === 'pending' ? pendingTab(batches) : historyTab();
+  }
+
+  return { render, openProcess, calcLoss, process, openReject, rejectBatch, showInspectorDropdown, filterInspectors, selectInspector, filterHistory, filterPending, updateDynamicBatchNo, onDestinationChange, changePage };
 })();
 window.VisualModule = VisualModule;

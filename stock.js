@@ -23,6 +23,8 @@ const StockModule = (() => {
   let historySearch = '';
   let parsedBatchUploads = []; // Holds parsed rows for batch upload
   let lastCreatedBatchIds = []; // Holds IDs of batches created in the current session
+  let currentPage = 1;
+  const itemsPerPage = 50;
 
   function getActualStock(partId, jmrefNo, stage) {
     const batches = DB.Batches.all();
@@ -43,6 +45,7 @@ const StockModule = (() => {
   }
 
   function render() {
+    currentPage = 1;
     const el = document.getElementById('content');
     if (!el) return;
 
@@ -128,11 +131,13 @@ const StockModule = (() => {
               </tbody>
             </table>
           </div>
+          <div id="stock-pagination"></div>
         </div>
       </div>`;
   }
 
   function switchTab(tab) {
+    currentPage = 1;
     activeTab = tab;
     render();
   }
@@ -863,6 +868,7 @@ const StockModule = (() => {
   }
 
   function filterHistory(val) {
+    currentPage = 1;
     historySearch = val;
     const tableBody = document.querySelector('#stock-module-history-table-body');
     if (tableBody) {
@@ -885,11 +891,40 @@ const StockModule = (() => {
              (u.batchNo || '').toLowerCase().includes(filterText);
     });
 
-    if (!filtered.length) {
+    const totalItems = filtered.length;
+    const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+    if (currentPage > totalPages) currentPage = totalPages;
+    if (currentPage < 1) currentPage = 1;
+    const startIdx = (currentPage - 1) * itemsPerPage;
+    const endIdx = currentPage * itemsPerPage;
+    const pageItems = filtered.slice(startIdx, endIdx);
+
+    setTimeout(() => {
+      const pagEl = document.getElementById('stock-pagination');
+      if (pagEl) {
+        if (totalPages > 1) {
+          pagEl.innerHTML = `
+            <div class="flex justify-between items-center p-4" style="border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover);">
+              <div class="text-sm text-muted">
+                Showing <strong>${startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
+              </div>
+              <div class="flex gap-2">
+                <button class="btn btn-secondary btn-xs" onclick="StockModule.changePage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>◀ Previous</button>
+                <span class="text-sm font-semibold flex items-center px-2">Page ${currentPage} of ${totalPages}</span>
+                <button class="btn btn-secondary btn-xs" onclick="StockModule.changePage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>Next ▶</button>
+              </div>
+            </div>`;
+        } else {
+          pagEl.innerHTML = '';
+        }
+      }
+    }, 0);
+
+    if (!pageItems.length) {
       return '<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--text-muted);">No matching uploads found</td></tr>';
     }
 
-    return filtered.map(u => {
+    return pageItems.map(u => {
       const part = master.find(m => m.id === u.partId) || {};
       const user = users.find(uu => uu.id === u.uploadedBy) || {};
       const checkboxHtml = u.batchDbId
@@ -1763,6 +1798,14 @@ const StockModule = (() => {
     }
   }
 
+  function changePage(page) {
+    currentPage = page;
+    const tbody = document.getElementById('stock-module-history-table-body');
+    if (tbody) {
+      tbody.innerHTML = renderHistoryRows();
+    }
+  }
+
   return { 
     render, 
     upload, 
@@ -1792,6 +1835,7 @@ const StockModule = (() => {
     printSuccessBatches,
     finishSuccessScreen,
     toggleSuccessAll,
-    cancelBatchConfirm
+    cancelBatchConfirm,
+    changePage
   };
 })();

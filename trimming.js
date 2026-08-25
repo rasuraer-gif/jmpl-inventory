@@ -6,6 +6,8 @@ const TrimmingModule = (() => {
   let historySearch = '';
   let pendingSearch = '';
   let vendorFilter = '';
+  let currentPage = 1;
+  const itemsPerPage = 50;
 
   function getInputQty(batchId) {
     const recs = DB.StageRecords.all().filter(r => r.batchId === batchId && r.movedTo === 'trimming');
@@ -14,6 +16,7 @@ const TrimmingModule = (() => {
     return lastRec.isRecheck ? lastRec.recheckQty : lastRec.outputQty;
   }
   function render() {
+    currentPage = 1;
     pendingSearch = '';
     historySearch = '';
     vendorFilter = '';
@@ -41,6 +44,7 @@ const TrimmingModule = (() => {
       ${processModal()}${rejectModal()}`;
     document.querySelectorAll('#trim-tabs .tab-btn').forEach(btn => {
       btn.addEventListener('click', () => {
+        currentPage = 1;
         document.querySelectorAll('#trim-tabs .tab-btn').forEach(b=>b.classList.remove('active'));
         btn.classList.add('active');
         document.getElementById('trim-content').innerHTML = btn.dataset.tab==='pending' ? pendingTab(batches) : historyTab();
@@ -61,6 +65,7 @@ const TrimmingModule = (() => {
   }
 
   function filterByVendor(val) {
+    currentPage = 1;
     vendorFilter = val;
     const activeTabBtn = document.querySelector('#trim-tabs .tab-btn.active');
     const tabName = activeTabBtn ? activeTabBtn.dataset.tab : 'pending';
@@ -89,9 +94,18 @@ const TrimmingModule = (() => {
     if (!filtered.length && !pendingSearch && !vendorFilter) return `<div class="card card-body"><div class="empty-state"><div class="empty-icon">&#9986;&#65039;</div><p>No batches in Trimming stage</p></div></div>`;
     
     let totalWIP = 0;
-    const rows = filtered.map(b => {
+    filtered.forEach(b => { totalWIP += getInputQty(b.id); });
+
+    const totalItems = filtered.length;
+    const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+    if (currentPage > totalPages) currentPage = totalPages;
+    if (currentPage < 1) currentPage = 1;
+    const startIdx = (currentPage - 1) * itemsPerPage;
+    const endIdx = currentPage * itemsPerPage;
+    const pageItems = filtered.slice(startIdx, endIdx);
+
+    const rows = pageItems.map(b => {
       const inputQty = getInputQty(b.id);
-      totalWIP += inputQty;
       const isRecheck = !!(b.recheckCount && b.recheckCount > 0 && b.currentStage === 'trimming');
       const v = vendors.find(vv => vv.id === b.vendorId) || {};
       const vendorName = v.name || (b.productionType === 'inhouse' ? 'In-House' : '—');
@@ -142,7 +156,20 @@ const TrimmingModule = (() => {
           <button class="btn btn-secondary btn-sm" onclick="Scanner.start('trim-pending-search', (val) => TrimmingModule.filterPending(val))" style="padding: 4px 8px; display: flex; align-items: center; justify-content: center; height: 32px;" title="Scan QR Code">📷</button>
         </div>
       </div>
-      <div class="table-wrap"><table class="data-table"><thead><tr><th><input type="checkbox" onclick="App.toggleAllStageChecks(this)" style="cursor:pointer;"></th><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Vendor</th><th>Input Qty</th><th>Received</th><th>Actions</th></tr></thead><tbody>${tbodyHtml}</tbody></table></div></div>`;
+      </div>
+      <div class="table-wrap"><table class="data-table"><thead><tr><th><input type="checkbox" onclick="App.toggleAllStageChecks(this)" style="cursor:pointer;"></th><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Vendor</th><th>Input Qty</th><th>Received</th><th>Actions</th></tr></thead><tbody>${tbodyHtml}</tbody></table></div>
+      ${totalPages > 1 ? `
+      <div class="flex justify-between items-center p-4" style="border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover);">
+        <div class="text-sm text-muted">
+          Showing <strong>${startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
+        </div>
+        <div class="flex gap-2">
+          <button class="btn btn-secondary btn-xs" onclick="TrimmingModule.changePage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>◀ Previous</button>
+          <span class="text-sm font-semibold flex items-center px-2">Page ${currentPage} of ${totalPages}</span>
+          <button class="btn btn-secondary btn-xs" onclick="TrimmingModule.changePage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>Next ▶</button>
+        </div>
+      </div>` : ''}
+    </div>`;
   }
   function historyTab() {
     let recs = DB.StageRecords.byStage('trimming');
@@ -181,14 +208,25 @@ const TrimmingModule = (() => {
     let totalInput = 0;
     let totalOutput = 0;
     let totalLoss = 0;
-
-    const rows = recs.map(r => {
-      const b = DB.Batches.find(r.batchId)||{};
-      const v = vendors.find(vv=>vv.id===r.vendorId)||{};
-      const pct = r.inputQty ? ((r.lossQty / r.inputQty) * 100).toFixed(1) + '%' : '0.0%';
+    
+    recs.forEach(r => {
       totalInput += (r.inputQty || 0);
       totalOutput += (r.outputQty || 0);
       totalLoss += (r.lossQty || 0);
+    });
+
+    const totalItems = recs.length;
+    const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+    if (currentPage > totalPages) currentPage = totalPages;
+    if (currentPage < 1) currentPage = 1;
+    const startIdx = (currentPage - 1) * itemsPerPage;
+    const endIdx = currentPage * itemsPerPage;
+    const pageItems = recs.slice(startIdx, endIdx);
+
+    const rows = pageItems.map(r => {
+      const b = DB.Batches.find(r.batchId)||{};
+      const v = vendors.find(vv=>vv.id===r.vendorId)||{};
+      const pct = r.inputQty ? ((r.lossQty / r.inputQty) * 100).toFixed(1) + '%' : '0.0%';
       return `<tr><td class="font-semibold">${b.batchNo||'—'}</td><td>${b.jmrefNo||'—'}</td><td>${v.name||'—'}</td><td>${formatNum(r.inputQty)}</td><td>${formatNum(r.outputQty)}</td><td class="text-danger font-semibold">${formatNum(r.lossQty)}</td><td><span class="badge badge-red">${pct}</span></td><td class="text-muted text-sm">${(r.date||'').slice(0,10)}</td></tr>`;
     }).join('');
 
@@ -226,9 +264,21 @@ const TrimmingModule = (() => {
             <tbody>${rows + summaryRow}</tbody>
           </table>
         </div>
+        ${totalPages > 1 ? `
+        <div class="flex justify-between items-center p-4" style="border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover);">
+          <div class="text-sm text-muted">
+            Showing <strong>${startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
+          </div>
+          <div class="flex gap-2">
+            <button class="btn btn-secondary btn-xs" onclick="TrimmingModule.changePage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>◀ Previous</button>
+            <span class="text-sm font-semibold flex items-center px-2">Page ${currentPage} of ${totalPages}</span>
+            <button class="btn btn-secondary btn-xs" onclick="TrimmingModule.changePage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>Next ▶</button>
+          </div>
+        </div>` : ''}
       </div>`;
   }
   function filterHistory(val) {
+    currentPage = 1;
     historySearch = val;
     const content = document.getElementById('trim-content');
     if (content) {
@@ -555,6 +605,7 @@ const TrimmingModule = (() => {
     render();
   }
   function filterPending(val) {
+    currentPage = 1;
     pendingSearch = val;
     const content = document.getElementById('trim-content');
     if (content) {
@@ -569,6 +620,14 @@ const TrimmingModule = (() => {
     }
   }
 
-  return { render, openProcess, calcLoss, process, openReject, rejectBatch, filterHistory, filterPending, updateDynamicBatchNo, filterByVendor };
+  function changePage(page) {
+    currentPage = page;
+    const activeTab = document.querySelector('#trim-tabs .tab-btn.active');
+    const tabType = activeTab ? activeTab.dataset.tab : 'pending';
+    const batches = DB.Batches.byStage('trimming');
+    document.getElementById('trim-content').innerHTML = tabType === 'pending' ? pendingTab(batches) : historyTab();
+  }
+
+  return { render, openProcess, calcLoss, process, openReject, rejectBatch, filterHistory, filterPending, updateDynamicBatchNo, filterByVendor, changePage };
 })();
 window.TrimmingModule = TrimmingModule;

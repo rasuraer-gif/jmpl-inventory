@@ -8,6 +8,8 @@ const QualityModule = (() => {
   let recheckSearch = '';
   let rejectSearch = '';
   let pendingSearch = '';
+  let currentPage = 1;
+  const itemsPerPage = 50;
 
   function getInputQty(batchId) {
     const recs = DB.StageRecords.all().filter(r => r.batchId === batchId && r.movedTo === 'quality');
@@ -19,6 +21,7 @@ const QualityModule = (() => {
   }
 
   function render() {
+    currentPage = 1;
     pendingSearch = '';
     const el = document.getElementById('content');
     const batches = DB.Batches.byStage('quality');
@@ -56,6 +59,7 @@ const QualityModule = (() => {
 
     document.querySelectorAll('#qf-tabs .tab-btn').forEach(btn => {
       btn.addEventListener('click', () => {
+        currentPage = 1;
         document.querySelectorAll('#qf-tabs .tab-btn').forEach(b=>b.classList.remove('active'));
         btn.classList.add('active');
         activeTab = btn.dataset.tab;
@@ -79,7 +83,16 @@ const QualityModule = (() => {
       filtered = batches.filter(b => (b.batchNo || '').toLowerCase().includes(q));
     }
     if (!filtered.length && !pendingSearch) return '<div class="card card-body"><div class="empty-state"><div class="empty-icon">&#11088;</div><p>No batches pending quality final inspection</p></div></div>';
-    const rows = filtered.map(b => {
+    
+    const totalItems = filtered.length;
+    const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+    if (currentPage > totalPages) currentPage = totalPages;
+    if (currentPage < 1) currentPage = 1;
+    const startIdx = (currentPage - 1) * itemsPerPage;
+    const endIdx = currentPage * itemsPerPage;
+    const pageItems = filtered.slice(startIdx, endIdx);
+
+    const rows = pageItems.map(b => {
       const inputQty = getInputQty(b.id);
       const recheckCount = (b.recheckCount || 0);
       return '<tr>' +
@@ -119,6 +132,17 @@ const QualityModule = (() => {
             <tbody>${rows || '<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody>
           </table>
         </div>
+        ${totalPages > 1 ? `
+        <div class="flex justify-between items-center p-4" style="border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover);">
+          <div class="text-sm text-muted">
+            Showing <strong>${startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
+          </div>
+          <div class="flex gap-2">
+            <button class="btn btn-secondary btn-xs" onclick="QualityModule.changePage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>◀ Previous</button>
+            <span class="text-sm font-semibold flex items-center px-2">Page ${currentPage} of ${totalPages}</span>
+            <button class="btn btn-secondary btn-xs" onclick="QualityModule.changePage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>Next ▶</button>
+          </div>
+        </div>` : ''}
       </div>`;
   }
 
@@ -126,19 +150,52 @@ const QualityModule = (() => {
     let completed = DB.Batches.all().filter(b => b.status === 'completed');
     completed.sort((a,b) => (b.completedAt||b.createdAt||'').localeCompare(a.completedAt||a.createdAt||''));
 
-    const rows = completed.map(b => {
-      const qfRecs = DB.StageRecords.all().filter(r => r.batchId === b.id && r.stage === 'quality' && r.movedTo === 'store');
-      const qfRec = qfRecs.length ? qfRecs[0] : {};
+    // Pre-map StageRecords and RecheckTracker to optimize lookups to O(1) inside the loop
+    const stageRecords = DB.StageRecords.all();
+    const qfRecsMap = {};
+    const storeRecsMap = {};
+    for (let i = 0; i < stageRecords.length; i++) {
+      const r = stageRecords[i];
+      if (r.batchId) {
+        if (r.stage === 'quality' && r.movedTo === 'store') {
+          if (!qfRecsMap[r.batchId]) qfRecsMap[r.batchId] = r;
+        }
+        if (r.stage === 'store') {
+          if (!storeRecsMap[r.batchId]) storeRecsMap[r.batchId] = r;
+        }
+      }
+    }
 
-      const storeRecs = DB.StageRecords.all().filter(r => r.batchId === b.id && r.stage === 'store');
-      const passedQty = storeRecs.length ? (storeRecs[0].inputQty || 0) : (b.initialQty || 0);
+    const recheckTracker = DB.RecheckTracker.all();
+    const latestRecheckMap = {};
+    for (let i = 0; i < recheckTracker.length; i++) {
+      const r = recheckTracker[i];
+      if (r.batchId) {
+        const existing = latestRecheckMap[r.batchId];
+        if (!existing || r.recheckNo > existing.recheckNo) {
+          latestRecheckMap[r.batchId] = r;
+        }
+      }
+    }
+
+    const totalItems = completed.length;
+    const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+    if (currentPage > totalPages) currentPage = totalPages;
+    if (currentPage < 1) currentPage = 1;
+    const startIdx = (currentPage - 1) * itemsPerPage;
+    const endIdx = currentPage * itemsPerPage;
+    const pageItems = completed.slice(startIdx, endIdx);
+
+    const rows = pageItems.map(b => {
+      const qfRec = qfRecsMap[b.id] || {};
+      const storeRec = storeRecsMap[b.id];
+      const passedQty = storeRec ? (storeRec.inputQty || 0) : (b.initialQty || 0);
       
       let inputQty = qfRec.inputQty || passedQty;
       let lossQty = qfRec.lossQty || 0;
 
       if (b.recheckCount && b.recheckCount > 0) {
-        const recheckRecs = DB.RecheckTracker.all().filter(r => r.batchId === b.id);
-        const latestRecheck = recheckRecs.sort((x,y) => y.recheckNo - x.recheckNo)[0];
+        const latestRecheck = latestRecheckMap[b.id];
         if (latestRecheck) {
           inputQty = latestRecheck.qty;
           lossQty = Math.max(0, inputQty - passedQty);
@@ -170,6 +227,17 @@ const QualityModule = (() => {
             <tbody>${rows || '<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-muted);">No completed batches found</td></tr>'}</tbody>
           </table>
         </div>
+        ${totalPages > 1 ? `
+        <div class="flex justify-between items-center p-4" style="border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover);">
+          <div class="text-sm text-muted">
+            Showing <strong>${startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
+          </div>
+          <div class="flex gap-2">
+            <button class="btn btn-secondary btn-xs" onclick="QualityModule.changePage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>◀ Previous</button>
+            <span class="text-sm font-semibold flex items-center px-2">Page ${currentPage} of ${totalPages}</span>
+            <button class="btn btn-secondary btn-xs" onclick="QualityModule.changePage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>Next ▶</button>
+          </div>
+        </div>` : ''}
       </div>`;
   }
 
@@ -192,7 +260,15 @@ const QualityModule = (() => {
         <div class="empty-state"><div class="empty-icon">&#x1F504;</div><p>No recheck records found</p></div>
       </div>`;
 
-    const rows = recs.sort((a,b)=>b.date.localeCompare(a.date)).map(r => {
+    const totalItems = recs.length;
+    const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+    if (currentPage > totalPages) currentPage = totalPages;
+    if (currentPage < 1) currentPage = 1;
+    const startIdx = (currentPage - 1) * itemsPerPage;
+    const endIdx = currentPage * itemsPerPage;
+    const pageItems = recs.sort((a,b)=>b.date.localeCompare(a.date)).slice(startIdx, endIdx);
+
+    const rows = pageItems.map(r => {
       const batch = DB.Batches.find(r.batchId)||{};
       const user = DB.Users.find(r.recordedBy)||{};
       
@@ -227,6 +303,17 @@ const QualityModule = (() => {
             <tbody>${rows}</tbody>
           </table>
         </div>
+        ${totalPages > 1 ? `
+        <div class="flex justify-between items-center p-4" style="border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover);">
+          <div class="text-sm text-muted">
+            Showing <strong>${startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
+          </div>
+          <div class="flex gap-2">
+            <button class="btn btn-secondary btn-xs" onclick="QualityModule.changePage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>◀ Previous</button>
+            <span class="text-sm font-semibold flex items-center px-2">Page ${currentPage} of ${totalPages}</span>
+            <button class="btn btn-secondary btn-xs" onclick="QualityModule.changePage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>Next ▶</button>
+          </div>
+        </div>` : ''}
       </div>`;
   }
 
@@ -247,7 +334,15 @@ const QualityModule = (() => {
         <div class="empty-state"><div class="empty-icon">&#x1F6AB;</div><p>No rejected batches found</p></div>
       </div>`;
 
-    const rows = batches.map(b => {
+    const totalItems = batches.length;
+    const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+    if (currentPage > totalPages) currentPage = totalPages;
+    if (currentPage < 1) currentPage = 1;
+    const startIdx = (currentPage - 1) * itemsPerPage;
+    const endIdx = currentPage * itemsPerPage;
+    const pageItems = batches.slice(startIdx, endIdx);
+
+    const rows = pageItems.map(b => {
       const rej = recs.filter(r=>r.batchId===b.id).pop()||{};
       return '<tr><td class="font-semibold">' + b.batchNo + '</td><td>' + (b.jmrefNo||'&#x2014;') + '</td><td>' + (b.partNo||'&#x2014;') + '</td><td><span class="badge badge-red">Rejected</span></td><td>' + (rej.reason||'&#x2014;') + '</td><td class="text-muted text-sm">' + (rej.date||'').slice(0,10) + '</td></tr>';
     }).join('');
@@ -272,10 +367,22 @@ const QualityModule = (() => {
             <tbody>${rows}</tbody>
           </table>
         </div>
+        ${totalPages > 1 ? `
+        <div class="flex justify-between items-center p-4" style="border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover);">
+          <div class="text-sm text-muted">
+            Showing <strong>${startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
+          </div>
+          <div class="flex gap-2">
+            <button class="btn btn-secondary btn-xs" onclick="QualityModule.changePage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>◀ Previous</button>
+            <span class="text-sm font-semibold flex items-center px-2">Page ${currentPage} of ${totalPages}</span>
+            <button class="btn btn-secondary btn-xs" onclick="QualityModule.changePage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>Next ▶</button>
+          </div>
+        </div>` : ''}
       </div>`;
   }
 
   function filterRechecks(val) {
+    currentPage = 1;
     recheckSearch = val;
     const content = document.getElementById('qf-content');
     if (content) {
@@ -289,6 +396,7 @@ const QualityModule = (() => {
   }
 
   function filterRejects(val) {
+    currentPage = 1;
     rejectSearch = val;
     const content = document.getElementById('qf-content');
     if (content) {
@@ -436,6 +544,7 @@ const QualityModule = (() => {
   }
 
   function filterPending(val) {
+    currentPage = 1;
     pendingSearch = val;
     const content = document.getElementById('qf-content');
     if (content) {
@@ -450,7 +559,21 @@ const QualityModule = (() => {
     }
   }
 
-  return { render, openPass, calcPassLoss, passBatch, openReject, rejectBatch, openRecheck, calcRecheckLoss, sendRecheck, filterRechecks, filterRejects, filterPending };
+  function changePage(page) {
+    currentPage = page;
+    const batches = DB.Batches.byStage('quality');
+    if (activeTab === 'pending') {
+      document.getElementById('qf-content').innerHTML = pendingTab(batches);
+    } else if (activeTab === 'completed') {
+      document.getElementById('qf-content').innerHTML = completedBatchesTab();
+    } else if (activeTab === 'recheck') {
+      document.getElementById('qf-content').innerHTML = recheckHistoryTab();
+    } else {
+      document.getElementById('qf-content').innerHTML = rejectedTab();
+    }
+  }
+
+  return { render, openPass, calcPassLoss, passBatch, openReject, rejectBatch, openRecheck, calcRecheckLoss, sendRecheck, filterRechecks, filterRejects, filterPending, changePage };
 })();
 window.QualityModule = QualityModule;
 

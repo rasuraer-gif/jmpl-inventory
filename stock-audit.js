@@ -502,7 +502,7 @@ const StockAuditModule = (() => {
       <div>
         <div class="flex items-center justify-between gap-3 mb-4" style="flex-wrap:wrap;">
           <div class="flex items-center gap-2" style="flex-wrap:wrap; flex:1;">
-            <input type="text" class="form-control form-control-sm" style="max-width:280px;" placeholder="Search Batch / JMREF / Part / Rack..." value="${verifiedSearch}" oninput="StockAuditModule.filterVerifiedSearch(this.value)">
+            <input type="text" id="audit-verified-search" class="form-control form-control-sm" style="max-width:280px;" placeholder="Search Batch / JMREF / Part / Rack..." value="${verifiedSearch}" oninput="StockAuditModule.filterVerifiedSearch(this.value)">
             
             <select class="form-control form-control-sm" style="max-width:200px;" onchange="StockAuditModule.filterVerifiedStatus(this.value)">
               <option value="">All Verification Statuses</option>
@@ -626,7 +626,7 @@ const StockAuditModule = (() => {
       <div>
         <div class="flex items-center justify-between gap-3 mb-4" style="flex-wrap:wrap;">
           <div class="flex items-center gap-2" style="flex-wrap:wrap; flex:1;">
-            <input type="text" class="form-control form-control-sm" style="max-width:280px;" placeholder="Search Missing Batch / JMREF / Part..." value="${missingSearch}" oninput="StockAuditModule.filterMissingSearch(this.value)">
+            <input type="text" id="audit-missing-search" class="form-control form-control-sm" style="max-width:280px;" placeholder="Search Missing Batch / JMREF / Part..." value="${missingSearch}" oninput="StockAuditModule.filterMissingSearch(this.value)">
             
             <select class="form-control form-control-sm" style="max-width:200px;" onchange="StockAuditModule.filterMissingStage(this.value)">
               <option value="">All Registered Stages</option>
@@ -1248,6 +1248,11 @@ const StockAuditModule = (() => {
   function filterVerifiedSearch(val) {
     verifiedSearch = val;
     render();
+    const inp = document.getElementById('audit-verified-search');
+    if (inp) {
+      inp.focus();
+      inp.setSelectionRange(inp.value.length, inp.value.length);
+    }
   }
 
   function filterVerifiedStatus(val) {
@@ -1258,6 +1263,11 @@ const StockAuditModule = (() => {
   function filterMissingSearch(val) {
     missingSearch = val;
     render();
+    const inp = document.getElementById('audit-missing-search');
+    if (inp) {
+      inp.focus();
+      inp.setSelectionRange(inp.value.length, inp.value.length);
+    }
   }
 
   function filterMissingStage(val) {
