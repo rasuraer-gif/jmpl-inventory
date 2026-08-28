@@ -12,6 +12,10 @@ const StockAuditModule = (() => {
   let missingSearch = '';
   let missingStageFilter = '';
   let lastScannedBatch = null;
+  
+  let verifiedCurrentPage = 1;
+  let missingCurrentPage = 1;
+  const itemsPerPage = 50;
 
   // ── Audio Feedback Utility ─────────────────────────────────
   function playAudioTone(type = 'success') {
@@ -498,6 +502,31 @@ const StockAuditModule = (() => {
     const totalExpected = records.reduce((s, r) => s + (Number(r.expectedQty) || 0), 0);
     const totalVariance = records.reduce((s, r) => s + (Number(r.varianceQty) || 0), 0);
 
+    const totalItems = records.length;
+    const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+    if (verifiedCurrentPage > totalPages) verifiedCurrentPage = totalPages;
+    if (verifiedCurrentPage < 1) verifiedCurrentPage = 1;
+
+    const startIdx = (verifiedCurrentPage - 1) * itemsPerPage;
+    const endIdx = startIdx + itemsPerPage;
+    const pageItems = records.slice(startIdx, endIdx);
+
+    let paginationHtml = '';
+    if (totalPages > 1) {
+      paginationHtml = `
+        <div class="flex justify-between items-center p-4" style="border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover);">
+          <div class="text-sm text-muted">
+            Showing <strong>${startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
+          </div>
+          <div class="flex gap-2">
+            <button class="btn btn-secondary btn-xs" onclick="StockAuditModule.changePageVerified(${verifiedCurrentPage - 1})" ${verifiedCurrentPage === 1 ? 'disabled' : ''}>◀ Previous</button>
+            <span class="text-sm font-semibold flex items-center px-2">Page ${verifiedCurrentPage} of ${totalPages}</span>
+            <button class="btn btn-secondary btn-xs" onclick="StockAuditModule.changePageVerified(${verifiedCurrentPage + 1})" ${verifiedCurrentPage === totalPages ? 'disabled' : ''}>Next ▶</button>
+          </div>
+        </div>
+      `;
+    }
+
     return `
       <div>
         <div class="flex items-center justify-between gap-3 mb-4" style="flex-wrap:wrap;">
@@ -513,7 +542,7 @@ const StockAuditModule = (() => {
           </div>
 
           <div class="text-xs text-muted">
-            Showing <strong>${records.length}</strong> verified batch entries
+            Showing <strong>${startIdx + 1}</strong> - <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> verified batch entries
           </div>
         </div>
 
@@ -538,9 +567,9 @@ const StockAuditModule = (() => {
               </tr>
             </thead>
             <tbody>
-              ${records.length === 0 ? `
+              ${pageItems.length === 0 ? `
                 <tr><td colspan="14" style="text-align:center; padding:24px; color:var(--text-muted);">No verified records found matching the filter.</td></tr>
-              ` : records.map((r, i) => {
+              ` : pageItems.map((r, i) => {
                 let badgeCls = 'badge-green';
                 let statusLabel = 'Exact Match';
                 if (r.verificationStatus === 'verified_variance') {
@@ -555,7 +584,7 @@ const StockAuditModule = (() => {
 
                 return `
                   <tr>
-                    <td>${i + 1}</td>
+                    <td>${startIdx + i + 1}</td>
                     <td class="font-semibold text-blue">${r.batchNo}</td>
                     <td><span class="badge badge-teal">${r.jmrefNo || '—'}</span></td>
                     <td>${r.partNo || '—'}</td>
@@ -590,6 +619,7 @@ const StockAuditModule = (() => {
             ` : ''}
           </table>
         </div>
+        ${paginationHtml}
       </div>
     `;
   }
@@ -622,6 +652,31 @@ const StockAuditModule = (() => {
       return s + (qty * unitPrice);
     }, 0);
 
+    const totalItems = missingList.length;
+    const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+    if (missingCurrentPage > totalPages) missingCurrentPage = totalPages;
+    if (missingCurrentPage < 1) missingCurrentPage = 1;
+
+    const startIdx = (missingCurrentPage - 1) * itemsPerPage;
+    const endIdx = startIdx + itemsPerPage;
+    const pageItems = missingList.slice(startIdx, endIdx);
+
+    let paginationHtml = '';
+    if (totalPages > 1) {
+      paginationHtml = `
+        <div class="flex justify-between items-center p-4" style="border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover);">
+          <div class="text-sm text-muted">
+            Showing <strong>${startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
+          </div>
+          <div class="flex gap-2">
+            <button class="btn btn-secondary btn-xs" onclick="StockAuditModule.changePageMissing(${missingCurrentPage - 1})" ${missingCurrentPage === 1 ? 'disabled' : ''}>◀ Previous</button>
+            <span class="text-sm font-semibold flex items-center px-2">Page ${missingCurrentPage} of ${totalPages}</span>
+            <button class="btn btn-secondary btn-xs" onclick="StockAuditModule.changePageMissing(${missingCurrentPage + 1})" ${missingCurrentPage === totalPages ? 'disabled' : ''}>Next ▶</button>
+          </div>
+        </div>
+      `;
+    }
+
     return `
       <div>
         <div class="flex items-center justify-between gap-3 mb-4" style="flex-wrap:wrap;">
@@ -644,7 +699,7 @@ const StockAuditModule = (() => {
           </div>
 
           <div class="text-xs text-danger font-semibold">
-            🚨 ${missingList.length} Missing Batches (${formatNum(totalMissingPieces)} pcs | ₹${formatNum(Math.round(totalMissingValue))} Est. Value)
+            🚨 ${totalItems} Missing Batches (${formatNum(totalMissingPieces)} pcs | ₹${formatNum(Math.round(totalMissingValue))} Est. Value)
           </div>
         </div>
 
@@ -665,9 +720,9 @@ const StockAuditModule = (() => {
               </tr>
             </thead>
             <tbody>
-              ${missingList.length === 0 ? `
+              ${pageItems.length === 0 ? `
                 <tr><td colspan="10" style="text-align:center; padding:24px; color:var(--text-success); font-weight:600;">🎉 Great! All expected batches have been scanned and verified. Zero missing batches!</td></tr>
-              ` : missingList.map((b, i) => {
+              ` : pageItems.map((b, i) => {
                 const expQty = getBatchExpectedQty(b);
                 const part = masterMap[b.jmrefNo] || {};
                 const price = Number(part.salePrice || part.standardCost || 0);
@@ -675,7 +730,7 @@ const StockAuditModule = (() => {
 
                 return `
                   <tr>
-                    <td>${i + 1}</td>
+                    <td>${startIdx + i + 1}</td>
                     <td class="font-semibold text-blue">${b.batchNo}</td>
                     <td><span class="badge badge-teal">${b.jmrefNo || '—'}</span></td>
                     <td>${b.partNo || '—'}</td>
@@ -706,6 +761,7 @@ const StockAuditModule = (() => {
             ` : ''}
           </table>
         </div>
+        ${paginationHtml}
       </div>
     `;
   }
@@ -1242,11 +1298,14 @@ const StockAuditModule = (() => {
 
   function switchTab(tabKey) {
     activeTab = tabKey;
+    verifiedCurrentPage = 1;
+    missingCurrentPage = 1;
     render();
   }
 
   function filterVerifiedSearch(val) {
     verifiedSearch = val;
+    verifiedCurrentPage = 1;
     render();
     const inp = document.getElementById('audit-verified-search');
     if (inp) {
@@ -1257,11 +1316,13 @@ const StockAuditModule = (() => {
 
   function filterVerifiedStatus(val) {
     verifiedStatusFilter = val;
+    verifiedCurrentPage = 1;
     render();
   }
 
   function filterMissingSearch(val) {
     missingSearch = val;
+    missingCurrentPage = 1;
     render();
     const inp = document.getElementById('audit-missing-search');
     if (inp) {
@@ -1272,6 +1333,7 @@ const StockAuditModule = (() => {
 
   function filterMissingStage(val) {
     missingStageFilter = val;
+    missingCurrentPage = 1;
     render();
   }
 
@@ -1397,7 +1459,9 @@ const StockAuditModule = (() => {
     filterMissingSearch,
     filterMissingStage,
     closeModal,
-    exportAuditExcel
+    exportAuditExcel,
+    changePageVerified: (page) => { verifiedCurrentPage = page; render(); },
+    changePageMissing: (page) => { missingCurrentPage = page; render(); }
   };
 })();
 

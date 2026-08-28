@@ -36,13 +36,62 @@ const ReportsModule = (() => {
   }
 
   // ── Export Helpers ─────────────────────────────────────────
-  function exportCSV(headers, rows, filename) {
+  function formatFilters(filters) {
+    if (!filters) return '';
+    const formatted = [];
+    if (filters.from) formatted.push(`From: ${filters.from}`);
+    if (filters.to) formatted.push(`To: ${filters.to}`);
+    if (filters.jmref) formatted.push(`JMRef/Part: ${filters.jmref}`);
+    if (filters.partNo && filters.partNo !== filters.jmref) formatted.push(`Part: ${filters.partNo}`);
+    
+    if (filters.operatorId && typeof DB !== 'undefined') {
+      const op = DB.Operators.find(filters.operatorId);
+      formatted.push(`Operator: ${op ? op.name : filters.operatorId}`);
+    }
+    if (filters.subcontractorId && typeof DB !== 'undefined') {
+      const sub = DB.Subcontractors.find(filters.subcontractorId);
+      formatted.push(`Subcontractor: ${sub ? sub.name : filters.subcontractorId}`);
+    }
+    if (filters.vendorId && typeof DB !== 'undefined') {
+      const v = DB.Vendors.find(filters.vendorId);
+      formatted.push(`Vendor: ${v ? v.name : filters.vendorId}`);
+    }
+    if (filters.prodType) {
+      formatted.push(`Type: ${filters.prodType === 'inhouse' ? 'In-House' : 'Subcontractor'}`);
+    }
+    if (filters.pendingStage) {
+      formatted.push(`Stage: ${filters.pendingStage}`);
+    }
+    if (filters.pendingTimeframe) {
+      formatted.push(`Timeframe: ${filters.pendingTimeframe}d`);
+    }
+    if (filters.reprocessDestination) {
+      formatted.push(`Reprocess Stage: ${filters.reprocessDestination}`);
+    }
+    
+    return formatted.join(' | ');
+  }
+
+  function exportCSV(headers, rows, filename, title, filters) {
     const escape = v => {
       const s = String(v ?? '').replace(/"/g, '""');
       return /[",\n]/.test(s) ? `"${s}"` : s;
     };
-    const csv = [headers, ...rows].map(r => r.map(escape).join(',')).join('\n');
-    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+    
+    const lines = [];
+    lines.push([`Janani Mouldings Private Limited`].map(escape).join(','));
+    lines.push([title || 'Report'].map(escape).join(','));
+    const filterText = formatFilters(filters);
+    if (filterText) {
+      lines.push([`Filters: ${filterText}`].map(escape).join(','));
+    }
+    lines.push([`Generated Date: ${new Date().toLocaleString()}`].map(escape).join(','));
+    lines.push(''); // empty separator row
+    
+    const dataLines = [headers, ...rows].map(r => r.map(escape).join(','));
+    const csvContent = [...lines, ...dataLines].join('\n');
+    
+    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url; a.download = filename + '.csv'; a.click();
@@ -50,26 +99,107 @@ const ReportsModule = (() => {
     showToast('CSV exported successfully', 'success');
   }
 
-  function exportExcel(headers, rows, filename, sheetName='Report') {
+  function exportExcel(headers, rows, filename, sheetName='Report', filters) {
     if (typeof XLSX === 'undefined') {
       showToast('Excel library not loaded', 'error'); return;
     }
-    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-    // Style header row
+    
+    const filterText = formatFilters(filters);
+    const metaRows = [
+      ['Janani Mouldings Private Limited'],
+      [sheetName || 'Report'],
+      [filterText ? `Filters: ${filterText}` : ''],
+      [`Generated Date: ${new Date().toLocaleString()}`],
+      [] // empty row separator
+    ];
+    
+    const ws = XLSX.utils.aoa_to_sheet([...metaRows, headers, ...rows]);
+    
+    // Style header row (which is at index 5 because metaRows has 5 elements)
     const range = XLSX.utils.decode_range(ws['!ref']);
     for (let C = range.s.c; C <= range.e.c; C++) {
-      const addr = XLSX.utils.encode_cell({ r: 0, c: C });
+      const addr = XLSX.utils.encode_cell({ r: 5, c: C });
       if (!ws[addr]) continue;
       ws[addr].s = { font: { bold: true }, fill: { fgColor: { rgb: '1E3A5F' } } };
     }
-    // Auto column width
+    // Auto column width (based on headers/rows data to ignore wide title strings)
     ws['!cols'] = headers.map((h, i) => ({
       wch: Math.max(h.length, ...rows.map(r => String(r[i] ?? '').length), 10)
     }));
+    
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+    
+    // Excel sheet name length limit is 31 chars, and cannot contain special chars: \ / ? * [ ]
+    const cleanSheetName = String(sheetName || 'Report')
+      .replace(/[\\\/\?\*\[\]]/g, '')
+      .replace(/[\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD00-\uDFFF]/g, '')
+      .trim()
+      .slice(0, 30);
+      
+    XLSX.utils.book_append_sheet(wb, ws, cleanSheetName);
     XLSX.writeFile(wb, filename + '.xlsx');
     showToast('Excel exported successfully', 'success');
+  }
+
+  function exportPDF(headers, rows, filename, title, filters) {
+    if (typeof html2pdf === 'undefined') {
+      showToast('PDF library not loaded', 'error'); return;
+    }
+    
+    const tempDiv = document.createElement('div');
+    tempDiv.style.padding = '24px';
+    tempDiv.style.fontFamily = 'system-ui, -apple-system, sans-serif';
+    tempDiv.style.color = '#1e293b';
+    
+    // Clean title (remove emojis)
+    const cleanTitle = title.replace(/[\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD00-\uDFFF]/g, '').trim();
+    const filterText = formatFilters(filters);
+    const filterHeader = filterText ? `<p style="color: #475569; margin: 4px 0 0 0; font-size: 11px; font-style: italic;">Filters: ${filterText}</p>` : '';
+
+    tempDiv.innerHTML = `
+      <div style="margin-bottom: 24px; border-bottom: 2px solid #004976; padding-bottom: 12px;">
+        <h2 style="color: #004976; margin: 0 0 6px 0; font-size: 22px; font-weight: 800;">Janani Mouldings Private Limited</h2>
+        <p style="color: #0f172a; margin: 0; font-size: 14px; font-weight: 600;">${cleanTitle}</p>
+        ${filterHeader}
+        <p style="color: #64748b; margin: 4px 0 0 0; font-size: 10px;">Generated Date: ${new Date().toLocaleString()}</p>
+      </div>
+      <table style="width: 100%; border-collapse: collapse; font-size: 9.5px; line-height: 1.4;">
+        <thead>
+          <tr style="background-color: #004976; color: white;">
+            ${headers.map(h => `<th style="border: 1px solid #cbd5e1; padding: 7px 8px; text-align: left; font-weight: 700;">${h}</th>`).join('')}
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map((r, i) => {
+            const isTotalRow = r.includes('TOTAL:') || r.includes('TOTAL') || (r[6] === 'TOTAL:') || (r[6] === 'TOTAL');
+            const rowStyle = isTotalRow 
+              ? 'background-color: #f1f5f9; font-weight: bold; color: #dc2626;' 
+              : (i % 2 === 0 ? 'background-color: #f8fafc;' : '');
+            return `
+              <tr style="${rowStyle}">
+                ${r.map(v => `<td style="border: 1px solid #cbd5e1; padding: 7px 8px;">${v ?? ''}</td>`).join('')}
+              </tr>
+            `;
+          }).join('')}
+        </tbody>
+      </table>
+    `;
+    
+    const opt = {
+      margin: [10, 10, 12, 10], // top, left, bottom, right
+      filename: filename + '.pdf',
+      image: { type: 'jpeg', quality: 0.98 },
+      html2canvas: { scale: 2, useCORS: true, logging: false },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' }
+    };
+    
+    // Execute export
+    html2pdf().from(tempDiv).set(opt).save().then(() => {
+      showToast('PDF exported successfully', 'success');
+    }).catch(err => {
+      console.error(err);
+      showToast('Failed to export PDF: ' + err.message, 'error');
+    });
   }
 
   // ── Render Report 1: Inventory ─────────────────────────────
@@ -759,11 +889,22 @@ const ReportsModule = (() => {
 
   // ── Render Report: Reprocessed Items ─────────────────────
   function renderReprocess(filters) {
-    const { from, to, jmref, reprocessDestination } = filters;
+    const { from, to, jmref, reprocessDestination, childStatus } = filters;
     let recs = DB.StageRecords.all().filter(r => (r.reprocessQty || 0) > 0);
     
     if (reprocessDestination) {
       recs = recs.filter(r => r.reprocessDestination === reprocessDestination);
+    }
+
+    if (childStatus) {
+      recs = recs.filter(r => {
+        const parentBatch = DB.Batches.find(r.batchId) || {};
+        let childBatch = DB.Batches.all().find(b => b.parentBatchId === r.batchId);
+        if (!childBatch && parentBatch.batchNo) {
+          childBatch = DB.Batches.all().find(b => b.batchNo && b.batchNo.startsWith(parentBatch.batchNo + '-REP'));
+        }
+        return childBatch && childBatch.status === childStatus;
+      });
     }
     
     if (jmref) {
@@ -786,7 +927,7 @@ const ReportsModule = (() => {
       return dateA.localeCompare(dateB);
     });
 
-    const headers = ['#', 'Original Batch No', 'JMREF No', 'Part No', 'Reprocess Qty', 'Reprocess Destination', 'Processed By', 'Date'];
+    const headers = ['#', 'Parent Batch No', 'Child Batch No', 'Child Status', 'Child Current Stage', 'JMREF No', 'Part No', 'Reprocess Qty', 'Reprocess Destination', 'Processed By', 'Date'];
     const users = DB.Users.all();
     const stageLabelMap = {
       cryogenic: 'Cryogenic',
@@ -795,15 +936,28 @@ const ReportsModule = (() => {
     };
     
     const dataRows = recs.map((r, i) => {
-      const batch = DB.Batches.find(r.batchId) || {};
+      const parentBatch = DB.Batches.find(r.batchId) || {};
+      const parentBatchNo = parentBatch.batchNo || '—';
+      
+      let childBatch = DB.Batches.all().find(b => b.parentBatchId === r.batchId);
+      if (!childBatch && parentBatch.batchNo) {
+        childBatch = DB.Batches.all().find(b => b.batchNo && b.batchNo.startsWith(parentBatch.batchNo + '-REP'));
+      }
+      const childBatchNo = childBatch ? childBatch.batchNo : '—';
+      const childStatusLabel = childBatch ? (childBatch.status.charAt(0).toUpperCase() + childBatch.status.slice(1)) : '—';
+      const childStageLabel = childBatch ? (STAGE_LABELS[childBatch.currentStage] || childBatch.currentStage) : '—';
+
       const user = users.find(u => u.id === r.recordedBy) || {};
       const destLabel = stageLabelMap[r.reprocessDestination] || r.reprocessDestination || '—';
       const dateStr = r.date ? formatDate(r.date) : '—';
       return [
         i + 1,
-        batch.batchNo || '—',
-        batch.jmrefNo || '—',
-        batch.partNo || '—',
+        parentBatchNo,
+        childBatchNo,
+        childStatusLabel,
+        childStageLabel,
+        parentBatch.jmrefNo || '—',
+        parentBatch.partNo || '—',
         r.reprocessQty || 0,
         destLabel,
         user.name || '—',
@@ -812,11 +966,28 @@ const ReportsModule = (() => {
     });
 
     const totalReprocessQty = recs.reduce((s, r) => s + (r.reprocessQty || 0), 0);
-    const summaryRow = ['', '', '', 'TOTAL:', totalReprocessQty, '', '', ''];
+    const summaryRow = ['', '', '', '', '', '', 'TOTAL:', totalReprocessQty, '', '', ''];
     dataRows.push(summaryRow);
 
     const htmlRows = recs.map((r, i) => {
-      const batch = DB.Batches.find(r.batchId) || {};
+      const parentBatch = DB.Batches.find(r.batchId) || {};
+      const parentBatchNo = parentBatch.batchNo || '—';
+      
+      let childBatch = DB.Batches.all().find(b => b.parentBatchId === r.batchId);
+      if (!childBatch && parentBatch.batchNo) {
+        childBatch = DB.Batches.all().find(b => b.batchNo && b.batchNo.startsWith(parentBatch.batchNo + '-REP'));
+      }
+      const childBatchNo = childBatch ? childBatch.batchNo : '—';
+      const childStatusLabel = childBatch ? (childBatch.status.charAt(0).toUpperCase() + childBatch.status.slice(1)) : '—';
+      const childStageLabel = childBatch ? (STAGE_LABELS[childBatch.currentStage] || childBatch.currentStage) : '—';
+
+      let statusBadge = 'badge-secondary';
+      if (childBatch) {
+        if (childBatch.status === 'active') statusBadge = 'badge-blue';
+        else if (childBatch.status === 'completed') statusBadge = 'badge-success';
+        else if (childBatch.status === 'rejected') statusBadge = 'badge-danger';
+      }
+
       const user = users.find(u => u.id === r.recordedBy) || {};
       const dest = r.reprocessDestination;
       const destLabel = stageLabelMap[dest] || dest || '—';
@@ -827,9 +998,12 @@ const ReportsModule = (() => {
       return `
         <tr>
           <td>${i + 1}</td>
-          <td class="font-semibold text-blue">${batch.batchNo || '—'}</td>
-          <td><span class="badge badge-teal">${batch.jmrefNo || '—'}</span></td>
-          <td>${batch.partNo || '—'}</td>
+          <td class="font-semibold text-blue">${parentBatchNo}</td>
+          <td class="font-semibold text-teal">${childBatchNo}</td>
+          <td><span class="badge ${statusBadge}">${childStatusLabel}</span></td>
+          <td><span class="badge badge-teal">${childStageLabel}</span></td>
+          <td><span class="badge badge-teal">${parentBatch.jmrefNo || '—'}</span></td>
+          <td>${parentBatch.partNo || '—'}</td>
           <td class="font-bold text-warning">${formatNum(r.reprocessQty || 0)}</td>
           <td><span class="badge ${destBadge}">${destLabel}</span></td>
           <td>${user.name || '—'}</td>
@@ -839,7 +1013,7 @@ const ReportsModule = (() => {
 
     const totalRowHtml = `
       <tr class="font-bold text-danger">
-        <td colspan="4" style="text-align:right;">TOTAL:</td>
+        <td colspan="7" style="text-align:right;">TOTAL:</td>
         <td>${formatNum(totalReprocessQty)}</td>
         <td colspan="3"></td>
       </tr>`;
@@ -853,9 +1027,25 @@ const ReportsModule = (() => {
   }
 
   // ── Render Report 9: Rejected Batches ─────────────────────
-  function renderRejected() {
-    const rejections = DB.RejectionTracker.all();
-    if (!rejections.length) return emptyState('No rejected batches found.');
+  function renderRejected(filters = {}) {
+    const { from, to, jmref } = filters;
+    let rejections = DB.RejectionTracker.all();
+
+    if (from || to) {
+      rejections = filterByDateRange(rejections, 'date', from, to);
+    }
+
+    if (jmref) {
+      const q = jmref.toLowerCase();
+      rejections = rejections.filter(r => {
+        const batch = DB.Batches.find(r.batchId) || {};
+        return (batch.batchNo || '').toLowerCase().includes(q) ||
+               (batch.jmrefNo || '').toLowerCase().includes(q) ||
+               (batch.partNo || '').toLowerCase().includes(q);
+      });
+    }
+
+    if (!rejections.length) return emptyState('No rejected batches found for the selected filters.');
     const headers = ['#','Batch No','JMREF','Part No','Stage','Qty','Reason','Rejected By','Date & Time'];
     const users = DB.Users.all();
     const dataRows = rejections.map((r, i) => {
@@ -1938,7 +2128,7 @@ const ReportsModule = (() => {
     }
 
     const dataRows = [];
-    const headers = ['#', 'Batch No', 'JMREF No', 'Part No', 'Description', 'Subcontractor', 'Current Stage', 'Current Qty', 'Date Created', 'Days Pending'];
+    const headers = ['#', 'Batch No', 'JMREF No', 'Part No', 'Description', 'Subcontractor', 'Current Stage', 'Current Qty', 'Production Date', 'Date Created', 'Days Pending (Current Stage)'];
 
     batches.forEach(b => {
       // Subcontractor Filter
@@ -1954,10 +2144,10 @@ const ReportsModule = (() => {
         if (!matchJm && !matchPart && !matchBatch) return;
       }
 
-      // Date Range Filter (based on batch createdAt)
-      const cDate = (b.createdAt || '').slice(0, 10);
-      if (from && cDate < from) return;
-      if (to && cDate > to) return;
+      // Date Range Filter (based on batch productionDate)
+      const pDate = (b.productionDate || b.createdAt || '').slice(0, 10);
+      if (from && pDate < from) return;
+      if (to && pDate > to) return;
 
       // Find subcontractor name
       const sub = subcontractors.find(s => s.id === b.subcontractorId) || {};
@@ -1998,6 +2188,7 @@ const ReportsModule = (() => {
         subcontractor: subName,
         currentStage: STAGE_LABELS[b.currentStage] || b.currentStage,
         qty: qty,
+        productionDate: (b.productionDate || b.createdAt || '').slice(0, 10),
         dateCreated: (b.createdAt || '').slice(0, 10),
         daysPending: days
       });
@@ -2015,13 +2206,14 @@ const ReportsModule = (() => {
         r.subcontractor,
         r.currentStage,
         r.qty,
+        r.productionDate,
         r.dateCreated,
         r.daysPending
       ];
     });
 
     const htmlRows = rows.map(r => {
-      const days = r[9];
+      const days = r[10];
       let daysStyle = '';
       if (days >= 60) daysStyle = 'style="color:var(--accent-red); font-weight:bold;"';
       else if (days >= 30) daysStyle = 'style="color:var(--accent-amber); font-weight:bold;"';
@@ -2039,6 +2231,7 @@ const ReportsModule = (() => {
           <td><span class="badge badge-blue">${r[6]}</span></td>
           <td class="font-semibold">${formatNum(r[7])}</td>
           <td>${formatDate(r[8])}</td>
+          <td>${formatDate(r[9])}</td>
           <td ${daysStyle}>${days} days</td>
         </tr>`;
     }).join('');
@@ -2048,11 +2241,11 @@ const ReportsModule = (() => {
       <tr class="font-bold text-danger">
         <td colspan="7" style="text-align:right;">TOTAL:</td>
         <td>${formatNum(totalQty)}</td>
-        <td colspan="2"></td>
+        <td colspan="3"></td>
       </tr>
     `;
     const finalHtmlRows = htmlRows ? (htmlRows + totalRowHtml) : '';
-    rows.push(['', '', '', '', '', '', 'TOTAL:', totalQty, '', '']);
+    rows.push(['', '', '', '', '', '', 'TOTAL:', totalQty, '', '', '']);
 
     const html = `
       <div style="display:flex; gap:16px; margin-bottom: 20px; flex-wrap:wrap;">
@@ -2071,12 +2264,13 @@ const ReportsModule = (() => {
               <th>Subcontractor</th>
               <th>Current Stage</th>
               <th>Current Qty</th>
+              <th>Production Date</th>
               <th>Date Created</th>
-              <th>Days Pending</th>
+              <th>Days Pending (Current Stage)</th>
             </tr>
           </thead>
           <tbody>
-            ${finalHtmlRows || '<tr><td colspan="10" style="text-align:center;padding:24px;color:var(--text-muted);">No pending subcontractor batches found matching the filters</td></tr>'}
+            ${finalHtmlRows || '<tr><td colspan="11" style="text-align:center;padding:24px;color:var(--text-muted);">No pending subcontractor batches found matching the filters</td></tr>'}
           </tbody>
         </table>
       </div>`;
@@ -2502,8 +2696,19 @@ const ReportsModule = (() => {
         </select>
       </div>`;
 
+    const reprocessChildStatusFilter = `
+      <div class="form-group mb-0">
+        <label class="form-label">Child Batch Status</label>
+        <select class="form-control" id="rpt-reprocess-child-status">
+          <option value="">All Statuses</option>
+          <option value="active">Active</option>
+          <option value="completed">Completed</option>
+          <option value="rejected">Rejected</option>
+        </select>
+      </div>`;
+
     const filterMap = {
-      reprocess: [jmrefFilter, reprocessDestFilter, dateRange].join(''),
+      reprocess: [jmrefFilter, reprocessDestFilter, reprocessChildStatusFilter, dateRange].join(''),
       inventory: jmrefFilter,
       'store-stock': jmrefFilter,
       sales:     [jmrefFilter, dateRange].join(''),
@@ -2515,7 +2720,7 @@ const ReportsModule = (() => {
       'waiting-visual':[jmrefFilter, dateRange].join(''),
       visual:    [jmrefFilter, rejectionRateFilter, dateRange].join(''),
       gauge:     [jmrefFilter, dateRange].join(''),
-      rejected:  '',
+      rejected:  [jmrefFilter, dateRange].join(''),
       recheck:   [opFilter, dateRange].join(''),
       'pending-batches': [pendingStageFilter, pendingTimeframeFilter].join(''),
       'sub-pending': [subcontractorFilter, jmrefFilter, dateRange].join(''),
@@ -2813,6 +3018,7 @@ const ReportsModule = (() => {
       operatorId: g('rpt-operator'),
       rejectionRate: g('rpt-rejection-rate'),
       reprocessDestination: g('rpt-reprocess-dest'),
+      childStatus: g('rpt-reprocess-child-status'),
       pendingStage: g('rpt-pending-stage'),
       pendingTimeframe: g('rpt-pending-timeframe'),
       prodType: g('rpt-prod-type'),
@@ -2828,7 +3034,7 @@ const ReportsModule = (() => {
     // Fetch historical batches on-demand if online and DB method is available
     const reportsWithDateRange = [
       'reprocess', 'sales', 'production', 'cryogenic', 'deflashing', 'trimming',
-      'post-curing', 'waiting-visual', 'visual', 'gauge', 'recheck',
+      'post-curing', 'waiting-visual', 'visual', 'gauge', 'rejected', 'recheck',
       'sub-pending', 'sub-performance', 'qty-gain', 'qty-loss', 'op-efficiency',
       'cycle-time', 'sub-vs-inhouse', 'daily-summary', 'analytics'
     ];
@@ -2887,7 +3093,7 @@ const ReportsModule = (() => {
       case 'waiting-visual':result = renderWaitingVisualReport(filters); break;
       case 'visual':     result = renderStageLoss('visual', filters, ['Inspector', 'Reprocess Qty']); break;
       case 'gauge':      result = renderStageLoss('gauge', filters); break;
-      case 'rejected':   result = renderRejected(); break;
+      case 'rejected':   result = renderRejected(filters); break;
       case 'recheck':    result = renderRecheck(filters); break;
       case 'slob':       result = renderSlob(filters); break;
       case 'aging':      result = renderAging(filters); break;
@@ -2912,11 +3118,14 @@ const ReportsModule = (() => {
       output.innerHTML = result;
       return;
     }
-    output.innerHTML = result.html;
-
+    
     // Store for export
-    output.dataset.headers = JSON.stringify(result.headers);
-    output.dataset.rows    = JSON.stringify(result.dataRows);
+    output.dataset.headers = JSON.stringify(result.headers || []);
+    output.dataset.rows    = JSON.stringify(result.dataRows || []);
+    output.dataset.filters = JSON.stringify(filters || {});
+
+    // Paginate table rows dynamically if they exceed 50 entries
+    paginateReportTables(output, result.html);
 
     if (result.onRender) {
       setTimeout(() => result.onRender(), 50);
@@ -2984,6 +3193,7 @@ const ReportsModule = (() => {
             <div class="flex gap-2">
               <button class="btn btn-secondary btn-sm no-print" id="rpt-export-csv">⬇️ CSV</button>
               <button class="btn btn-teal btn-sm no-print" id="rpt-export-excel">📊 Excel</button>
+              <button class="btn btn-sm no-print" id="rpt-export-pdf" style="background:#dc2626; color:white; border-color:#dc2626;">📄 PDF</button>
               <button class="btn btn-ghost btn-sm no-print" onclick="window.print()">🖨️ Print</button>
             </div>
           </div>
@@ -3007,12 +3217,35 @@ const ReportsModule = (() => {
     document.getElementById('rpt-export-csv')?.addEventListener('click', () => {
       const out = document.getElementById('report-output');
       if (!out?.dataset.headers) { showToast('Generate the report first', 'warning'); return; }
-      exportCSV(JSON.parse(out.dataset.headers), JSON.parse(out.dataset.rows), `JMPL_${reportKey}_${new Date().toISOString().slice(0,10)}`);
+      exportCSV(
+        JSON.parse(out.dataset.headers), 
+        JSON.parse(out.dataset.rows), 
+        `JMPL_${reportKey}_${new Date().toISOString().slice(0,10)}`,
+        report.label,
+        JSON.parse(out.dataset.filters || '{}')
+      );
     });
     document.getElementById('rpt-export-excel')?.addEventListener('click', () => {
       const out = document.getElementById('report-output');
       if (!out?.dataset.headers) { showToast('Generate the report first', 'warning'); return; }
-      exportExcel(JSON.parse(out.dataset.headers), JSON.parse(out.dataset.rows), `JMPL_${reportKey}_${new Date().toISOString().slice(0,10)}`, report.label);
+      exportExcel(
+        JSON.parse(out.dataset.headers), 
+        JSON.parse(out.dataset.rows), 
+        `JMPL_${reportKey}_${new Date().toISOString().slice(0,10)}`, 
+        report.label,
+        JSON.parse(out.dataset.filters || '{}')
+      );
+    });
+    document.getElementById('rpt-export-pdf')?.addEventListener('click', () => {
+      const out = document.getElementById('report-output');
+      if (!out?.dataset.headers) { showToast('Generate the report first', 'warning'); return; }
+      exportPDF(
+        JSON.parse(out.dataset.headers), 
+        JSON.parse(out.dataset.rows), 
+        `JMPL_${reportKey}_${new Date().toISOString().slice(0,10)}`, 
+        report.label,
+        JSON.parse(out.dataset.filters || '{}')
+      );
     });
 
   }
@@ -3659,6 +3892,71 @@ const ReportsModule = (() => {
     div.id = 'inventory-detail-container';
     div.innerHTML = modalHtml;
     document.body.appendChild(div);
+  }
+
+  function paginateReportTables(container, html) {
+    container.innerHTML = html;
+    
+    const tables = container.querySelectorAll('table.data-table');
+    if (!tables.length) return;
+    
+    tables.forEach((table) => {
+      const tbody = table.querySelector('tbody');
+      if (!tbody) return;
+      
+      const rows = Array.from(tbody.querySelectorAll('tr'));
+      if (rows.length <= 50) return; // Only paginate if > 50 entries
+      
+      const totalItems = rows.length;
+      const allRows = rows.map(r => r.outerHTML);
+      let currentPage = 1;
+      const itemsPerPage = 50;
+      
+      const tableWrap = table.closest('.table-wrap') || table.parentElement;
+      
+      // Remove existing paginator if any
+      const existing = tableWrap.parentElement.querySelector('.report-pagination');
+      if (existing) existing.remove();
+      
+      const paginator = document.createElement('div');
+      paginator.className = 'report-pagination flex justify-between items-center p-4 no-print';
+      paginator.style.cssText = 'border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover); border-radius: 0 0 var(--radius-md) var(--radius-md); margin-bottom: 16px;';
+      
+      tableWrap.after(paginator);
+      
+      const updateTable = () => {
+        const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+        if (currentPage > totalPages) currentPage = totalPages;
+        if (currentPage < 1) currentPage = 1;
+        
+        const startIdx = (currentPage - 1) * itemsPerPage;
+        const endIdx = currentPage * itemsPerPage;
+        
+        tbody.innerHTML = allRows.slice(startIdx, endIdx).join('');
+        
+        paginator.innerHTML = `
+          <div class="text-sm text-muted">
+            Showing <strong>${startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
+          </div>
+          <div class="flex gap-2">
+            <button class="btn btn-secondary btn-xs prev-btn" ${currentPage === 1 ? 'disabled' : ''}>◀ Previous</button>
+            <span class="text-sm font-semibold flex items-center px-2">Page ${currentPage} of ${totalPages}</span>
+            <button class="btn btn-secondary btn-xs next-btn" ${currentPage === totalPages ? 'disabled' : ''}>Next ▶</button>
+          </div>
+        `;
+        
+        paginator.querySelector('.prev-btn').onclick = () => {
+          currentPage--;
+          updateTable();
+        };
+        paginator.querySelector('.next-btn').onclick = () => {
+          currentPage++;
+          updateTable();
+        };
+      };
+      
+      updateTable();
+    });
   }
 
   function closePartBatches() {

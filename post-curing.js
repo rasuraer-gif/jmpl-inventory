@@ -377,6 +377,11 @@ const PostCuringModule = (() => {
     if (isNaN(outputQty) || outputQty < 0) { showToast('Enter a valid output quantity', 'error'); return; }
     
     const lossQty = Math.max(0, _pcInputQty - outputQty);
+    if (lossQty > 0.10 * _pcInputQty) {
+      if (!notes) {
+          showLossWarning(); return;
+      }
+    }
     const session = Auth.getSession();
     const batch = DB.Batches.find(batchId);
     const dateStr = new Date().toISOString().slice(0,10);
@@ -403,6 +408,11 @@ const PostCuringModule = (() => {
       }
 
       const totalDeducted = outputQty + lossQty;
+      if (lossQty > 0.10 * totalDeducted) {
+        if (!notes) {
+          showLossWarning(); return;
+        }
+      }
       
 
       const remainingQty = Math.max(0, (_activeBatch.initialQty || 0) - totalDeducted);

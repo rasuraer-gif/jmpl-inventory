@@ -4,16 +4,77 @@
 // ============================================================
 
 // ── Global Utilities ───────────────────────────────────────
+function escHtml(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function showToast(message, type = 'success') {
   const container = document.getElementById('toast-container');
   if (!container) return;
   const icons = { success: '✅', error: '❌', warning: '⚠️', info: 'ℹ️' };
   const toast = document.createElement('div');
   toast.className = `toast ${type}`;
-  toast.innerHTML = `<span class="toast-icon">${icons[type] || 'ℹ️'}</span><span class="toast-msg">${message}</span>`;
+  const iconSpan = document.createElement('span');
+  iconSpan.className = 'toast-icon';
+  iconSpan.textContent = icons[type] || 'ℹ️';
+  const msgSpan = document.createElement('span');
+  msgSpan.className = 'toast-msg';
+  msgSpan.textContent = String(message || '');
+  toast.appendChild(iconSpan);
+  toast.appendChild(msgSpan);
   container.appendChild(toast);
   setTimeout(() => { toast.classList.add('out'); setTimeout(() => toast.remove(), 300); }, 3500);
 }
+
+// Global Loss Warning Dialog — shown when loss qty > 10% and no notes provided
+function showLossWarning(onOk) {
+  const existing = document.getElementById('_loss-warn-overlay');
+  if (existing) existing.remove();
+  const overlay = document.createElement('div');
+  overlay.id = '_loss-warn-overlay';
+  overlay.style.cssText = [
+    'position:fixed','top:0','left:0','width:100%','height:100%',
+    'background:rgba(0,0,0,0.65)','z-index:99999',
+    'display:flex','align-items:center','justify-content:center',
+    'backdrop-filter:blur(4px)'
+  ].join(';');
+  overlay.innerHTML = `
+    <div style="background:var(--bg-card,#1e293b);border:1px solid var(--accent-red,#ef4444);border-radius:16px;
+                padding:32px 28px;max-width:420px;width:90%;text-align:center;
+                box-shadow:0 20px 60px rgba(239,68,68,0.3);animation:fadeInScale 0.2s ease;">
+      <div style="font-size:48px;margin-bottom:12px;">⚠️</div>
+      <h3 style="font-size:17px;font-weight:700;color:#f97316;margin:0 0 10px;">High Loss Quantity Detected</h3>
+      <p style="font-size:14px;color:var(--text-secondary,#94a3b8);margin:0 0 20px;line-height:1.6;">
+        Loss quantity is higher than expected <strong style="color:#f97316;">(>10%)</strong>.<br>
+        <strong style="color:var(--text-primary,#f8fafc);">Comments / Notes are mandatory to proceed.</strong>
+      </p>
+      <p style="font-size:12.5px;color:var(--text-muted,#64748b);margin:0 0 24px;">
+        Please fill in the Notes/Comments field explaining the reason before submitting.
+      </p>
+      <button id="_loss-warn-ok" style="background:#f97316;border:none;color:#fff;font-weight:700;
+              font-size:14px;padding:10px 36px;border-radius:8px;cursor:pointer;
+              transition:background 0.2s;width:100%;max-width:200px;">
+        OK, Got It
+      </button>
+    </div>
+    <style>
+      @keyframes fadeInScale {
+        from { opacity:0; transform:scale(0.85); }
+        to   { opacity:1; transform:scale(1); }
+      }
+    </style>`;
+  document.body.appendChild(overlay);
+  const btn = overlay.querySelector('#_loss-warn-ok');
+  const close = () => { overlay.remove(); if (typeof onOk === 'function') onOk(); };
+  btn.addEventListener('click', close);
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+}
+
 
 function showModal(id) {
   const el = document.getElementById(id);
@@ -715,7 +776,7 @@ const App = (() => {
     document.getElementById('change-pwd-modal').classList.remove('hidden');
   }
 
-  function changePassword() {
+  async function changePassword() {
     const session = Auth.getSession();
     if (!session) return;
     const user = DB.Users.find(session.userId);
@@ -725,7 +786,15 @@ const App = (() => {
     const newPwd = document.getElementById('change-pwd-new').value;
     const confirmPwd = document.getElementById('change-pwd-confirm').value;
     
-    if (user.password !== currentPwd) {
+    if (!currentPwd) {
+      showToast('Current password is required', 'error');
+      return;
+    }
+
+    const currentHash = await Auth.hashPassword(currentPwd);
+    const isCurrentCorrect = (user.password === currentHash) || (user.password === currentPwd);
+
+    if (!isCurrentCorrect) {
       showToast('Current password is incorrect', 'error');
       return;
     }
@@ -738,7 +807,8 @@ const App = (() => {
       return;
     }
     
-    DB.Users.update(user.id, { password: newPwd });
+    const hashedNew = await Auth.hashPassword(newPwd);
+    DB.Users.update(user.id, { password: hashedNew });
     showToast('Password updated successfully', 'success');
     document.getElementById('change-pwd-modal').classList.add('hidden');
   }
@@ -1464,35 +1534,325 @@ window.App = App;
 
 // ── Login Page ─────────────────────────────────────────────
 function showLoginPage() {
+  document.body.removeAttribute('style');
+  document.body.className = "landing-body";
   document.body.innerHTML = `
-    <div id="login-page">
-      <div class="login-card">
-        <div class="login-logo">
-          <img src="./logo.png" alt="JMPL Logo" style="height: 80px; margin-bottom: 16px; object-fit: contain; background: white; padding: 6px; border-radius: 12px;">
-          <h1><span>JMPL</span> Inventory</h1>
-          <p>Rubber O-Ring Manufacturing — Tracking System</p>
+    <div id="landing-site" class="animate-in">
+      <!-- Header Navigation -->
+      <header class="landing-header">
+        <div class="landing-brand">
+          <img src="./logo.png" alt="JMPL Logo">
+          <div class="landing-brand-text"><span>Janani Mouldings</span> Private Limited</div>
         </div>
-        <div id="login-error" class="login-error"></div>
-        <form id="login-form">
-          <div class="form-group">
-            <label class="form-label">Username</label>
-            <input type="text" id="login-username" class="form-control" placeholder="Enter username" required autocomplete="username">
-          </div>
-          <div class="form-group">
-            <label class="form-label">Password</label>
-            <div style="position:relative;">
-              <input type="password" id="login-password" class="form-control" placeholder="Enter password" required autocomplete="current-password">
-              <button type="button" id="toggle-pwd" style="position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:16px;">👁️</button>
+        <nav class="landing-nav">
+          <a class="landing-nav-link" onclick="showLandingInfo('about')">About Us</a>
+          <a class="landing-nav-link" onclick="showLandingInfo('capabilities')">Capabilities</a>
+          <a class="landing-nav-link" onclick="showLandingInfo('infrastructure')">Infrastructure &amp; R&amp;D</a>
+          <a class="landing-nav-link" onclick="showLandingInfo('industries')">Industries</a>
+          <a class="landing-nav-link" onclick="showLandingInfo('contact')">Contact</a>
+          <button class="btn btn-primary btn-sm" onclick="scrollToLogin()" style="padding: 6px 14px; font-weight:700; background: var(--jmpl-green); border-color: var(--jmpl-green);">Login Portal</button>
+        </nav>
+      </header>
+
+      <!-- Hero Section (Split Layout) -->
+      <section class="landing-hero">
+        <div class="landing-hero-content">
+          <div class="cert-pill">IATF 16949 Certified Company</div>
+          <h1 class="landing-title">Manufacturer of <span>Moulded Rubber</span> Products</h1>
+          <p class="landing-desc">
+            Janani Mouldings Private Limited is a trusted name in the manufacturing of precision moulded rubber products. With a strong focus on quality, innovation, and customer satisfaction, we serve a wide range of industries including automotive, defense, medical, and engineering fields.
+          </p>
+          
+          <div class="landing-stats-grid">
+            <div class="landing-stat-item">
+              <div class="landing-stat-val">1996</div>
+              <div class="landing-stat-lbl">Established</div>
+            </div>
+            <div class="landing-stat-item">
+              <div class="landing-stat-val">IATF</div>
+              <div class="landing-stat-lbl">16949:2016 Certified</div>
+            </div>
+            <div class="landing-stat-item">
+              <div class="landing-stat-val">100%</div>
+              <div class="landing-stat-lbl">Quality Inspected</div>
             </div>
           </div>
-          <button type="submit" class="btn btn-primary w-full" style="margin-top:8px;justify-content:center;padding:12px;">
-            Sign In →
-          </button>
-        </form>
-        <p style="text-align:center;margin-top:20px;font-size:11.5px;color:var(--text-muted);">JMPL © ${new Date().getFullYear()} — Janani Mouldings Pvt. Ltd.</p>
+
+          <div class="landing-hero-banner">
+            <img src="./jmpl_industrial_banner.jpg" alt="Automated Moulding Facility">
+          </div>
+        </div>
+
+        <!-- Sleek Glassmorphic Login Form -->
+        <div class="landing-login-panel" id="login-section">
+          <div class="landing-login-title">Inventory Control Portal</div>
+          <div class="landing-login-desc">Authorized personnel access only. Please sign in with your credentials.</div>
+          
+          <div id="login-error" class="login-error"></div>
+          
+          <form id="login-form">
+            <div class="form-group">
+              <label class="form-label">Username</label>
+              <input type="text" id="login-username" class="form-control" placeholder="Enter your username" required autocomplete="username">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Password</label>
+              <div style="position:relative;">
+                <input type="password" id="login-password" class="form-control" placeholder="Enter your password" required autocomplete="current-password">
+                <button type="button" id="toggle-pwd" style="position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:16px;">👁️</button>
+              </div>
+            </div>
+            <button type="submit" class="btn btn-primary w-full" style="margin-top:16px;justify-content:center;padding:12px; font-weight:700; background: var(--jmpl-green); border-color: var(--jmpl-green);">
+              Sign In to System →
+            </button>
+          </form>
+          <p style="text-align:center;margin-top:20px;font-size:11px;color:var(--text-muted);">Secure SSL Encrypted Connection</p>
+        </div>
+      </section>
+
+      <!-- Products Section (Brochure Page 1 List) -->
+      <section class="landing-section alt">
+        <h2 class="landing-section-title">Our <span>Moulded Rubber</span> Products</h2>
+        <div class="landing-prod-list">
+          <div class="landing-prod-item">🟢 Rubber Bellows</div>
+          <div class="landing-prod-item">🟢 Diaphragms</div>
+          <div class="landing-prod-item">🟢 Metal / Fabric Reinforced</div>
+          <div class="landing-prod-item">🟢 Seals</div>
+          <div class="landing-prod-item">🟢 Dust Covers</div>
+          <div class="landing-prod-item">🟢 O - Rings</div>
+          <div class="landing-prod-item">🟢 Gaskets</div>
+          <div class="landing-prod-item">🟢 Washers</div>
+        </div>
+      </section>
+
+      <!-- Capabilities Section (Brochure Page 2) -->
+      <section class="landing-section" id="capabilities-section">
+        <h2 class="landing-section-title">Our Core <span>Capabilities</span></h2>
+        <div class="landing-grid-3">
+          <div class="landing-card-info">
+            <h3>⚙️ Advanced Infrastructure</h3>
+            <p>Equipped with state-of-the-art machinery and automated systems to maintain high precision, efficiency, and high-volume production output.</p>
+          </div>
+          <div class="landing-card-info">
+            <h3>🎯 High Precision &amp; Consistency</h3>
+            <p>Delivering dimensionally accurate moulded parts matching strict customer technical drawing parameters and chemical specs, consistently.</p>
+          </div>
+          <div class="landing-card-info">
+            <h3>🔬 Stringent Quality Control</h3>
+            <p>Strict QA testing from raw material compounding to final curing, certified to international IATF 16949:2016 standards.</p>
+          </div>
+          <div class="landing-card-info">
+            <h3>👥 Skilled &amp; Experienced Workforce</h3>
+            <p>Managed by qualified polymer engineers and skilled technicians dedicated to quality manufacturing and rubber compounding excellence.</p>
+          </div>
+          <div class="landing-card-info">
+            <h3>🚚 Timely Delivery &amp; Support</h3>
+            <p>Customer-centric approach focused on meeting strict lead times and offering responsive engineering support for new component developments.</p>
+          </div>
+          <div class="landing-card-info">
+            <h3>🌱 Continuous Improvement</h3>
+            <p>Driven by manufacturing innovation, lean manufacturing principles, and regular training programs to meet evolving industry needs.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Infrastructure & R&D Section (Brochure Page 1 List) -->
+      <section class="landing-section alt" id="infra-section">
+        <h2 class="landing-section-title">Infrastructure &amp; <span>R&amp;D Facilities</span></h2>
+        <div class="landing-grid-3">
+          <div class="landing-card-info">
+            <h3>🏭 Infrastructure Facilities</h3>
+            <ul class="landing-dot-list">
+              <li>Automatic Chemical Weighing System</li>
+              <li>Automatic Hydraulic Press</li>
+              <li>Mixing Mill &amp; Kneader</li>
+              <li>Blank &amp; Bale Cutting Machine</li>
+              <li>Cryogenic Deflashing Machine</li>
+              <li>Optical Sorting Machine</li>
+            </ul>
+          </div>
+          <div class="landing-card-info">
+            <h3>🔬 Technology Center R&amp;D</h3>
+            <ul class="landing-dot-list">
+              <li>Rheometer (Compound cure analysis)</li>
+              <li>Micro Hardness Tester (Wallace dead load)</li>
+              <li>Tensile Testing Machine (Elongation check)</li>
+              <li>Profile Projector (Micro-dimensional check)</li>
+              <li>Densimeter (Specific gravity test)</li>
+            </ul>
+          </div>
+          <div class="landing-card-info">
+            <h3>🤝 Our Commitment</h3>
+            <p style="font-size:13.5px; line-height: 1.7; color: var(--text-secondary); font-style: italic;">
+              "We are committed to delivering high quality rubber products that meet global standards and exceed customer expectations through innovation, integrity and continuous improvement."
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Industries We Serve Section (Brochure Page 2 List) -->
+      <section class="landing-section">
+        <h2 class="landing-section-title">Industries <span>We Serve</span></h2>
+        <div class="industry-grid">
+          <div class="industry-card">
+            <div class="industry-icon">🚗</div>
+            <div class="industry-name">Automotive</div>
+          </div>
+          <div class="industry-card">
+            <div class="industry-icon">🏭</div>
+            <div class="industry-name">Industrial Machinery</div>
+          </div>
+          <div class="industry-card">
+            <div class="industry-icon">🔌</div>
+            <div class="industry-name">Electrical &amp; Electronics</div>
+          </div>
+          <div class="industry-card">
+            <div class="industry-icon">📐</div>
+            <div class="industry-name">Engineering</div>
+          </div>
+          <div class="industry-card">
+            <div class="industry-icon">🎖️</div>
+            <div class="industry-name">Defense</div>
+          </div>
+          <div class="industry-card">
+            <div class="industry-icon">🏥</div>
+            <div class="industry-name">Medical Equipment</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Footer Section (Brochure Contact & Location Details) -->
+      <footer class="landing-footer">
+        <div class="landing-footer-grid">
+          <div class="landing-footer-col">
+            <h4 style="color:var(--jmpl-green);">Janani Mouldings Pvt. Ltd.</h4>
+            <p style="margin-bottom: 12px;">ISO/IATF 16949:2016 Certified Manufacturer of Moulded Rubber Components since 1996.</p>
+            <p><strong>Factory Address:</strong><br>📍 36/2b, New No. 9/222, Kelambakkam - Vandalur Road, Pudupakkam, Kancheepuram District - 603 103, Tamil Nadu, India.</p>
+          </div>
+          <div class="landing-footer-col">
+            <h4 style="color:var(--jmpl-green);">Contact Details</h4>
+            <p>📞 Phone: 044 2954 5799</p>
+            <p>📱 Mobiles: +91 99401 53651 / 98402 98375</p>
+            <p style="margin-top: 10px;">📧 Email: jananimouldingspvtltd@gmail.com</p>
+          </div>
+          <div class="landing-footer-col">
+            <h4 style="color:var(--jmpl-green);">Navigation Links</h4>
+            <ul>
+              <li><a onclick="scrollToLogin()" style="color:#cbd5e1;text-decoration:none;cursor:pointer;">Inventory login portal</a></li>
+              <li><a href="https://www.jananimouldings.com" target="_blank" style="color:#cbd5e1;text-decoration:none;cursor:pointer;">Official Corporate Site ↗</a></li>
+            </ul>
+          </div>
+        </div>
+        <div class="landing-footer-copy">
+          Janani Mouldings Private Limited © 2026 — Pudupakkam, Tamil Nadu, India. All Rights Reserved.
+        </div>
+      </footer>
+    </div>
+    
+    <!-- Info Modal Overlay -->
+    <div id="landing-info-modal" class="landing-modal hidden">
+      <div class="landing-modal-content">
+        <button class="landing-modal-close" onclick="closeLandingInfo()">✕</button>
+        <h3 id="landing-info-title" style="margin-bottom:16px;font-size:22px;font-weight:800;color:var(--jmpl-green);">Info</h3>
+        <div id="landing-info-body" style="font-size:14px;color:var(--text-secondary);line-height:1.7;max-height:60vh;overflow-y:auto;"></div>
       </div>
     </div>
-    <div id="toast-container"></div>`;
+
+    <div id="toast-container"></div>
+  `;
+
+  // Attach helper scripts globally
+  window.scrollToLogin = function() {
+    const el = document.getElementById('login-section');
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const usernameInput = document.getElementById('login-username');
+      if (usernameInput) usernameInput.focus();
+    }
+  };
+
+  window.showLandingInfo = function(type) {
+    const modal = document.getElementById('landing-info-modal');
+    const titleEl = document.getElementById('landing-info-title');
+    const bodyEl = document.getElementById('landing-info-body');
+    if (!modal || !titleEl || !bodyEl) return;
+
+    let title = '';
+    let body = '';
+
+    if (type === 'about') {
+      title = 'About Janani Mouldings';
+      body = `
+        <p style="margin-bottom:14px;"><strong>Janani Mouldings Private Limited</strong> is a trusted name in the manufacturing of precision moulded rubber products. With a strong focus on quality, innovation and customer satisfaction, we serve a wide range of industries including automotive, industrial, engineering and more.</p>
+        <p style="margin-bottom:14px;">Our commitment to excellence is backed by advanced infrastructure, skilled professionals and a robust quality management system certified to <strong>IATF 16949:2016</strong>.</p>
+        <p>Operating a state-of-the-art facility in Pudupakkam, Chennai, we supply products to top tier automotive OEMs and engineering companies domestically and globally.</p>
+      `;
+    } else if (type === 'infrastructure') {
+      title = 'Manufacturing Infrastructure & R&D';
+      body = `
+        <p style="margin-bottom:14px;">JMPL features high-precision machinery and sophisticated testing equipments to guarantee excellent product standards:</p>
+        <h4 style="margin: 10px 0 6px; font-weight:700; color:var(--jmpl-blue);">Infrastructure Facilities:</h4>
+        <ul style="margin-left:20px; margin-bottom:14px; display:flex; flex-direction:column; gap:6px;">
+          <li>⚖️ Automatic Chemical Weighing System</li>
+          <li>🔥 Automatic Hydraulic Press</li>
+          <li>🌀 Mixing Mill &amp; Kneader</li>
+          <li>✂️ Blank &amp; Bale Cutting Machine</li>
+          <li>❄️ Cryogenic Deflashing Machine</li>
+          <li>🤖 Optical Sorting Machine</li>
+        </ul>
+        <h4 style="margin: 10px 0 6px; font-weight:700; color:var(--jmpl-blue);">R&amp;D Instruments:</h4>
+        <ul style="margin-left:20px; display:flex; flex-direction:column; gap:6px;">
+          <li>🔬 Rheometer (Cure characteristics analyzer)</li>
+          <li>📊 Tensile Testing Machine (Elongation check)</li>
+          <li>📐 Profile Projector (Micro-dimension verification)</li>
+          <li>📏 Micro Hardness Tester &amp; Wallace Dead Load tester</li>
+          <li>⚖️ Densimeter (Specific gravity verification)</li>
+        </ul>
+      `;
+    } else if (type === 'capabilities') {
+      title = 'Our Core Capabilities';
+      body = `
+        <p style="margin-bottom:14px;">JMPL operates with a strong commitment to quality and technical accuracy:</p>
+        <ul style="margin-left:20px; margin-bottom:14px; display:flex; flex-direction:column; gap:8px;">
+          <li><strong>⚙️ Advanced Infrastructure:</strong> State-of-the-art automated machinery for high-volume consistent output.</li>
+          <li><strong>🎯 High Precision:</strong> Dimensional control matching exact customer specs and raw compounding properties.</li>
+          <li><strong>🛡️ Stringent Quality:</strong> Strict checks at every stage, validated to IATF 16949 quality guidelines.</li>
+          <li><strong>👥 Skilled Workforce:</strong> Supported by qualified polymer engineers and technicians.</li>
+          <li><strong>🚚 Timely Delivery:</strong> Driven to meet strict production dispatch dates and timelines.</li>
+        </ul>
+      `;
+    } else if (type === 'industries') {
+      title = 'Industries We Serve';
+      body = `
+        <p style="margin-bottom:14px;">JMPL is a premier engineering partner supplying custom rubber parts to critical sectors:</p>
+        <ul style="margin-left:20px; display:flex; flex-direction:column; gap:8px;">
+          <li>🚗 <strong>Automotive:</strong> O-Rings, dust boots, and dampers for Tier-1 OEMs.</li>
+          <li>🏭 <strong>Industrial Machinery:</strong> Heavy-duty gaskets and custom rubber washers.</li>
+          <li>🔌 <strong>Electrical &amp; Electronics:</strong> Flame-retardant silicone seals and grommets.</li>
+          <li>📐 <strong>Engineering:</strong> Tailored diaphragms and metal-bonded dampening components.</li>
+          <li>🎖️ <strong>Defense:</strong> High-specification parts engineered for defense equipments.</li>
+          <li>🏥 <strong>Medical Equipment:</strong> Sterile grade seals and medical device profiles.</li>
+        </ul>
+      `;
+    } else if (type === 'contact') {
+      title = 'Contact & Location';
+      body = `
+        <p style="margin-bottom:14px;">📍 <strong>Factory Office:</strong><br>36/2b, New No. 9/222, Kelambakkam - Vandalur Road,<br>Pudupakkam, Kancheepuram District - 603 103,<br>Tamil Nadu, India</p>
+        <p style="margin-bottom:14px;">📞 <strong>Landline:</strong> 044 2954 5799</p>
+        <p style="margin-bottom:14px;">📱 <strong>Mobile Support:</strong> +91 99401 53651 / 98402 98375</p>
+        <p>📧 <strong>Corporate Email:</strong> jananimouldingspvtltd@gmail.com</p>
+      `;
+    }
+
+    titleEl.textContent = title;
+    bodyEl.innerHTML = body;
+    modal.classList.remove('hidden');
+  };
+
+  window.closeLandingInfo = function() {
+    const modal = document.getElementById('landing-info-modal');
+    if (modal) modal.classList.add('hidden');
+  };
 
   document.getElementById('login-form').addEventListener('submit', async e => {
     e.preventDefault();
@@ -1518,7 +1878,11 @@ function showLoginPage() {
         App.init();
       } else {
         if (err) {
-          err.textContent = result.error;
+          if (result.error && result.error.includes('Account locked')) {
+            err.innerHTML = `${escHtml(result.error)} <br><button type="button" onclick="Auth.clearLockout(); document.getElementById('login-error').classList.remove('show'); showToast('Lockout cleared. Please try logging in again.', 'success');" style="margin-top:8px;background:#ef4444;color:#fff;border:none;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:700;">🔓 Unlock Now</button>`;
+          } else {
+            err.textContent = result.error;
+          }
           err.classList.add('show');
         }
       }
@@ -1583,22 +1947,26 @@ function showAppShell(session) {
 
   const initials = (session.name || 'U').split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
 
+  document.body.removeAttribute('style');
+  document.body.className = "";
   document.body.innerHTML = `
     <div id="app">
       <!-- Sidebar -->
       <nav id="sidebar">
-        <div class="sidebar-header">
-          <div class="sidebar-brand">
-            <img src="./logo.png" alt="JMPL Logo" style="width: 40px; height: 40px; object-fit: contain; border-radius: 8px; background: white; padding: 4px; flex-shrink: 0;">
-            <div class="brand-text">
-              <h2>JMPL</h2>
-              <div style="display:flex;align-items:center;gap:4px;margin-top:2px;">
-                <span id="sync-status-dot" style="width:8px;height:8px;border-radius:50%;background:#10b981;display:inline-block;transition:background 0.3s ease;"></span>
-                <span id="sync-status-text" style="font-size:10px;color:#10b981;font-weight:700;letter-spacing:0.3px;transition:color 0.3s ease;">SYNCED</span>
+        <div class="sidebar-header" style="padding:20px 16px 16px; display:flex; flex-direction:column; align-items:center; text-align:center;">
+          <div class="sidebar-brand" style="display:flex; flex-direction:column; align-items:center; justify-content:center; width:100%;">
+            <img src="./logo.png" alt="JMPL Logo" style="width:88px; height:88px; object-fit:contain; border-radius:12px; background:white; padding:6px; box-shadow:0 4px 12px rgba(0,0,0,0.08); flex-shrink:0;">
+            <div class="brand-text" style="display:flex; flex-direction:column; align-items:center; margin-top:10px;">
+              <h2 style="font-size:10.5px; font-weight:800; margin:0; line-height:1.2; white-space:nowrap; text-align:center; letter-spacing:-0.2px;">
+                <span style="color:var(--jmpl-green, #1b7a43);">Janani Mouldings</span> <span style="color:#f97316; font-weight:700;">Private Limited</span>
+              </h2>
+              <div style="display:flex; align-items:center; justify-content:center; gap:4px; margin-top:6px;">
+                <span id="sync-status-dot" style="width:8px; height:8px; border-radius:50%; background:#10b981; display:inline-block; transition:background 0.3s ease;"></span>
+                <span id="sync-status-text" style="font-size:10px; color:#10b981; font-weight:700; letter-spacing:0.3px; transition:color 0.3s ease;">SYNCED</span>
               </div>
             </div>
           </div>
-          <button class="btn btn-teal btn-xs mt-3 w-full" onclick="App.runQuickScan()" style="display:flex;align-items:center;justify-content:center;gap:4px;font-weight:700;padding:6px 12px;border-radius:8px;">⚡ Quick Scan</button>
+          <button class="btn btn-teal" onclick="App.runQuickScan()" style="display:flex; align-items:center; justify-content:center; gap:6px; font-weight:700; font-size:12.5px; width:100%; margin-top:14px; border-radius:8px; padding:8px 0; letter-spacing:0.3px;">⚡ Quick Scan</button>
         </div>
         <div class="sidebar-nav">${navHtml}</div>
         <div class="sidebar-footer">
@@ -1630,7 +1998,7 @@ function showAppShell(session) {
                 style="padding-left:36px; padding-right:75px; height:36px; font-size:12.5px; border-radius:20px; background:var(--card-bg); border:1px solid var(--border);"
                 onfocus="App.onGlobalSearchFocus()" oninput="App.onGlobalSearchInput(this.value)" autocomplete="off">
               <div style="position:absolute; right:8px; display:flex; align-items:center; gap:4px;">
-                <kbd style="font-size:10px; font-family:inherit; padding:1px 5px; border-radius:4px; background:var(--bg-input); color:var(--text-muted); border:1px solid var(--border); line-height:1.2;">Ctrl K</kbd>
+                <kbd class="search-kbd" style="font-size:10px; font-family:inherit; padding:1px 5px; border-radius:4px; background:var(--bg-input); color:var(--text-muted); border:1px solid var(--border); line-height:1.2;">Ctrl K</kbd>
                 <button type="button" class="btn btn-ghost btn-xs" onclick="App.runQuickScan()" title="Scan QR Code" style="padding:2px 5px; height:24px; font-size:12px; color:var(--accent-teal);">📷</button>
               </div>
             </div>

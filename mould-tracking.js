@@ -12,6 +12,11 @@ const MouldTrackingModule = (() => {
   let reportFromDate = '';
   let reportToDate = '';
   let reportMouldId = '';
+  
+  let mouldsCurrentPage = 1;
+  let movementsCurrentPage = 1;
+  let maintenanceCurrentPage = 1;
+  const itemsPerPage = 50;
 
   function getLocations() {
     const subs = DB.Subcontractors.all() || [];
@@ -112,6 +117,9 @@ const MouldTrackingModule = (() => {
   function switchTab(tab) {
     activeTab = tab;
     mouldSearchJmref = '';
+    mouldsCurrentPage = 1;
+    movementsCurrentPage = 1;
+    maintenanceCurrentPage = 1;
     renderTabContent();
     // Update active tab class in UI
     document.querySelectorAll('#mould-tabs .tab-btn').forEach(btn => {
@@ -147,7 +155,16 @@ const MouldTrackingModule = (() => {
       filtered = filtered.filter(m => (m.jmrefNo || '').toLowerCase().includes(q));
     }
 
-    const rows = filtered.map((m, i) => {
+    const totalItems = filtered.length;
+    const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+    if (mouldsCurrentPage > totalPages) mouldsCurrentPage = totalPages;
+    if (mouldsCurrentPage < 1) mouldsCurrentPage = 1;
+
+    const startIdx = (mouldsCurrentPage - 1) * itemsPerPage;
+    const endIdx = startIdx + itemsPerPage;
+    const pageItems = filtered.slice(startIdx, endIdx);
+
+    const rows = pageItems.map((m, i) => {
       const currentLoc = getMouldCurrentLocation(m.id);
       const isInternal = currentLoc === 'In-House Factory Floor';
       const locBadge = isInternal ? '<span class="badge badge-green">In-House</span>' : `<span class="badge badge-amber">${currentLoc}</span>`;
@@ -221,6 +238,18 @@ const MouldTrackingModule = (() => {
             </tbody>
           </table>
         </div>
+        ${totalPages > 1 ? `
+          <div class="flex justify-between items-center p-4" style="border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover); border-radius: 0 0 var(--radius-md) var(--radius-md); margin-top: 16px;">
+            <div class="text-sm text-muted">
+              Showing <strong>${startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
+            </div>
+            <div class="flex gap-2">
+              <button class="btn btn-secondary btn-xs" onclick="MouldTrackingModule.changeMouldsPage(${mouldsCurrentPage - 1})" ${mouldsCurrentPage === 1 ? 'disabled' : ''}>◀ Previous</button>
+              <span class="text-sm font-semibold flex items-center px-2">Page ${mouldsCurrentPage} of ${totalPages}</span>
+              <button class="btn btn-secondary btn-xs" onclick="MouldTrackingModule.changeMouldsPage(${mouldsCurrentPage + 1})" ${mouldsCurrentPage === totalPages ? 'disabled' : ''}>Next ▶</button>
+            </div>
+          </div>
+        ` : ''}
       </div>`;
   }
 
@@ -230,7 +259,16 @@ const MouldTrackingModule = (() => {
     // Sort chronological: latest first
     const sortedLogs = [...logs].sort((a,b) => (b.movementDate||'').localeCompare(a.movementDate||''));
 
-    const rows = sortedLogs.map(log => {
+    const totalItems = sortedLogs.length;
+    const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+    if (movementsCurrentPage > totalPages) movementsCurrentPage = totalPages;
+    if (movementsCurrentPage < 1) movementsCurrentPage = 1;
+
+    const startIdx = (movementsCurrentPage - 1) * itemsPerPage;
+    const endIdx = startIdx + itemsPerPage;
+    const pageItems = sortedLogs.slice(startIdx, endIdx);
+
+    const rows = pageItems.map(log => {
       const mould = DB.Moulds.find(log.mouldId) || {};
       const user = DB.Users.all().find(u => u.id === log.authorizedBy) || { name: 'Admin' };
       
@@ -279,6 +317,18 @@ const MouldTrackingModule = (() => {
             </tbody>
           </table>
         </div>
+        ${totalPages > 1 ? `
+          <div class="flex justify-between items-center p-4" style="border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover); border-radius: 0 0 var(--radius-md) var(--radius-md); margin-top: 16px;">
+            <div class="text-sm text-muted">
+              Showing <strong>${startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
+            </div>
+            <div class="flex gap-2">
+              <button class="btn btn-secondary btn-xs" onclick="MouldTrackingModule.changeMovementsPage(${movementsCurrentPage - 1})" ${movementsCurrentPage === 1 ? 'disabled' : ''}>◀ Previous</button>
+              <span class="text-sm font-semibold flex items-center px-2">Page ${movementsCurrentPage} of ${totalPages}</span>
+              <button class="btn btn-secondary btn-xs" onclick="MouldTrackingModule.changeMovementsPage(${movementsCurrentPage + 1})" ${movementsCurrentPage === totalPages ? 'disabled' : ''}>Next ▶</button>
+            </div>
+          </div>
+        ` : ''}
       </div>`;
   }
 
@@ -958,6 +1008,7 @@ const MouldTrackingModule = (() => {
 
   function filterMouldsByJmref(val) {
     mouldSearchJmref = val;
+    mouldsCurrentPage = 1;
     const container = document.getElementById('mould-tab-content');
     if (container) {
       container.innerHTML = renderMouldsTab();
@@ -968,6 +1019,21 @@ const MouldTrackingModule = (() => {
         inp.setSelectionRange(inp.value.length, inp.value.length);
       }
     }
+  }
+
+  function changeMouldsPage(page) {
+    mouldsCurrentPage = page;
+    renderTabContent();
+  }
+
+  function changeMovementsPage(page) {
+    movementsCurrentPage = page;
+    renderTabContent();
+  }
+
+  function changeMaintenancePage(page) {
+    maintenanceCurrentPage = page;
+    renderTabContent();
   }
 
   function filterReports() {
@@ -1239,7 +1305,16 @@ const MouldTrackingModule = (() => {
     const activeRepair = records.filter(r => r.status === 'Under Work' || r.status === 'Awaiting Tool Room').length;
     const completedRepair = records.filter(r => r.status === 'Ready for Production').length;
 
-    const rows = records.map((r, i) => {
+    const totalItems = records.length;
+    const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+    if (maintenanceCurrentPage > totalPages) maintenanceCurrentPage = totalPages;
+    if (maintenanceCurrentPage < 1) maintenanceCurrentPage = 1;
+
+    const startIdx = (maintenanceCurrentPage - 1) * itemsPerPage;
+    const endIdx = startIdx + itemsPerPage;
+    const pageItems = records.slice(startIdx, endIdx);
+
+    const rows = pageItems.map((r, i) => {
       let statusBadge = '<span class="badge badge-gray">Awaiting Tool Room</span>';
       if (r.status === 'Under Work') statusBadge = '<span class="badge badge-amber">Under Work</span>';
       else if (r.status === 'Ready for Production') statusBadge = '<span class="badge badge-green">Ready for Production</span>';
@@ -1253,7 +1328,7 @@ const MouldTrackingModule = (() => {
 
       return `
         <tr>
-          <td>${i + 1}</td>
+          <td>${startIdx + i + 1}</td>
           <td class="font-semibold text-blue">${r.mouldId}</td>
           <td><span class="badge badge-teal">${r.jmrefNo || '—'}</span></td>
           <td><span class="badge badge-blue">${r.maintenanceType || 'Repair'}</span></td>
@@ -1303,6 +1378,18 @@ const MouldTrackingModule = (() => {
               </tbody>
             </table>
           </div>
+          ${totalPages > 1 ? `
+            <div class="flex justify-between items-center p-4" style="border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover); border-radius: 0 0 var(--radius-md) var(--radius-md); margin-top: 16px;">
+              <div class="text-sm text-muted">
+                Showing <strong>${startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
+              </div>
+              <div class="flex gap-2">
+                <button class="btn btn-secondary btn-xs" onclick="MouldTrackingModule.changeMaintenancePage(${maintenanceCurrentPage - 1})" ${maintenanceCurrentPage === 1 ? 'disabled' : ''}>◀ Previous</button>
+                <span class="text-sm font-semibold flex items-center px-2">Page ${maintenanceCurrentPage} of ${totalPages}</span>
+                <button class="btn btn-secondary btn-xs" onclick="MouldTrackingModule.changeMaintenancePage(${maintenanceCurrentPage + 1})" ${maintenanceCurrentPage === totalPages ? 'disabled' : ''}>Next ▶</button>
+              </div>
+            </div>
+          ` : ''}
         </div>
       </div>
     `;
@@ -1500,6 +1587,9 @@ const MouldTrackingModule = (() => {
     startMaintenanceWork,
     promptCompleteMaintenance,
     deleteMaintenance,
-    filterMouldsByJmref
+    filterMouldsByJmref,
+    changeMouldsPage,
+    changeMovementsPage,
+    changeMaintenancePage
   };
 })();

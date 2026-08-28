@@ -112,6 +112,27 @@ const DeliveryChallanModule = (() => {
           </div>
         </div>
       </div>
+
+      <!-- Print Prompt Modal -->
+      <div class="modal-overlay hidden" id="dc-print-modal">
+        <div class="modal modal-md">
+          <div class="modal-header">
+            <h3>Delivery Challan Saved</h3>
+            <button class="modal-close" onclick="document.getElementById('dc-print-modal').classList.add('hidden')">&#x2715;</button>
+          </div>
+          <div class="modal-body">
+            <div style="text-align:center; padding: 20px 0;">
+              <div style="font-size:48px; color: var(--accent-green); margin-bottom: 16px;">✅</div>
+              <h4 id="dc-success-title" style="margin-bottom: 8px; font-weight:700;">DC Created Successfully</h4>
+              <p class="text-sm text-muted">Delivery Challan has been saved in the system. Would you like to print it now?</p>
+            </div>
+          </div>
+          <div class="modal-footer" style="justify-content: center; gap: 12px;">
+            <button class="btn btn-secondary" onclick="document.getElementById('dc-print-modal').classList.add('hidden')">Cancel (Close)</button>
+            <button class="btn btn-primary" id="dc-print-confirm-btn">🖨️ Print Challan</button>
+          </div>
+        </div>
+      </div>
     `;
 
     // Populate active lists if create tab is active
@@ -521,7 +542,7 @@ const DeliveryChallanModule = (() => {
     document.getElementById('dc-confirm-modal').classList.add('hidden');
     showToast(`Delivery Challan ${dcNo} created successfully`, 'success');
 
-    // Clear and prompt for print
+    // Clear active states
     challanItems = [];
     selectedVendorId = '';
     
@@ -529,13 +550,21 @@ const DeliveryChallanModule = (() => {
     activeTab = 'history';
     render();
 
-    // Automatically trigger Print Layout
-    setTimeout(() => {
-      const printConfirm = confirm(`Would you like to print Delivery Challan: ${dcNo}?`);
-      if (printConfirm) {
-        printChallan(newDC.id);
+    // Show the non-blocking custom print modal
+    const printModal = document.getElementById('dc-print-modal');
+    if (printModal) {
+      const titleEl = document.getElementById('dc-success-title');
+      if (titleEl) titleEl.textContent = `Delivery Challan ${dcNo} Saved`;
+      
+      const printBtn = document.getElementById('dc-print-confirm-btn');
+      if (printBtn) {
+        printBtn.onclick = () => {
+          printChallan(newDC.id);
+          printModal.classList.add('hidden');
+        };
       }
-    }, 300);
+      printModal.classList.remove('hidden');
+    }
   }
 
   function deleteChallan(dcId) {

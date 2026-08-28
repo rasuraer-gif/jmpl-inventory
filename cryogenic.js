@@ -423,6 +423,11 @@ const CryogenicModule = (() => {
 
       lossQty = sLossQty;
       const totalDeducted = outputQty + lossQty;
+      if (lossQty > 0.10 * totalDeducted) {
+        if (!notes) {
+          showLossWarning(); return;
+        }
+      }
       const remainingQty = Math.max(0, (_activeBatch.initialQty || 0) - totalDeducted);
 
       DB.Batches.update(_activeBatch.id, {
@@ -490,6 +495,11 @@ const CryogenicModule = (() => {
     }
 
     lossQty = Math.max(0, inputQty - outputQty);
+    if (lossQty > 0.10 * inputQty) {
+      if (!notes) {
+        showLossWarning(); return;
+      }
+    }
 
     const batch = DB.Batches.find(batchId);
     const dateStr = new Date().toISOString().slice(0,10);

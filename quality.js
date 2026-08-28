@@ -456,6 +456,12 @@ const QualityModule = (() => {
     if (isNaN(outputQty) || outputQty < 0) { showToast('Enter a valid output quantity', 'error'); return; }
     
     const lossQty = Math.max(0, _passInputQty - outputQty);
+    if (lossQty > 0.10 * _passInputQty) {
+      const passNotes = document.getElementById('qf-pass-notes').value.trim();
+      if (!passNotes) {
+        showLossWarning(); return;
+      }
+    }
     const session = Auth.getSession();
     const batch = DB.Batches.find(batchId);
     const dateStr = new Date().toISOString().slice(0,10);
@@ -530,6 +536,12 @@ const QualityModule = (() => {
     if (!recheckQty || recheckQty < 1) { showToast('Enter a valid recheck quantity', 'error'); return; }
     
     const lossQty = Math.max(0, _rcInputQty - recheckQty);
+    if (lossQty > 0.10 * _rcInputQty) {
+      const rcNotes = document.getElementById('qf-rc-notes').value.trim();
+      if (!rcNotes) {
+        showLossWarning(); return;
+      }
+    }
     const iterNo = DB.RecheckTracker.nextIterationNo(batchId);
     const session = Auth.getSession();
     const batch = DB.Batches.find(batchId);

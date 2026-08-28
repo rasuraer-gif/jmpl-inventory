@@ -82,6 +82,8 @@ const AdminModule = (() => {
   });
 
   let activeTab = 'users';
+  let batchCurrentPage = 1;
+  const itemsPerPage = 50;
 
   function render() {
     if (!Auth.isAdmin()) {
@@ -113,6 +115,7 @@ const AdminModule = (() => {
         document.querySelectorAll('#admin-tabs .tab-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         activeTab = btn.dataset.tab;
+        if (activeTab === 'batches') batchCurrentPage = 1;
         renderTab(activeTab);
       });
     });
@@ -267,7 +270,7 @@ const AdminModule = (() => {
     document.getElementById('user-modal-title').textContent = 'Edit User';
     document.getElementById('user-name').value = u.name;
     document.getElementById('user-username').value = u.username;
-    document.getElementById('user-password').value = u.password;
+    document.getElementById('user-password').value = '';  // Never pre-fill — user must enter new password to change it
     document.getElementById('user-role').value = u.role;
     document.getElementById('user-active').value = String(u.active);
     document.querySelectorAll('[name=perm]').forEach(cb => { cb.checked = (u.permissions||[]).includes(cb.value); });
@@ -285,7 +288,7 @@ const AdminModule = (() => {
     }
   }
 
-  function saveUser() {
+  async function saveUser() {
     const id = document.getElementById('user-edit-id').value;
     const name = document.getElementById('user-name').value.trim();
     const username = document.getElementById('user-username').value.trim();
@@ -293,11 +296,23 @@ const AdminModule = (() => {
     const role = document.getElementById('user-role').value;
     const active = document.getElementById('user-active').value === 'true';
     const permissions = [...document.querySelectorAll('[name=perm]:checked')].map(cb => cb.value);
-    if (!name || !username || !password) { showToast('Name, username and password are required', 'error'); return; }
+    if (!name || !username) { showToast('Name and username are required', 'error'); return; }
+    if (!id && !password) { showToast('Password is required for new users', 'error'); return; }
     const existing = DB.Users.findByUsername(username);
     if (existing && existing.id !== id) { showToast('Username already exists', 'error'); return; }
-    if (id) { DB.Users.update(id, { name, username, password, role, permissions, active }); showToast('User updated successfully', 'success'); }
-    else { DB.Users.insert({ name, username, password, role, permissions, active }); showToast('User created successfully', 'success'); }
+    if (id) {
+      // Editing: only update password if a new one was entered
+      const updateData = { name, username, role, permissions, active };
+      if (password) {
+        updateData.password = await Auth.hashPassword(password);
+      }
+      DB.Users.update(id, updateData);
+      showToast('User updated successfully', 'success');
+    } else {
+      const hashed = await Auth.hashPassword(password);
+      DB.Users.insert({ name, username, password: hashed, role, permissions, active });
+      showToast('User created successfully', 'success');
+    }
     document.getElementById('admin-user-modal').classList.add('hidden');
     renderTab('users');
   }
@@ -1184,6 +1199,7 @@ const AdminModule = (() => {
               </tbody>
             </table>
           </div>
+          <div id="admin-batch-pagination"></div>
         </div>
       </div>
     `;
@@ -1204,7 +1220,38 @@ const AdminModule = (() => {
       return dateB.localeCompare(dateA);
     });
 
-    if (filtered.length === 0) {
+    const totalItems = filtered.length;
+    const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+    if (batchCurrentPage > totalPages) batchCurrentPage = totalPages;
+    if (batchCurrentPage < 1) batchCurrentPage = 1;
+
+    const startIdx = (batchCurrentPage - 1) * itemsPerPage;
+    const endIdx = startIdx + itemsPerPage;
+    const pageItems = filtered.slice(startIdx, endIdx);
+
+    setTimeout(() => {
+      const pagEl = document.getElementById('admin-batch-pagination');
+      if (pagEl) {
+        if (totalPages > 1) {
+          pagEl.innerHTML = `
+            <div class="flex justify-between items-center p-4" style="border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover); border-radius: 0 0 var(--radius-md) var(--radius-md); margin-top: 16px;">
+              <div class="text-sm text-muted">
+                Showing <strong>${startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
+              </div>
+              <div class="flex gap-2">
+                <button class="btn btn-secondary btn-xs" onclick="AdminModule.changeBatchPage(${batchCurrentPage - 1})" ${batchCurrentPage === 1 ? 'disabled' : ''}>◀ Previous</button>
+                <span class="text-sm font-semibold flex items-center px-2">Page ${batchCurrentPage} of ${totalPages}</span>
+                <button class="btn btn-secondary btn-xs" onclick="AdminModule.changeBatchPage(${batchCurrentPage + 1})" ${batchCurrentPage === totalPages ? 'disabled' : ''}>Next ▶</button>
+              </div>
+            </div>
+          `;
+        } else {
+          pagEl.innerHTML = '';
+        }
+      }
+    }, 0);
+
+    if (pageItems.length === 0) {
       return `<tr><td colspan="5" style="text-align:center;" class="text-muted">No batches found</td></tr>`;
     }
 
@@ -1222,7 +1269,7 @@ const AdminModule = (() => {
       store: 'Store'
     };
 
-    return filtered.map(b => {
+    return pageItems.map(b => {
       const options = Object.entries(ADMIN_STAGES).map(([val, label]) => {
         const selected = b.currentStage === val ? 'selected' : '';
         return `<option value="${val}" ${selected}>${label}</option>`;
@@ -1246,11 +1293,18 @@ const AdminModule = (() => {
     }).join('');
   }
 
-  function filterAdminBatches(query) {
+  function filterAdminBatches(query, resetPage = true) {
+    if (resetPage) batchCurrentPage = 1;
     const tbody = document.getElementById('admin-batch-table-body');
     if (tbody) {
       tbody.innerHTML = renderAdminBatchRows(query);
     }
+  }
+
+  function changeBatchPage(page) {
+    batchCurrentPage = page;
+    const searchInput = document.getElementById('admin-batch-search');
+    filterAdminBatches(searchInput ? searchInput.value : '', false);
   }
 
   function saveBatchStage(batchId) {
@@ -1335,5 +1389,5 @@ const AdminModule = (() => {
     }
   }
 
-  return { render, openAddUser, editUser, saveUser, toggleUser, onRoleChange, toggleCategoryPerms, toggleAllPerms, openAddSub, editSub, saveSub, toggleSub, openAddVendor, editVendor, saveVendor, toggleVendor, openAddOp, editOp, saveOp, toggleOp, openAddInspector, editInspector, saveInspector, toggleInspector, clearTransactionData, toggleDatabaseMode, triggerBackupExport, triggerBackupImport, triggerBackupImportLive, viewTaskDetails, openCreateTask, createTask, filterAdminBatches, saveBatchStage };
+  return { render, openAddUser, editUser, saveUser, toggleUser, onRoleChange, toggleCategoryPerms, toggleAllPerms, openAddSub, editSub, saveSub, toggleSub, openAddVendor, editVendor, saveVendor, toggleVendor, openAddOp, editOp, saveOp, toggleOp, openAddInspector, editInspector, saveInspector, toggleInspector, clearTransactionData, toggleDatabaseMode, triggerBackupExport, triggerBackupImport, triggerBackupImportLive, viewTaskDetails, openCreateTask, createTask, filterAdminBatches, saveBatchStage, changeBatchPage };
 })();

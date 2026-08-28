@@ -5,6 +5,8 @@ const MasterModule = (() => {
   let searchTerm = '';
   let parsedRows = [];
   let lastRawJson = null;
+  let currentPage = 1;
+  const itemsPerPage = 50;
 
   function render() {
     const el = document.getElementById('content');
@@ -44,6 +46,7 @@ const MasterModule = (() => {
               <tbody id="master-tbody"></tbody>
             </table>
           </div>
+          <div id="master-pagination"></div>
         </div>
       </div>
       
@@ -180,13 +183,43 @@ const MasterModule = (() => {
         (p.compoundCode||'').toLowerCase().includes(s)
       );
     }
-    if (!parts.length) {
+
+    const totalItems = parts.length;
+    const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+    if (currentPage > totalPages) currentPage = totalPages;
+    if (currentPage < 1) currentPage = 1;
+
+    const startIdx = (currentPage - 1) * itemsPerPage;
+    const endIdx = startIdx + itemsPerPage;
+    const pageItems = parts.slice(startIdx, endIdx);
+
+    const pagEl = document.getElementById('master-pagination');
+    if (pagEl) {
+      if (totalPages > 1) {
+        pagEl.innerHTML = `
+          <div class="flex justify-between items-center p-4" style="border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover); border-radius: 0 0 var(--radius-md) var(--radius-md); margin-top: 16px;">
+            <div class="text-sm text-muted">
+              Showing <strong>${startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
+            </div>
+            <div class="flex gap-2">
+              <button class="btn btn-secondary btn-xs" onclick="MasterModule.changePage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>◀ Previous</button>
+              <span class="text-sm font-semibold flex items-center px-2">Page ${currentPage} of ${totalPages}</span>
+              <button class="btn btn-secondary btn-xs" onclick="MasterModule.changePage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>Next ▶</button>
+            </div>
+          </div>
+        `;
+      } else {
+        pagEl.innerHTML = '';
+      }
+    }
+
+    if (!pageItems.length) {
       tbody.innerHTML = '<tr><td colspan="9"><div class="empty-state"><div class="empty-icon">&#128203;</div><p>No parts found. Add your first part.</p></div></td></tr>';
       return;
     }
-    tbody.innerHTML = parts.map((p, i) => `
+    tbody.innerHTML = pageItems.map((p, i) => `
       <tr>
-        <td class="text-muted">${i+1}</td>
+        <td class="text-muted">${startIdx + i + 1}</td>
         <td class="font-semibold text-blue">${p.partNo}</td>
         <td><span class="badge badge-teal">${p.jmrefNo}</span></td>
         <td class="font-semibold">${p.salePrice != null ? p.salePrice : '—'}</td>
@@ -210,7 +243,12 @@ const MasterModule = (() => {
       </tr>`).join('');
   }
 
-  function search(val) { searchTerm = val; renderTable(); }
+  function search(val) { searchTerm = val; currentPage = 1; renderTable(); }
+
+  function changePage(page) {
+    currentPage = page;
+    renderTable();
+  }
 
   function createMouldRowElement(m = {}) {
     const div = document.createElement('div');
@@ -808,5 +846,5 @@ const MasterModule = (() => {
     });
   }
 
-  return { render, search, openAdd, openEdit, save, remove, openBulk, downloadTemplate, handleFileSelect, saveBulk, addMouldRow, removeMouldRow, handleUpdateCheckboxChange };
+  return { render, search, openAdd, openEdit, save, remove, openBulk, downloadTemplate, handleFileSelect, saveBulk, addMouldRow, removeMouldRow, handleUpdateCheckboxChange, changePage };
 })();

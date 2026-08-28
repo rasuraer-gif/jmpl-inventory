@@ -12,14 +12,10 @@ const AIAgentModule = (() => {
   let isListening = false;
 
   const CANDIDATE_MODELS = [
-    'gemini-3.5-flash',
-    'gemini-3.5-flash-lite',
-    'gemini-3.6-flash',
-    'gemini-3.1-flash-lite',
     'gemini-2.0-flash',
     'gemini-2.0-flash-lite',
-    'gemini-1.5-flash-latest',
-    'gemini-1.5-flash'
+    'gemini-1.5-flash',
+    'gemini-1.5-flash-8b'
   ];
 
   function getApiKey() {
@@ -343,9 +339,6 @@ const AIAgentModule = (() => {
                   <p>Welcome back! I am your <strong>JMPL AI Assistant</strong>. 🔩</p>
                   <p>I have direct, real-time access to the JMPL database. You can ask me questions about batches, stages, part stock, monthly sales, or manufacturing losses.</p>
                   <p><em>Tip: You can use your voice by clicking the microphone button! 🎤</em></p>
-                  <p style="font-size: 11.5px; color: var(--text-muted); background: rgba(255,255,255,0.03); padding: 8px 12px; border-radius: 6px; border: 1px dashed var(--border); margin-top: 10px; line-height: 1.4;">
-                    🔑 <strong>Setup Required:</strong> If you get an authentication error, please get a free API key at <a href="https://aistudio.google.com/" target="_blank" style="color:var(--primary);text-decoration:underline;">Google AI Studio</a> and save it in the <strong>Gemini API Key</strong> input under settings on the right.
-                  </p>
                 </div>
               </div>
             </div>
@@ -373,36 +366,36 @@ const AIAgentModule = (() => {
 
         <!-- Sidebar / Alerts and Settings -->
         <div class="ai-sidebar-card card card-body">
-          <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 6px;">⚙️ AI Settings</h3>
-          
-          <!-- Text to Speech toggle -->
-          <div class="form-group" style="display:flex; align-items:center; justify-content:space-between; margin-bottom: 16px;">
-            <label class="form-label" style="margin:0; cursor:pointer;" for="voice-toggle-chk">🔊 Voice Output (Read replies)</label>
-            <input type="checkbox" id="voice-toggle-chk" style="width: 18px; height: 18px; cursor:pointer;" ${voiceOutputEnabled ? 'checked' : ''} onchange="AIAgentModule.toggleVoice(this.checked)">
-          </div>
-
-          <!-- AI Model Selection -->
-          <div class="form-group" style="margin-bottom: 16px;">
-            <label class="form-label">AI Model</label>
-            <select id="ai-model-select" class="form-control form-control-sm" onchange="AIAgentModule.changeModel(this.value)">
-              <option value="auto" ${selectedModel === 'auto' ? 'selected' : ''}>⚡ Auto (Active: Gemini 3.5 Flash)</option>
-              <option value="gemini-3.5-flash" ${selectedModel === 'gemini-3.5-flash' ? 'selected' : ''}>🚀 Gemini 3.5 Flash (Super Fast & Smart)</option>
-              <option value="gemini-3.5-flash-lite" ${selectedModel === 'gemini-3.5-flash-lite' ? 'selected' : ''}>⚡ Gemini 3.5 Flash-Lite</option>
-              <option value="gemini-3.6-flash" ${selectedModel === 'gemini-3.6-flash' ? 'selected' : ''}>🌟 Gemini 3.6 Flash</option>
-              <option value="gemini-3.1-flash-lite" ${selectedModel === 'gemini-3.1-flash-lite' ? 'selected' : ''}>⚡ Gemini 3.1 Flash-Lite</option>
-              <option value="gemini-2.0-flash" ${selectedModel === 'gemini-2.0-flash' ? 'selected' : ''}>🤖 Gemini 2.0 Flash</option>
-            </select>
-            <p style="font-size:10.5px; color:var(--text-muted); margin-top:4px;">Auto connects directly to active supported Gemini models.</p>
-          </div>
-
-          <!-- Custom API Key override -->
-          <div class="form-group">
-            <label class="form-label">Gemini API Key</label>
-            <div style="position:relative; display:flex; gap:6px;">
-              <input type="password" id="custom-api-key" class="form-control form-control-sm" placeholder="Default Active" value="${customApiKey}">
-              <button class="btn btn-secondary btn-xs" onclick="AIAgentModule.saveApiKey()" style="padding: 0 10px;">Save</button>
+          <!-- AI Settings (Hidden) -->
+          <div style="display:none;">
+            <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 6px;">⚙️ AI Settings</h3>
+            
+            <!-- Text to Speech toggle -->
+            <div class="form-group" style="display:flex; align-items:center; justify-space-between; margin-bottom: 16px;">
+              <label class="form-label" style="margin:0; cursor:pointer;" for="voice-toggle-chk">🔊 Voice Output (Read replies)</label>
+              <input type="checkbox" id="voice-toggle-chk" style="width: 18px; height: 18px; cursor:pointer;" ${voiceOutputEnabled ? 'checked' : ''} onchange="AIAgentModule.toggleVoice(this.checked)">
             </div>
-            <p style="font-size:10.5px; color:var(--text-muted); margin-top:4px;">Leave blank to use pre-configured system key.</p>
+
+            <!-- AI Model Selection -->
+            <div class="form-group" style="margin-bottom: 16px;">
+              <label class="form-label">AI Model</label>
+              <select id="ai-model-select" class="form-control form-control-sm" onchange="AIAgentModule.changeModel(this.value)">
+                <option value="auto" ${selectedModel === 'auto' ? 'selected' : ''}>⚡ Auto (Active: Gemini 2.0 Flash — Lowest Cost)</option>
+                <option value="gemini-2.0-flash" ${selectedModel === 'gemini-2.0-flash' ? 'selected' : ''}>🚀 Gemini 2.0 Flash (Fast & Ultra-Low Cost)</option>
+                <option value="gemini-2.0-flash-lite" ${selectedModel === 'gemini-2.0-flash-lite' ? 'selected' : ''}>⚡ Gemini 2.0 Flash-Lite (Lightweight)</option>
+                <option value="gemini-1.5-flash" ${selectedModel === 'gemini-1.5-flash' ? 'selected' : ''}>🤖 Gemini 1.5 Flash</option>
+                <option value="gemini-1.5-flash-8b" ${selectedModel === 'gemini-1.5-flash-8b' ? 'selected' : ''}>🍃 Gemini 1.5 Flash-8B</option>
+              </select>
+            </div>
+
+            <!-- Custom API Key override -->
+            <div class="form-group">
+              <label class="form-label">Gemini API Key</label>
+              <div style="position:relative; display:flex; gap:6px;">
+                <input type="password" id="custom-api-key" class="form-control form-control-sm" placeholder="Default Active" value="${customApiKey}">
+                <button class="btn btn-secondary btn-xs" onclick="AIAgentModule.saveApiKey()" style="padding: 0 10px;">Save</button>
+              </div>
+            </div>
           </div>
 
           <!-- Alert Center -->
@@ -563,7 +556,7 @@ const AIAgentModule = (() => {
     }
   }
 
-  // ── Data Compiler & AI Prompts ─────────────────────────────
+  // ── Data Compiler & AI Prompts (Token-Optimized) ───────────
   function compileDataContext() {
     const parts = DB.Master.all();
     const batches = DB.Batches.all();
@@ -571,24 +564,22 @@ const AIAgentModule = (() => {
     const sales = DB.Sales.all();
     const storeInv = DB.StoreInventory.allParts();
 
-    // Active batches info
-    const activeBatches = batches.filter(b => b.status === 'active').map(b => {
+    // Compact active batches (limit to top 25 active batches to prevent token bloat)
+    const activeBatches = batches.filter(b => b.status === 'active').slice(0, 25).map(b => {
       const stageRecs = DB.StageRecords.byBatch(b.id);
       const lastRec = stageRecs.length ? stageRecs[stageRecs.length - 1] : null;
       return {
         batchNo: b.batchNo,
-        partNo: parts.find(p=>p.id === b.partId)?.partNo || '—',
+        partNo: parts.find(p => p.id === b.partId)?.partNo || '—',
         jmrefNo: b.jmrefNo,
-        currentStage: b.currentStage,
+        stage: b.currentStage,
         type: b.productionType || 'Inhouse',
-        initialQty: b.initialQty,
-        currentQty: lastRec ? lastRec.outputQty : b.initialQty,
-        createdAt: b.createdAt
+        qty: lastRec ? lastRec.outputQty : b.initialQty
       };
     });
 
-    // Store inventory summary
-    const storeSummary = storeInv.map(p => ({
+    // Store inventory summary (non-zero or low stock items prioritized)
+    const storeSummary = storeInv.slice(0, 30).map(p => ({
       partNo: p.partNo,
       jmrefNo: p.jmrefNo,
       available: p.available
@@ -600,23 +591,23 @@ const AIAgentModule = (() => {
       lossesByStage[l.stage] = (lossesByStage[l.stage] || 0) + (l.lossQty || 0);
     });
 
-    // Sales (last 10 transactions)
-    const recentSales = sales.sort((a,b) => (b.saleDate||'').localeCompare(a.saleDate||'')).slice(0, 10).map(s => ({
+    // Recent Sales (last 5 transactions)
+    const recentSales = sales.sort((a,b) => (b.saleDate||'').localeCompare(a.saleDate||'')).slice(0, 5).map(s => ({
       jmrefNo: s.jmrefNo,
       qty: s.qty,
       date: s.saleDate
     }));
 
     return {
-      systemInfo: {
-        currentTime: new Date().toISOString(),
-        totalRegisteredParts: parts.length,
-        activeBatchesInPipeline: activeBatches.length
+      sys: {
+        time: new Date().toISOString().slice(0, 10),
+        partsCount: parts.length,
+        activeBatchesCount: activeBatches.length
       },
-      partsList: parts.map(p => ({ partNo: p.partNo, jmrefNo: p.jmrefNo, description: p.description })),
+      parts: parts.slice(0, 40).map(p => ({ p: p.partNo, j: p.jmrefNo })),
       activeBatches,
       storeInventory: storeSummary,
-      totalLossesByStage: lossesByStage,
+      stageLosses: lossesByStage,
       recentSales
     };
   }
@@ -815,9 +806,9 @@ const AIAgentModule = (() => {
     // Append user query to log
     appendMessage('user', query);
     
-    // Add to chat history
+    // Add to chat history (cap at last 6 messages / 3 Q&A pairs to save tokens)
     chatHistory.push({ role: 'user', parts: [{ text: query }] });
-    if (chatHistory.length > 16) chatHistory.shift();
+    if (chatHistory.length > 6) chatHistory.shift();
 
     const typingId = appendTypingIndicator();
 
@@ -828,18 +819,7 @@ const AIAgentModule = (() => {
       }
 
       const context = compileDataContext();
-      const systemInstruction = `You are JMPL AI, the intelligent virtual assistant for Janani Mouldings Pvt. Ltd. (Rubber O-Ring Manufacturing).
-You have access to the live JMPL database state in JSON format.
-Analyze the data and answer the user's queries accurately, clearly, and concisely.
-Always format your response using professional Markdown. If the user asks for reports, lists, or comparisons, use clean Markdown tables.
-Be proactive: if you notice critical issues (like batches stuck in a stage for more than 7 days, low stock of active items, or abnormally high losses in a particular stage), point them out in your answer or warn the user.
-Use a helpful, professional tone.
-
-Here is the live JMPL database context:
-<DATA>
-${JSON.stringify(context, null, 2)}
-</DATA>
-`;
+      const systemInstruction = `You are JMPL AI assistant for Janani Mouldings. Answer concisely using Markdown. Live DB context: ${JSON.stringify(context)}`;
 
       const result = await callGeminiWithAutoFallback(apiKey, chatHistory, systemInstruction);
 
@@ -851,7 +831,7 @@ ${JSON.stringify(context, null, 2)}
       
       // Add AI reply to history
       chatHistory.push({ role: 'model', parts: [{ text: aiReply }] });
-      if (chatHistory.length > 16) chatHistory.shift();
+      if (chatHistory.length > 6) chatHistory.shift();
 
       if (voiceOutputEnabled) {
         speakText(aiReply);

@@ -3,21 +3,24 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="JMPL Inventory Tracking System — Rubber O-Ring Manufacturing by Janani Mouldings Pvt. Ltd.">
-  <title>JMPL Inventory Tracking System</title>
+  <meta name="description" content="Janani Mouldings Private Limited (JMPL) — IATF 16949 Certified Manufacturer of Moulded Rubber Products, O-Rings, Diaphragms, and Gaskets.">
+  <title>Janani Mouldings Pvt. Ltd. | IATF 16949 Certified Company</title>
+  
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.sheetjs.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://www.gstatic.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://*.firebaseio.com https://*.googleapis.com wss://*.firebaseio.com https://generativelanguage.googleapis.com; frame-src 'self'; object-src 'none';">
+
   <link rel="stylesheet" href="index.css">
+  
   <!-- SheetJS for Excel export -->
   <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js" defer></script>
   <!-- Chart.js for visual report charts -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>
   <!-- JsBarcode for label barcode generation -->
   <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js" defer></script>
   <!-- HTML5 QR Code library for camera scanning -->
   <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js" defer></script>
-</head>
-<body>
-  <!-- App root — filled by app.js -->
-  <div id="app-root"></div>
+  <!-- html2pdf.js for client-side PDF export -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js" defer></script>
 
   <!-- Firebase SDK Compat -->
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js" defer></script>
@@ -57,5 +60,18 @@
   
   <!-- App bootstrap (must be last) -->
   <script src="app.js" defer></script>
+</head>
+<body class="landing-body">
+  <!-- Default Global Loading Screen (Prevents Loading Flash) -->
+  <div id="app-root" style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background-color:#0f172a;color:#f8fafc;font-family:system-ui,-apple-system,sans-serif;">
+    <div style="font-size:36px;margin-bottom:16px;animation:spin 1s linear infinite;">🌀</div>
+    <h2 style="font-size:18px;font-weight:600;margin-bottom:8px;">Connecting to JMPL Cloud...</h2>
+    <p style="font-size:13px;color:#94a3b8;">Syncing database with Firestore</p>
+    <style>
+      @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+  </div>
+  
+  <div id="toast-container"></div>
 </body>
 </html>

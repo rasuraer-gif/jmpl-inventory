@@ -20,6 +20,9 @@ const JMPL_CONFIG = {
 
 const DB = (() => {
   const PREFIX = localStorage.getItem('jmpl_db_is_local_backup') === 'true' ? 'jmpl_backup_' : 'jmpl_';
+  // Returns true if a string looks like a SHA-256 hex hash (64 lowercase hex chars)
+  function isHashedPw(v) { return typeof v === 'string' && /^[0-9a-f]{64}$/.test(v); }
+
   let db = null;
   let isInitialized = false;
   let isCloudSyncComplete = false;
@@ -144,13 +147,18 @@ const DB = (() => {
       
       const firestoreInstance = firebase.firestore();
       
-      // Clear persistence to wipe out any old cached offline writes from the browser
-      // Portal should work strictly with the online database.
+      // Enable Firestore offline disk persistence (caches fetched documents in browser IndexedDB)
       try {
-        await firestoreInstance.clearPersistence();
-        console.log("Firestore offline persistence cleared successfully.");
+        await firestoreInstance.enablePersistence({ synchronizeTabs: true });
+        console.log("Firestore offline disk persistence enabled successfully.");
       } catch (err) {
-        console.warn("Failed to clear Firestore persistence:", err);
+        if (err.code === 'failed-precondition') {
+          console.warn("Multiple tabs open; persistence active in primary tab.");
+        } else if (err.code === 'unimplemented') {
+          console.warn("Current browser does not support Firestore persistence.");
+        } else {
+          console.warn("Firestore persistence notice:", err);
+        }
       }
       
       db = firestoreInstance;
@@ -583,7 +591,7 @@ const DB = (() => {
       }
       
       primaryAdmin.name = 'Administrator';
-      primaryAdmin.password = primaryAdmin.password || 'Ras9x3t1*';
+      primaryAdmin.password = primaryAdmin.password || '0ef400d2c3db25692c34e8b7f53a62a91919686099ed5b4d3daf6c72eda461ab';
       primaryAdmin.role = 'admin';
       primaryAdmin.permissions = ['admin','master','production','cryogenic','deflashing','trimming','post-curing','waiting-visual','visual','gauge','quality','store','stock','report_inventory','report_sales','report_production','report_cryogenic','report_deflashing','report_trimming','report_post_curing','report_waiting_visual','report_visual','report_gauge','report_rejected','report_recheck'];
       primaryAdmin.active = true;
@@ -729,7 +737,7 @@ const DB = (() => {
       insert('users', {
         name: 'Administrator',
         username: 'admin',
-        password: 'Ras9x3t1*',
+        password: '0ef400d2c3db25692c34e8b7f53a62a91919686099ed5b4d3daf6c72eda461ab', // SHA-256 of default password
         role: 'admin',
         permissions: ['admin','master','production','cryogenic','deflashing','trimming','post-curing','waiting-visual','visual','gauge','quality','store','stock','report_inventory','report_sales','report_production','report_cryogenic','report_deflashing','report_trimming','report_post_curing','report_waiting_visual','report_visual','report_gauge','report_rejected','report_recheck'],
         active: true
@@ -1499,7 +1507,15 @@ const DB = (() => {
     const collections = Object.keys(cache);
     
     collections.forEach(table => {
-      backupData[table] = cache[table] || [];
+      if (table === 'users') {
+        backupData[table] = (cache[table] || []).map(u => {
+          const safeUser = { ...u };
+          delete safeUser.password;
+          return safeUser;
+        });
+      } else {
+        backupData[table] = cache[table] || [];
+      }
     });
 
     return JSON.stringify(backupData, null, 2);

@@ -619,6 +619,11 @@ const VisualModule = (() => {
       }
 
       const totalDeducted = outputQty + finalReprocessQty + lossQty;
+      if (lossQty > 0.10 * totalDeducted) {
+        if (!notes) {
+          showLossWarning(); return;
+        }
+      }
       const remainingQty = Math.max(0, (_activeBatch.initialQty || 0) - totalDeducted);
 
       DB.Batches.update(_activeBatch.id, {
@@ -708,6 +713,8 @@ const VisualModule = (() => {
           isReprocess: true,
           reprocessDestination: reprocessDestination,
           vendorId: finalVendorId || '',
+          parentBatchId: _activeBatch.id,
+          parentBatchNo: _activeBatch.batchNo,
           createdAt: new Date().toISOString(),
           notes: `Reprocess batch created from stock upload batch ${_activeBatch.batchNo}. Target: ${reprocessDestination}`
         });
@@ -745,6 +752,11 @@ const VisualModule = (() => {
     }
 
     const lossQty = Math.max(0, _visInputQty - outputQty - finalReprocessQty);
+    if (lossQty > 0.10 * _visInputQty) {
+      if (!notes) {
+        showLossWarning(); return;
+      }
+    }
 
     const airTraps = parseInt(document.getElementById('vis-defect-airtraps')?.value) || 0;
     const flash = parseInt(document.getElementById('vis-defect-flash')?.value) || 0;
@@ -835,6 +847,8 @@ const VisualModule = (() => {
         isReprocess: true,
         reprocessDestination: reprocessDestination,
         vendorId: finalVendorId || '',
+        parentBatchId: batch.id,
+        parentBatchNo: batch.batchNo,
         createdAt: new Date().toISOString(),
         notes: `Reprocess batch created from batch ${batch.batchNo}. Target: ${reprocessDestination}`
       });
@@ -870,7 +884,7 @@ const VisualModule = (() => {
       document.getElementById('vis-process-modal').classList.add('hidden');
       showToast('Batch fully depleted and reprocess batch created', 'success');
     } else {
-      DB.Batches.update(batchId, { currentStage:destination });
+      DB.Batches.update(batchId, { currentStage:destination, initialQty: outputQty });
       document.getElementById('vis-process-modal').classList.add('hidden');
       showToast('Batch moved to ' + (STAGE_LABELS[destination] || destination), 'success');
     }
