@@ -996,7 +996,7 @@ const StockModule = (() => {
           <div class="company-title" style="font-size: 8px; font-weight: bold; letter-spacing: 0.2px; border-bottom: 1.5px solid #000; padding-bottom: 1.5px; width: 100%; text-align: center; text-transform: uppercase; white-space: nowrap; margin-bottom: 1px;">JANANI MOULDINGS PVT. LTD.</div>
           <div class="qr-wrapper" style="position: relative; display: flex; align-items: center; justify-content: center; width: 100%; height: 20mm; margin: 1mm 0;">
             <div class="flow-text-left" style="position: absolute; left: 0; top: 50%; transform: translateY(-50%); writing-mode: vertical-rl; font-size: 6.5px; font-weight: bold; text-transform: uppercase; color: #000; letter-spacing: 0.2px; white-space: nowrap; height: 18mm; display: flex; align-items: center; justify-content: center; text-align: center; border-right: 0.5px dashed #000; padding-right: 2px;">${processFlow}</div>
-            <img class="qr-image" src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(batch.batchNo)}" style="width: 19mm; height: 19mm; display: block;" />
+            <div class="qr-box" data-batch="${batch.batchNo}" style="width: 19mm; height: 19mm; display: flex; align-items: center; justify-content: center;"></div>
             <div class="flow-text-right" style="position: absolute; right: 0; top: 50%; transform: translateY(-50%); writing-mode: vertical-rl; font-size: 6.5px; font-weight: bold; text-transform: uppercase; color: #000; letter-spacing: 0.2px; white-space: nowrap; height: 18mm; display: flex; align-items: center; justify-content: center; text-align: center; border-left: 0.5px dashed #000; padding-left: 2px;">IB: ${batch.internalBatchNo || '—'}</div>
           </div>
           <div class="batch-no-display" style="font-size: 7.5px; font-weight: bold; letter-spacing: 0.2px; margin-bottom: 1.5px; border: 1px solid #000; padding: 1px 3px; border-radius: 2px; background: #f3f4f6; text-align: center; white-space: nowrap; max-width: 100%; box-sizing: border-box; overflow: hidden; text-overflow: ellipsis;">${batch.batchNo}</div>
@@ -1037,6 +1037,7 @@ const StockModule = (() => {
       </head>
       <body>
         ${labelsHtml}
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
         <script>
           let printed = false;
           function triggerPrint() {
@@ -1045,12 +1046,30 @@ const StockModule = (() => {
             setTimeout(function() {
               window.print();
               window.close();
-            }, 500);
+            }, 400);
+          }
+          function renderAllQRs() {
+            const boxes = document.querySelectorAll('.qr-box');
+            boxes.forEach(function(box) {
+              const batchNo = box.getAttribute('data-batch');
+              if (!batchNo) return;
+              try {
+                new QRCode(box, { text: batchNo, width: 72, height: 72, correctLevel: QRCode.CorrectLevel.M });
+              } catch(e) {
+                const img = document.createElement('img');
+                img.className = 'qr-image';
+                img.style.width = '19mm';
+                img.style.height = '19mm';
+                img.src = 'https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=' + encodeURIComponent(batchNo);
+                box.appendChild(img);
+              }
+            });
+            setTimeout(triggerPrint, 350);
           }
           window.onload = function() {
-            setTimeout(triggerPrint, 2500); // 2.5s fallback to allow all QR code images to load completely
+            renderAllQRs();
           };
-        <\/script>
+        </script>
       </body>
       </html>
     `);
