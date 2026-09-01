@@ -17,6 +17,19 @@ const StockAuditModule = (() => {
   let missingCurrentPage = 1;
   const itemsPerPage = 50;
 
+  let rapidScanMode = false;
+  let pinnedRackLocation = '';
+
+  function toggleRapidScan(val) {
+    rapidScanMode = Boolean(val);
+    showToast(rapidScanMode ? '⚡ Rapid Scan / Auto-Verify Mode Enabled' : 'Standard Verification Mode Enabled', 'info');
+    render();
+  }
+
+  function updatePinnedRack(val) {
+    pinnedRackLocation = String(val || '').trim();
+  }
+
   // ── Audio Feedback Utility ─────────────────────────────────
   function playAudioTone(type = 'success') {
     try {
@@ -77,26 +90,41 @@ const StockAuditModule = (() => {
     return null;
   }
 
-  // ── Calculate Expected Quantity for a Batch ───────────────
-  function getBatchExpectedQty(batch) {
+  // ── Calculate Expected Quantity for a Batch (Optimized) ────
+  function getBatchExpectedQty(batch, stageRecsMap) {
     if (!batch) return 0;
+    
+    // Use indexed map if provided, otherwise fetch stage records once
+    let stageRecs = null;
+    if (stageRecsMap && stageRecsMap[batch.id]) {
+      stageRecs = stageRecsMap[batch.id];
+    }
+
     if (batch.status === 'completed' || batch.currentStage === 'store') {
-      // Check Store Inventory available quantity
-      const storeItem = DB.StoreInventory.byJmref ? DB.StoreInventory.byJmref(batch.jmrefNo) : null;
-      if (storeItem && typeof storeItem.available === 'number') {
-        // Find if this batch has specific remaining store stock
-        const stageRecs = DB.StageRecords.all().filter(r => r.batchId === batch.id && r.stage === 'store');
-        if (stageRecs.length > 0) {
-          return stageRecs[stageRecs.length - 1].inputQty || batch.initialQty || 0;
+      if (stageRecs) {
+        const storeRecs = stageRecs.filter(r => r.stage === 'store');
+        if (storeRecs.length > 0) {
+          return storeRecs[storeRecs.length - 1].inputQty || batch.initialQty || 0;
+        }
+      } else {
+        const storeItem = DB.StoreInventory.byJmref ? DB.StoreInventory.byJmref(batch.jmrefNo) : null;
+        if (storeItem && typeof storeItem.available === 'number') {
+          const recs = DB.StageRecords.all().filter(r => r.batchId === batch.id && r.stage === 'store');
+          if (recs.length > 0) {
+            return recs[recs.length - 1].inputQty || batch.initialQty || 0;
+          }
         }
       }
       return batch.initialQty || 0;
     }
 
     // In-process stages: find incoming qty to currentStage
-    const stageRecs = DB.StageRecords.all().filter(r => r.batchId === batch.id);
     if (batch.currentStage === 'production') {
       return batch.initialQty || 0;
+    }
+
+    if (!stageRecs) {
+      stageRecs = DB.StageRecords.all().filter(r => r.batchId === batch.id);
     }
 
     const incoming = stageRecs.filter(r => r.movedTo === batch.currentStage);
@@ -123,20 +151,33 @@ const StockAuditModule = (() => {
     }
   }
 
-  // ── Compute Audit Stats for Active Session ─────────────────
+  // ── Compute Audit Stats for Active Session (High Performance) ──
   function getSessionMetrics(session) {
     if (!session) return { expectedBatches: 0, expectedQty: 0, verifiedBatches: 0, verifiedQty: 0, exactMatches: 0, varianceBatches: 0, stageMismatches: 0, missingBatches: 0, missingQty: 0, netVarianceQty: 0, netVarianceValue: 0, pctComplete: 0 };
 
+    // 1. Index StageRecords by batchId once to avoid millions of O(N*M) lookups
+    const allStageRecs = DB.StageRecords.all();
+    const stageRecsMap = {};
+    for (let i = 0; i < allStageRecs.length; i++) {
+      const r = allStageRecs[i];
+      if (r.batchId) {
+        if (!stageRecsMap[r.batchId]) stageRecsMap[r.batchId] = [];
+        stageRecsMap[r.batchId].push(r);
+      }
+    }
+
     const expectedBatches = getSessionExpectedBatches(session);
-    const expectedQty = expectedBatches.reduce((sum, b) => sum + getBatchExpectedQty(b), 0);
+    let expectedQty = 0;
+    for (let i = 0; i < expectedBatches.length; i++) {
+      expectedQty += getBatchExpectedQty(expectedBatches[i], stageRecsMap);
+    }
 
     const records = DB.AuditRecords.bySession(session.id);
     const verifiedBatchIds = new Set(records.map(r => r.batchId).filter(Boolean));
     const verifiedBatchNos = new Set(records.map(r => (r.batchNo || '').trim().toLowerCase()));
 
     const verifiedBatches = records.length;
-    const verifiedQty = records.reduce((sum, r) => sum + Number(r.countedQty || 0), 0);
-
+    let verifiedQty = 0;
     let exactMatches = 0;
     let varianceBatches = 0;
     let stageMismatches = 0;
@@ -147,6 +188,7 @@ const StockAuditModule = (() => {
     DB.Master.all().forEach(m => { masterMap[m.jmrefNo] = m; });
 
     records.forEach(r => {
+      verifiedQty += Number(r.countedQty || 0);
       const diff = Number(r.varianceQty || 0);
       netVarianceQty += diff;
       const part = masterMap[r.jmrefNo] || {};
@@ -160,7 +202,10 @@ const StockAuditModule = (() => {
 
     const missingList = expectedBatches.filter(b => !verifiedBatchIds.has(b.id) && !verifiedBatchNos.has((b.batchNo || '').trim().toLowerCase()));
     const missingBatches = missingList.length;
-    const missingQty = missingList.reduce((sum, b) => sum + getBatchExpectedQty(b), 0);
+    let missingQty = 0;
+    for (let i = 0; i < missingList.length; i++) {
+      missingQty += getBatchExpectedQty(missingList[i], stageRecsMap);
+    }
 
     const totalTarget = expectedBatches.length || 1;
     const pctComplete = Math.min(100, Math.round((verifiedBatches / totalTarget) * 100));
@@ -371,6 +416,20 @@ const StockAuditModule = (() => {
             <button class="btn btn-secondary" onclick="StockAuditModule.openCameraScanner()" title="Open Mobile Camera Scanner">
               📷 Camera
             </button>
+          </div>
+
+          <div style="display:flex; gap:12px; align-items:center; justify-content:space-between; margin-top:12px; padding:10px 12px; background:var(--card-bg); border-radius:8px; border:1px solid var(--border); flex-wrap:wrap;">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <input type="checkbox" id="audit-rapid-scan-toggle" ${rapidScanMode ? 'checked' : ''} onchange="StockAuditModule.toggleRapidScan(this.checked)" style="width:16px; height:16px; cursor:pointer;">
+              <label for="audit-rapid-scan-toggle" class="font-bold text-xs" style="color:var(--text-main); cursor:pointer;">
+                ⚡ Rapid Scan (Auto-Verify Exact Matches)
+              </label>
+            </div>
+
+            <div style="display:flex; align-items:center; gap:6px;">
+              <span class="text-xs font-semibold text-muted">📌 Sticky Rack:</span>
+              <input type="text" id="audit-pinned-rack-input" class="form-control form-control-sm" placeholder="e.g. Rack A-02" value="${pinnedRackLocation}" style="width:120px; font-weight:600;" oninput="StockAuditModule.updatePinnedRack(this.value)">
+            </div>
           </div>
 
           <div style="display:flex; gap:12px; flex-wrap:wrap; margin-top:12px; font-size:12px; color:var(--text-muted);">
@@ -1013,16 +1072,71 @@ const StockAuditModule = (() => {
     // Check if user locked floor stage
     const floorStageLock = document.getElementById('audit-floor-stage-lock')?.value;
     const defaultScannedStage = (floorStageLock && floorStageLock !== 'auto') ? floorStageLock : (matchedBatch.currentStage || 'store');
+    const expectedStage = matchedBatch.currentStage || 'store';
+    const expectedQty = getBatchExpectedQty(matchedBatch);
+    const rackLoc = (document.getElementById('audit-pinned-rack-input')?.value || pinnedRackLocation || matchedBatch.rackLocation || '').trim();
+
+    // ⚡ RAPID SCAN MODE: Auto-Verify Exact Matches without popup modal
+    if (rapidScanMode && defaultScannedStage === expectedStage) {
+      const existingRec = DB.AuditRecords.bySession(session.id).find(r => r.batchId === matchedBatch.id);
+      const auditorName = (Auth.getSession() || {}).name || 'Auditor';
+
+      let recordObj = null;
+      if (existingRec) {
+        recordObj = {
+          ...existingRec,
+          scannedStage: defaultScannedStage,
+          expectedStage,
+          expectedQty,
+          countedQty: expectedQty,
+          varianceQty: 0,
+          verificationStatus: 'verified_match',
+          rackLocation: rackLoc,
+          scannedBy: auditorName,
+          scannedAt: new Date().toISOString()
+        };
+        DB.AuditRecords.update(existingRec.id, recordObj);
+      } else {
+        recordObj = {
+          sessionId: session.id,
+          batchId: matchedBatch.id,
+          batchNo: matchedBatch.batchNo,
+          jmrefNo: matchedBatch.jmrefNo,
+          partNo: matchedBatch.partNo,
+          expectedStage,
+          scannedStage: defaultScannedStage,
+          expectedQty,
+          countedQty: expectedQty,
+          varianceQty: 0,
+          verificationStatus: 'verified_match',
+          rackLocation: rackLoc,
+          scannedBy: auditorName,
+          scannedAt: new Date().toISOString()
+        };
+        DB.AuditRecords.insert(recordObj);
+      }
+
+      playAudioTone('success');
+      showToast(`⚡ Rapid Verified: ${matchedBatch.batchNo} (Exact Match — ${formatNum(expectedQty)} pcs)`, 'success');
+
+      lastScannedBatch = {
+        batch: matchedBatch,
+        record: recordObj
+      };
+
+      render();
+      return;
+    }
 
     openVerificationModalForBatch(matchedBatch.id, defaultScannedStage);
   }
 
   function openCameraScanner() {
-    if (typeof Scanner === 'undefined' || !Scanner.open) {
-      showToast('Camera barcode scanner not initialized', 'error');
+    if (typeof Scanner === 'undefined' || !Scanner.start) {
+      showToast('Camera barcode scanner module not loaded', 'error');
       return;
     }
-    Scanner.open((scannedCode) => {
+    Scanner.start('audit-barcode-input', (scannedCode) => {
       handleScanSubmit(scannedCode);
     });
   }
@@ -1058,7 +1172,7 @@ const StockAuditModule = (() => {
 
     const rackInput = document.getElementById('v-rack-location');
     if (rackInput) {
-      rackInput.value = existingRec ? (existingRec.rackLocation || '') : (batch.rackLocation || '');
+      rackInput.value = existingRec ? (existingRec.rackLocation || '') : (pinnedRackLocation || batch.rackLocation || '');
     }
 
     const notesInput = document.getElementById('v-audit-notes');
@@ -1136,6 +1250,9 @@ const StockAuditModule = (() => {
     const scannedStage = document.getElementById('v-physical-stage').value;
     const countedQty = Number(document.getElementById('v-counted-qty').value || 0);
     const rackLocation = (document.getElementById('v-rack-location').value || '').trim();
+    if (rackLocation) {
+      pinnedRackLocation = rackLocation;
+    }
     const auditorName = (document.getElementById('v-auditor-name').value || '').trim() || (Auth.getSession() || {}).name || 'Auditor';
     const notes = (document.getElementById('v-audit-notes').value || '').trim();
 
@@ -1460,6 +1577,8 @@ const StockAuditModule = (() => {
     filterMissingStage,
     closeModal,
     exportAuditExcel,
+    toggleRapidScan,
+    updatePinnedRack,
     changePageVerified: (page) => { verifiedCurrentPage = page; render(); },
     changePageMissing: (page) => { missingCurrentPage = page; render(); }
   };

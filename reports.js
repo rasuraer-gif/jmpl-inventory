@@ -3108,6 +3108,7 @@ const ReportsModule = (() => {
       case 'wip-valuation':   result = renderWipValuation(filters); break;
       case 'sub-vs-inhouse':  result = renderSubVsInhouse(filters); break;
       case 'analytics':       result = renderAnalytics(filters); break;
+      case 'stock-audit':     result = renderStockAuditReport(filters); break;
       default: result = emptyState('Unknown report');
     }
 
@@ -3162,7 +3163,8 @@ const ReportsModule = (() => {
     { key:'sub-performance', label:'🏢 Subcontractor & Vendor Performance Scorecard', desc:'Detailed quality, speed, and WIP load scorecard for all subcontractors and process vendors' },
     { key:'store-aging', label:'⏳ Finished-Goods FIFO Aging Report', desc:'Available stock batches in the Store with FIFO-calculated remaining quantities and age' },
     { key:'daily-summary', label:'📊 Daily Production & Scrap Summary', desc:'Daily overview of total pieces molded, completed, reprocessed, and scrap rates across all stages' },
-    { key:'analytics', label:'📈 Production & Quality Analytics', desc:'Interactive visual charts showing WIP bottlenecks, daily production yield trends, and top defective parts' }
+    { key:'analytics', label:'📈 Production & Quality Analytics', desc:'Interactive visual charts showing WIP bottlenecks, daily production yield trends, and top defective parts' },
+    { key:'stock-audit', label:'📊 Stock Audit Discrepancy & Reconciliation', desc:'Monthly physical stock audit variance, exact match rates, and financial discrepancy report' }
   ];
 
   // ── Render ────────────────────────────────────────────────
