@@ -589,6 +589,7 @@ const NAV = [
   { id:'rpt-store-aging', label:'Store FIFO Aging Report', icon:'⏳', module:'report_store_aging', section:'tools', parent:'reports', perm:'report_store_aging' },
   { id:'rpt-daily-summary', label:'Daily Production & Scrap', icon:'📊', module:'report_daily_summary', section:'tools', parent:'reports', perm:'report_daily_summary' },
   { id:'rpt-analytics', label:'Production & Quality Analytics', icon:'📈', module:'report_analytics', section:'tools', parent:'reports', perm:'report_analytics' },
+  { id:'rpt-stock-audit', label:'Stock Audit Discrepancy & Reconciliation', icon:'📊', module:'report_stock_audit', section:'tools', parent:'reports' },
 
   { id:'print-batch',  label:'Print Label',        icon:'🖨️', module:'print-batch',  section:'tools', perm:'print-batch' },
   { id:'ai-agent',   label:'AI Assistant',        icon:'🤖', module:'ai-agent',  section:'tools', perm:'ai-agent' },
@@ -605,56 +606,7 @@ const App = (() => {
   let currentModule = null;
   let reportsExpanded = localStorage.getItem('jmpl_reports_expanded') === 'true';
 
-  let refreshCountdown = 60;
-  let refreshTimerInterval = null;
 
-  function startPeriodicRefreshTimer() {
-    if (refreshTimerInterval) clearInterval(refreshTimerInterval);
-    refreshCountdown = 60;
-
-    refreshTimerInterval = setInterval(() => {
-      refreshCountdown--;
-
-      const timerEl = document.getElementById('refresh-timer-countdown');
-      if (timerEl) {
-        timerEl.textContent = refreshCountdown;
-      }
-
-      if (refreshCountdown <= 0) {
-        refreshCountdown = 60;
-
-        const modalOpen = document.querySelector('.modal-overlay:not(.hidden)');
-        const isTyping = document.activeElement && 
-                         (document.activeElement.tagName === 'INPUT' || 
-                          document.activeElement.tagName === 'TEXTAREA' ||
-                          document.activeElement.tagName === 'SELECT');
-        const isCameraActive = typeof Scanner !== 'undefined' && Scanner.isActive;
-
-        if (modalOpen || isTyping || isCameraActive || window.preventAutoRefresh) {
-          console.log('[Auto-Refresh] Deferred scheduled 1-minute refresh due to user activity or open modal.');
-          return;
-        }
-
-        if (currentModule && typeof navigate === 'function') {
-          console.log('[Auto-Refresh] Executing scheduled 1-minute view refresh for module:', currentModule);
-          navigate(currentModule);
-        }
-      }
-    }, 1000);
-  }
-
-  function triggerManualRefresh() {
-    refreshCountdown = 60;
-    const timerEl = document.getElementById('refresh-timer-countdown');
-    if (timerEl) timerEl.textContent = '60';
-
-    if (currentModule && typeof navigate === 'function') {
-      navigate(currentModule);
-      if (typeof showToast === 'function') {
-        showToast('🔄 Page view refreshed', 'info');
-      }
-    }
-  }
 
   const MODULE_MAP = {
     dashboard:  () => renderDashboard(),
@@ -711,6 +663,7 @@ const App = (() => {
     report_store_aging: () => ReportsModule?.render('store-aging'),
     report_daily_summary: () => ReportsModule?.render('daily-summary'),
     report_analytics:  () => ReportsModule?.render('analytics'),
+    report_stock_audit:() => ReportsModule?.render('stock-audit'),
     'print-batch':     () => PrintBatchModule?.render(),
   };
 
@@ -758,6 +711,7 @@ const App = (() => {
     report_store_aging:'Finished-Goods FIFO Aging Report',
     report_daily_summary:'Daily Production & Scrap Summary',
     report_analytics:'Production & Quality Visual Analytics Dashboard',
+    report_stock_audit:'Stock Audit Discrepancy & Reconciliation Report',
   };
 
   function navigate(moduleId) {
@@ -848,9 +802,6 @@ const App = (() => {
     window.addEventListener('online', triggerSyncStatusUpdate);
     window.addEventListener('offline', triggerSyncStatusUpdate);
     triggerSyncStatusUpdate(); // initial call
-
-    // Start 1-minute scheduled background refresh timer
-    startPeriodicRefreshTimer();
 
     // Route to module from hash or default
     const hash = location.hash.replace('#', '');
@@ -1009,6 +960,7 @@ const App = (() => {
   function escapeHtml(str) {
     return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
+  window.escapeHtml = escapeHtml;
 
   function onGlobalSearchFocus() {
     const input = document.getElementById('global-search-input');
@@ -1627,7 +1579,7 @@ const App = (() => {
     }
   });
 
-  return { navigate, init, toggleReportsMenu, openChangePasswordModal, changePassword, runQuickScan, showBatchGenealogy, formatBatchCell, applyBatchTagsToContainer, get current() { return currentModule; }, changeDashboardMonth: (val) => { dashboardMonth = val; renderDashboard(); }, toggleAllStageChecks, bulkPrintStageSelected, onGlobalSearchFocus, onGlobalSearchInput, selectBatchFromSearch, closeGlobalSearch, triggerManualRefresh };
+  return { navigate, init, toggleReportsMenu, openChangePasswordModal, changePassword, runQuickScan, showBatchGenealogy, formatBatchCell, applyBatchTagsToContainer, get current() { return currentModule; }, changeDashboardMonth: (val) => { dashboardMonth = val; renderDashboard(); }, toggleAllStageChecks, bulkPrintStageSelected, onGlobalSearchFocus, onGlobalSearchInput, selectBatchFromSearch, closeGlobalSearch };
 })();
 window.App = App;
 
@@ -2105,12 +2057,7 @@ function showAppShell(session) {
             </div>
           </div>
 
-          <div style="display:flex; align-items:center; gap:8px;">
-            <span class="top-badge" id="top-badge-refresh" style="font-size:11px; cursor:pointer; user-select:none;" onclick="App.triggerManualRefresh()" title="Click to refresh current page view now">
-              ⏳ Refreshes in <span id="refresh-timer-countdown" style="font-weight:700;">60</span>s &nbsp;🔄 <strong style="text-decoration:underline;">Refresh Now</strong>
-            </span>
-            <span class="top-badge" id="top-badge-date">${new Date().toLocaleDateString('en-IN', {weekday:'short',day:'numeric',month:'short',year:'numeric'})}</span>
-          </div>
+          <span class="top-badge" id="top-badge-date">${new Date().toLocaleDateString('en-IN', {weekday:'short',day:'numeric',month:'short',year:'numeric'})}</span>
         </header>
         <div id="content" style="padding:28px;"></div>
       </main>

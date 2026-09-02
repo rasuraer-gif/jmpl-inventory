@@ -9,6 +9,11 @@ const StoreModule = (() => {
   let salesCurrentPage = 1;
   const itemsPerPage = 50;
 
+  function escapeHtml(str) {
+    if (!str) return '';
+    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
   // ── FIFO precomputation cache ──────────────────────────────
   function buildFifoPrecomputed() {
     const stageRecords = DB.StageRecords.all();
@@ -186,6 +191,7 @@ const StoreModule = (() => {
         <!-- Tabs -->
         <div class="tabs" id="store-tabs">
           <button class="tab-btn ${activeTab === 'inventory' ? 'active' : ''}" data-tab="inventory">Inventory</button>
+          <button class="tab-btn ${activeTab === 'adjust' ? 'active' : ''}" data-tab="adjust">🛠️ Stock Adjustment &amp; Reconciliation</button>
           <button class="tab-btn ${activeTab === 'upload' ? 'active' : ''}" data-tab="upload">📤 Upload Sales (Excel)</button>
           <button class="tab-btn ${activeTab === 'batches' ? 'active' : ''}" data-tab="batches">Completed Batches</button>
           <button class="tab-btn ${activeTab === 'sales' ? 'active' : ''}" data-tab="sales">Sales History</button>
@@ -195,16 +201,7 @@ const StoreModule = (() => {
 
     document.querySelectorAll('#store-tabs .tab-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        document.querySelectorAll('#store-tabs .tab-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        activeTab = btn.dataset.tab;
-        inventoryCurrentPage = 1;
-        salesCurrentPage = 1;
-        const cont = document.getElementById('store-content');
-        if (cont) {
-          cont.innerHTML = renderTabContent(parts);
-          if (activeTab === 'upload') attachUploadEvents();
-        }
+        switchTab(btn.dataset.tab);
       });
     });
 
@@ -213,8 +210,24 @@ const StoreModule = (() => {
     }
   }
 
+  function switchTab(tab) {
+    activeTab = tab;
+    inventoryCurrentPage = 1;
+    salesCurrentPage = 1;
+    const parts = DB.StoreInventory.allParts();
+    const cont = document.getElementById('store-content');
+    if (cont) {
+      cont.innerHTML = renderTabContent(parts);
+      if (activeTab === 'upload') attachUploadEvents();
+    }
+    document.querySelectorAll('#store-tabs .tab-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.tab === tab);
+    });
+  }
+
   function renderTabContent(parts) {
     if (activeTab === 'inventory') return inventoryTab(parts);
+    if (activeTab === 'adjust')    return adjustTab(parts);
     if (activeTab === 'upload')    return uploadTab();
     if (activeTab === 'batches')   return batchesTab();
     if (activeTab === 'sales')     return salesTab();
@@ -272,9 +285,12 @@ const StoreModule = (() => {
 
     return `
       <div class="card animate-in">
-        <div class="card-header">
-          <h3>Current Inventory</h3>
-          <span class="text-muted text-sm">Qty = Completed Batches &#x2212; Sales (FIFO)</span>
+        <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <h3>Current Inventory</h3>
+            <span class="text-muted text-sm">Qty = Completed Batches &#x2212; Sales (FIFO)</span>
+          </div>
+          <button class="btn btn-warning btn-sm" onclick="StoreModule.switchTab('adjust')">🛠️ Reconcile / Adjust Store Stock</button>
         </div>
         <div class="table-wrap">
           <table class="data-table">
@@ -1150,6 +1166,284 @@ const StoreModule = (() => {
     _salesFilter(false);
   }
 
+  // ── Stock Adjustment Tab & Logic ─────────────────────────
+  let adjustParsedRows = [];
+
+  function adjustTab(parts) {
+    const masterParts = DB.Master ? DB.Master.all() : [];
+    adjustParsedRows = [];
+
+    // Pre-index store parts by jmrefNo and id for 0ms instantaneous lookup
+    const storeMapByJmref = {};
+    const storeMapById = {};
+    (parts || []).forEach(sp => {
+      if (sp.jmrefNo) storeMapByJmref[sp.jmrefNo] = sp;
+      if (sp.id) storeMapById[sp.id] = sp;
+    });
+
+    const rowsHtml = masterParts.map(p => {
+      const storeItem = storeMapByJmref[p.jmrefNo] || storeMapById[p.id];
+      const systemAvailable = storeItem ? storeItem.available : 0;
+
+      return `
+        <tr>
+          <td class="font-bold text-blue">${p.partNo}</td>
+          <td><span class="badge badge-teal">${p.jmrefNo}</span></td>
+          <td class="text-muted text-xs">${escapeHtml(p.description || '—')}</td>
+          <td class="font-bold text-main" id="adj-sys-${p.jmrefNo}">${formatNum(systemAvailable)} pcs</td>
+          <td style="width:180px;">
+            <input type="number" class="form-control form-control-sm adj-phy-input" data-jmref="${p.jmrefNo}" data-partno="${p.partNo}" data-partid="${p.id}" data-sys="${systemAvailable}" 
+              placeholder="Physical Pcs" min="0" style="font-weight:700;" oninput="StoreModule.onAdjQtyChange('${p.jmrefNo}', ${systemAvailable}, this.value)">
+          </td>
+          <td id="adj-badge-${p.jmrefNo}">
+            <span class="text-muted text-xs">No change</span>
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    return `
+      <div class="card animate-in mb-6">
+        <div class="card-header flex justify-between items-center">
+          <div>
+            <h3>🛠️ Store Physical Stock Adjustment &amp; Reconciliation</h3>
+            <p class="text-sm text-muted mt-1">Enter physical store count per JMREF or upload Excel to reconcile system balances</p>
+          </div>
+          <div class="flex gap-2">
+            <button class="btn btn-secondary btn-sm" onclick="StoreModule.downloadAdjustTemplate()">⬇️ Download Excel Template</button>
+            <button class="btn btn-warning" onclick="StoreModule.applyStockAdjustments()">💾 Save &amp; Reconcile Store Stock</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="filter-bar mb-4 p-4" style="background:var(--bg-glass-hover); border-radius:12px; border:1px dashed var(--border); display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px;">
+            <div>
+              <strong style="font-size:13px;">📥 Option A: Bulk Upload Physical Stock via Excel</strong>
+              <p class="text-xs text-muted mb-0">Upload an Excel file with columns: <code>JMREF_No</code>, <code>Physical_Qty</code>, <code>Reason</code></p>
+            </div>
+            <div>
+              <input type="file" id="adj-excel-file" accept=".xlsx, .xls, .csv" style="display:none;" onchange="StoreModule.onAdjExcelSelected(this)">
+              <button class="btn btn-teal btn-sm" onclick="document.getElementById('adj-excel-file').click()">📄 Upload Excel File</button>
+            </div>
+          </div>
+
+          <div class="mb-3 flex justify-between items-center">
+            <h4 class="font-bold text-sm">Option B: Enter Physical Stock per JMREF Directly</h4>
+            <input type="text" class="form-control form-control-sm" style="max-width:280px;" placeholder="Search JMREF or Part No..." oninput="StoreModule.filterAdjustGrid(this.value)">
+          </div>
+
+          <div class="table-wrap" style="max-height:480px; overflow-y:auto;">
+            <table class="data-table" id="adj-grid-table">
+              <thead>
+                <tr>
+                  <th>Part No</th>
+                  <th>JMREF No</th>
+                  <th>Description</th>
+                  <th>Current System Stock</th>
+                  <th>Actual Physical Stock</th>
+                  <th>Variance / Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rowsHtml}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function onAdjQtyChange(jmrefNo, systemQty, physicalVal) {
+    const badgeEl = document.getElementById(`adj-badge-${jmrefNo}`);
+    if (!badgeEl) return;
+
+    if (physicalVal === '' || physicalVal === null || physicalVal === undefined) {
+      badgeEl.innerHTML = `<span class="text-muted text-xs">No change</span>`;
+      return;
+    }
+
+    const physical = Number(physicalVal);
+    const diff = physical - systemQty;
+
+    if (diff === 0) {
+      badgeEl.innerHTML = `<span class="badge badge-green">Exact Match (0)</span>`;
+    } else if (diff > 0) {
+      badgeEl.innerHTML = `<span class="badge badge-amber font-bold">+${formatNum(diff)} pcs (Add to System)</span>`;
+    } else {
+      badgeEl.innerHTML = `<span class="badge badge-red font-bold">${formatNum(diff)} pcs (Deduct Excess)</span>`;
+    }
+  }
+
+  function filterAdjustGrid(val) {
+    const q = (val || '').toLowerCase();
+    const rows = document.querySelectorAll('#adj-grid-table tbody tr');
+    rows.forEach(r => {
+      const txt = r.textContent.toLowerCase();
+      r.style.display = txt.includes(q) ? '' : 'none';
+    });
+  }
+
+  function downloadAdjustTemplate() {
+    const headers = ['JMREF_No', 'Part_No', 'Physical_Stock_Qty', 'Reason'];
+    const rows = (DB.Master ? DB.Master.all() : []).map(p => [
+      p.jmrefNo || '',
+      p.partNo || '',
+      '',
+      'Physical Stock Reconciliation'
+    ]);
+
+    if (typeof window.exportExcel === 'function') {
+      window.exportExcel(headers, rows, 'JMPL_Store_Stock_Adjustment_Template', 'Stock Adjustment');
+    } else if (typeof window.exportCSV === 'function') {
+      window.exportCSV(headers, rows, 'JMPL_Store_Stock_Adjustment_Template');
+    } else {
+      // Direct CSV download fallback
+      const escapeCsv = (val) => {
+        const str = String(val || '');
+        return str.includes(',') || str.includes('"') || str.includes('\n') ? `"${str.replace(/"/g, '""')}"` : str;
+      };
+      const csvStr = '\uFEFF' + [headers.map(escapeCsv).join(','), ...rows.map(r => r.map(escapeCsv).join(','))].join('\n');
+      const blob = new Blob([csvStr], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'JMPL_Store_Stock_Adjustment_Template.csv';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast('Template downloaded successfully', 'success');
+    }
+  }
+
+  function onAdjExcelSelected(input) {
+    const file = input.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        let rows = [];
+        if (typeof XLSX !== 'undefined') {
+          const workbook = XLSX.read(e.target.result, { type: 'binary' });
+          const firstSheet = workbook.SheetNames[0];
+          rows = XLSX.utils.sheet_to_json(workbook.Sheets[firstSheet]);
+        } else {
+          showToast('XLSX parser library unavailable. Please enter physical stock in table.', 'error');
+          return;
+        }
+
+        let updatedCount = 0;
+        rows.forEach(r => {
+          const jmref = String(r.JMREF_No || r.JMREF || r.jmref || '').trim();
+          const phyQty = r.Physical_Stock_Qty ?? r.Physical_Qty ?? r.PhysicalQty ?? r.qty;
+
+          if (jmref && phyQty !== undefined && phyQty !== '') {
+            const inputEl = document.querySelector(`.adj-phy-input[data-jmref="${jmref}"]`);
+            if (inputEl) {
+              inputEl.value = Number(phyQty);
+              const sysQty = Number(inputEl.dataset.sys || 0);
+              onAdjQtyChange(jmref, sysQty, phyQty);
+              updatedCount++;
+            }
+          }
+        });
+
+        showToast(`Parsed ${updatedCount} physical stock counts from Excel`, 'success');
+      } catch (err) {
+        console.error('Excel parse error:', err);
+        showToast('Failed to parse Excel file: ' + err.message, 'error');
+      }
+    };
+    reader.readAsBinaryString(file);
+  }
+
+  async function applyStockAdjustments() {
+    const inputs = document.querySelectorAll('.adj-phy-input');
+    const adjustmentsToApply = [];
+
+    inputs.forEach(inp => {
+      const val = inp.value;
+      if (val !== '' && val !== null && val !== undefined) {
+        const physical = Number(val);
+        const sysQty = Number(inp.dataset.sys || 0);
+        const jmref = inp.dataset.jmref;
+        const partNo = inp.dataset.partno;
+        const partId = inp.dataset.partid;
+        const diff = physical - sysQty;
+
+        if (diff !== 0) {
+          adjustmentsToApply.push({ jmref, partNo, partId, physical, sysQty, diff });
+        }
+      }
+    });
+
+    if (!adjustmentsToApply.length) {
+      showToast('No physical stock changes entered.', 'warning');
+      return;
+    }
+
+    const confirmMsg = `Reconcile ${adjustmentsToApply.length} item(s) to match physical stock counts?\n\n` +
+      adjustmentsToApply.slice(0, 5).map(a => `• ${a.jmref}: System ${a.sysQty} → Physical ${a.physical} (${a.diff > 0 ? '+' : ''}${a.diff})`).join('\n') +
+      (adjustmentsToApply.length > 5 ? `\n...and ${adjustmentsToApply.length - 5} more.` : '');
+
+    if (!confirm(confirmMsg)) return;
+
+    let totalAdded = 0;
+    let totalDeducted = 0;
+
+    adjustmentsToApply.forEach(adj => {
+      const now = new Date();
+      const timeStr = now.toISOString().slice(0,10);
+
+      if (adj.diff > 0) {
+        // Physical count is higher than system stock -> Create store adjustment batch to credit stock
+        const batchNo = `STK-ADJ-${adj.jmref}-${now.getTime().toString().slice(-5)}`;
+        DB.Batches.insert({
+          batchNo,
+          jmrefNo: adj.jmref,
+          partNo: adj.partNo,
+          partId: adj.partId,
+          initialQty: adj.diff,
+          currentStage: 'store',
+          status: 'completed',
+          completedAt: now.toISOString(),
+          notes: `Direct Store Stock Reconciliation: Added +${adj.diff} pcs to match physical count (${adj.physical} pcs)`
+        });
+
+        DB.StageRecords.insert({
+          batchId: batchNo,
+          stage: 'store',
+          inputQty: adj.diff,
+          outputQty: adj.diff,
+          lossQty: 0,
+          date: timeStr,
+          timestamp: now.toISOString(),
+          notes: `Stock Reconciliation Credit`
+        });
+
+        totalAdded += adj.diff;
+      } else {
+        // Physical count is lower than system stock -> Record sales/reconciliation debit for difference
+        const debitQty = Math.abs(adj.diff);
+        DB.Sales.insert({
+          date: timeStr,
+          saleDate: timeStr,
+          jmrefNo: adj.jmref,
+          partNo: adj.partNo,
+          partId: adj.partId,
+          qty: debitQty,
+          notes: `Direct Store Stock Reconciliation: Deducted -${debitQty} pcs to match physical count (${adj.physical} pcs)`
+        });
+
+        totalDeducted += debitQty;
+      }
+    });
+
+    showToast(`Store stock successfully reconciled! Added: ${totalAdded} pcs, Deducted: ${totalDeducted} pcs.`, 'success');
+    render();
+  }
+
   return {
     render,
     downloadTemplate,
@@ -1160,9 +1454,15 @@ const StoreModule = (() => {
     filterCompletedBatches,
     fifoBatches,
     fifoAvailable,
+    switchTab,
     changePage,
     changePageInventory,
-    changePageSales
+    changePageSales,
+    onAdjQtyChange,
+    filterAdjustGrid,
+    downloadAdjustTemplate,
+    onAdjExcelSelected,
+    applyStockAdjustments
   };
 })();
 window.StoreModule = StoreModule;

@@ -2707,6 +2707,15 @@ const ReportsModule = (() => {
         </select>
       </div>`;
 
+    const auditSessionTitleFilter = `
+      <div class="form-group mb-0">
+        <label class="form-label">Audit Session Title</label>
+        <select class="form-control" id="rpt-audit-session">
+          <option value="">All Audit Sessions</option>
+          ${(typeof DB !== 'undefined' && DB.AuditSessions ? DB.AuditSessions.all() : []).map(s => `<option value="${s.id}">${s.title || s.id} (${(s.startedAt || '').slice(0, 10)})</option>`).join('')}
+        </select>
+      </div>`;
+
     const filterMap = {
       reprocess: [jmrefFilter, reprocessDestFilter, reprocessChildStatusFilter, dateRange].join(''),
       inventory: jmrefFilter,
@@ -2735,6 +2744,7 @@ const ReportsModule = (() => {
       'store-aging': jmrefFilter,
       'daily-summary': dateRange,
       'analytics': dateRange,
+      'stock-audit': [auditSessionTitleFilter, dateRange, jmrefFilter].join('')
     };
     return filterMap[report] || '';
   }
@@ -3008,6 +3018,157 @@ const ReportsModule = (() => {
     return { html, headers, dataRows };
   }
 
+  // ── Stock Audit Discrepancy & Reconciliation Report ─────────
+  function renderStockAuditReport(filters) {
+    if (typeof DB === 'undefined' || !DB.AuditSessions) {
+      return emptyState('Stock Audit data unavailable.');
+    }
+
+    let sessions = DB.AuditSessions.all();
+
+    if (filters && filters.auditSessionId) {
+      sessions = sessions.filter(s => s.id === filters.auditSessionId);
+    }
+    if (filters && filters.from) {
+      sessions = sessions.filter(s => (s.startedAt || '').slice(0, 10) >= filters.from);
+    }
+    if (filters && filters.to) {
+      sessions = sessions.filter(s => (s.startedAt || '').slice(0, 10) <= filters.to);
+    }
+
+    if (!sessions || sessions.length === 0) {
+      return emptyState('No stock audit sessions found matching the selected criteria.');
+    }
+
+    const masterMap = {};
+    if (DB.Master) {
+      DB.Master.all().forEach(m => { masterMap[m.jmrefNo] = m; });
+    }
+
+    let totalSessions = sessions.length;
+    let totalVerifiedBatches = 0;
+    let totalVerifiedQty = 0;
+    let totalExpectedQty = 0;
+    let netVarianceQty = 0;
+    let netVarianceValue = 0;
+    let totalExactMatches = 0;
+
+    const dataRows = [];
+
+    sessions.forEach(s => {
+      let records = DB.AuditRecords.bySession(s.id);
+
+      if (filters && filters.jmref) {
+        const q = filters.jmref.toLowerCase();
+        records = records.filter(r => 
+          (r.batchNo || '').toLowerCase().includes(q) ||
+          (r.jmrefNo || '').toLowerCase().includes(q) ||
+          (r.partNo || '').toLowerCase().includes(q)
+        );
+      }
+
+      totalVerifiedBatches += records.length;
+
+      let sessionCounted = 0;
+      let sessionExpected = 0;
+      let sessionVariance = 0;
+      let sessionValue = 0;
+
+      records.forEach(r => {
+        const counted = Number(r.countedQty || 0);
+        const expected = Number(r.expectedQty || 0);
+        const diff = Number(r.varianceQty || (counted - expected));
+
+        sessionCounted += counted;
+        sessionExpected += expected;
+        sessionVariance += diff;
+
+        const part = masterMap[r.jmrefNo] || {};
+        const price = Number(part.salePrice || part.standardCost || 0);
+        sessionValue += (diff * price);
+
+        if (r.verificationStatus === 'verified_match') totalExactMatches++;
+      });
+
+      totalVerifiedQty += sessionCounted;
+      totalExpectedQty += sessionExpected;
+      netVarianceQty += sessionVariance;
+      netVarianceValue += sessionValue;
+
+      const stageScopeName = s.stageScope === 'all' ? 'All Factory & Store' : (STAGE_LABELS[s.stageScope] || s.stageScope);
+
+      dataRows.push([
+        s.title || s.id,
+        stageScopeName,
+        s.status === 'in_progress' ? 'Active' : 'Closed',
+        s.auditorName || '—',
+        formatDate(s.startedAt),
+        records.length,
+        formatNum(sessionExpected),
+        formatNum(sessionCounted),
+        (sessionVariance > 0 ? '+' : '') + formatNum(sessionVariance),
+        (sessionValue >= 0 ? '+' : '') + '₹' + formatNum(Math.round(sessionValue))
+      ]);
+    });
+
+    const headers = ['Audit Session Title', 'Stage Scope', 'Status', 'Auditor', 'Start Date', 'Batches Verified', 'Expected Pcs', 'Counted Pcs', 'Net Variance (Pcs)', 'Net Variance Value (₹)'];
+
+    const summaryCards = `
+      <div class="stats-grid mb-6" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:16px;">
+        <div class="stat-card">
+          <div class="stat-label">Total Audit Sessions</div>
+          <div class="stat-value text-blue">${totalSessions}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Total Verified Batches</div>
+          <div class="stat-value text-teal">${formatNum(totalVerifiedBatches)}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Physical Counted Stock</div>
+          <div class="stat-value text-success">${formatNum(totalVerifiedQty)} pcs</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Net Financial Discrepancy</div>
+          <div class="stat-value ${netVarianceValue < 0 ? 'text-danger' : (netVarianceValue > 0 ? 'text-warning' : 'text-muted')}">
+            ${netVarianceValue >= 0 ? '+' : ''}₹${formatNum(Math.round(netVarianceValue))}
+          </div>
+        </div>
+      </div>
+    `;
+
+    const html = `
+      ${summaryCards}
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr>
+          </thead>
+          <tbody>
+            ${dataRows.map(r => `
+              <tr>
+                <td class="font-bold text-blue">${r[0]}</td>
+                <td>${r[1]}</td>
+                <td><span class="badge ${r[2] === 'Active' ? 'badge-green' : 'badge-gray'}">${r[2]}</span></td>
+                <td>${r[3]}</td>
+                <td class="text-xs text-muted">${r[4]}</td>
+                <td class="font-semibold">${r[5]}</td>
+                <td>${r[6]}</td>
+                <td class="font-bold text-success">${r[7]}</td>
+                <td class="${String(r[8]).startsWith('-') ? 'text-danger font-bold' : (String(r[8]).startsWith('+') ? 'text-warning font-bold' : 'text-muted')}">${r[8]}</td>
+                <td class="font-semibold">${r[9]}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    return { html, headers, dataRows };
+  }
+
+  const savedFilters = {};
+  const savedResults = {};
+
   // ── Collect Filters ────────────────────────────────────────
   function collectFilters() {
     const g = id => (document.getElementById(id) || {}).value || '';
@@ -3024,56 +3185,76 @@ const ReportsModule = (() => {
       prodType: g('rpt-prod-type'),
       subcontractorId: g('rpt-subcontractor'),
       vendorId: g('rpt-vendor'),
+      auditSessionId: g('rpt-audit-session'),
     };
   }
 
-  // ── Run Report ─────────────────────────────────────────────
+  function restoreSavedFilters(reportKey) {
+    const saved = savedFilters[reportKey];
+    if (!saved) return;
+
+    const setVal = (id, val) => {
+      const el = document.getElementById(id);
+      if (el && val !== undefined && val !== null && val !== '') el.value = val;
+    };
+
+    setVal('rpt-from', saved.from);
+    setVal('rpt-to', saved.to);
+    setVal('rpt-jmref', saved.jmref);
+    setVal('rpt-partno', saved.partNo);
+    setVal('rpt-operator', saved.operatorId);
+    setVal('rpt-rejection-rate', saved.rejectionRate);
+    setVal('rpt-reprocess-dest', saved.reprocessDestination);
+    setVal('rpt-reprocess-child-status', saved.childStatus);
+    setVal('rpt-pending-stage', saved.pendingStage);
+    setVal('rpt-pending-timeframe', saved.pendingTimeframe);
+    setVal('rpt-prod-type', saved.prodType);
+    setVal('rpt-subcontractor', saved.subcontractorId);
+    setVal('rpt-vendor', saved.vendorId);
+    setVal('rpt-audit-session', saved.auditSessionId);
+  }
+
+  function restoreSavedResult(reportKey) {
+    const saved = savedResults[reportKey];
+    if (!saved || !saved.result) return false;
+
+    const output = document.getElementById('report-output');
+    if (!output) return false;
+
+    const result = saved.result;
+    const filters = saved.filters || {};
+
+    if (typeof result === 'string') {
+      output.innerHTML = result;
+      return true;
+    }
+
+    output.dataset.headers = JSON.stringify(result.headers || []);
+    output.dataset.rows    = JSON.stringify(result.dataRows || []);
+    output.dataset.filters = JSON.stringify(filters || {});
+
+    paginateReportTables(output, result.html);
+
+    if (result.onRender) {
+      setTimeout(() => result.onRender(), 50);
+    }
+    return true;
+  }
+
+  // ── Run Report (Instant Generation & Background Sync) ─────
   async function runReport(reportKey) {
     const filters = collectFilters();
+    savedFilters[reportKey] = filters;
 
-    // Fetch historical batches on-demand if online and DB method is available
+    // Run background pre-fetch asynchronously without blocking report generation
     const reportsWithDateRange = [
       'reprocess', 'sales', 'production', 'cryogenic', 'deflashing', 'trimming',
       'post-curing', 'waiting-visual', 'visual', 'gauge', 'rejected', 'recheck',
       'sub-pending', 'sub-performance', 'qty-gain', 'qty-loss', 'op-efficiency',
       'cycle-time', 'sub-vs-inhouse', 'daily-summary', 'analytics'
     ];
-    const needsDateFetch = reportsWithDateRange.includes(reportKey);
-
-    const runBtn = document.getElementById('rpt-run-btn');
-    const originalText = runBtn ? runBtn.textContent : '🔍 Generate Report';
-
-    if (runBtn) {
-      const allStageRecs = (typeof DB !== 'undefined' && DB.StageRecords) ? DB.StageRecords.all() || [] : [];
-      const referencedBatchIds = [...new Set(allStageRecs.map(r => r.batchId).filter(Boolean))];
-      const missingIds = (typeof DB !== 'undefined' && DB.Batches) 
-        ? referencedBatchIds.filter(id => !DB.Batches.all().some(b => b.id === id) && !DB.Batches.find(id)) 
-        : [];
-
-      const shouldFetchDate = needsDateFetch && typeof DB !== 'undefined' && DB.Batches && DB.Batches.fetchByDateRange;
-      const shouldFetchMissing = missingIds.length > 0 && typeof DB !== 'undefined' && DB.Batches && DB.Batches.fetchByIds;
-
-      if (shouldFetchDate || shouldFetchMissing) {
-        runBtn.disabled = true;
-        runBtn.textContent = '⏳ Loading...';
-        try {
-          if (shouldFetchDate) {
-            await DB.Batches.fetchByDateRange(filters.from, filters.to);
-          }
-          // Re-evaluate missingIds after fetchByDateRange has run
-          const remainingMissingIds = shouldFetchMissing 
-            ? missingIds.filter(id => !DB.Batches.all().some(b => b.id === id) && !DB.Batches.find(id)) 
-            : [];
-          if (remainingMissingIds.length > 0) {
-            await DB.Batches.fetchByIds(remainingMissingIds);
-          }
-        } catch (err) {
-          console.error("Failed to pre-fetch batches:", err);
-        } finally {
-          runBtn.disabled = false;
-          runBtn.textContent = originalText;
-        }
-      }
+    if (reportsWithDateRange.includes(reportKey) && typeof DB !== 'undefined' && DB.Batches && DB.Batches.fetchByDateRange) {
+      DB.Batches.fetchByDateRange(filters.from, filters.to).catch(e => console.warn('Async batch fetch:', e));
     }
 
     let result;
@@ -3111,6 +3292,13 @@ const ReportsModule = (() => {
       case 'stock-audit':     result = renderStockAuditReport(filters); break;
       default: result = emptyState('Unknown report');
     }
+
+    // Save generated result in memory for instant restoration
+    savedResults[reportKey] = {
+      result,
+      filters,
+      timestamp: new Date().toISOString()
+    };
 
     const output = document.getElementById('report-output');
     if (!output) return;
@@ -3216,6 +3404,20 @@ const ReportsModule = (() => {
       </div>`;
 
     document.getElementById('rpt-run-btn')?.addEventListener('click', () => runReport(reportKey));
+
+    // Listen to input changes to persist filter selections
+    const filterContainer = document.getElementById('rpt-filters');
+    if (filterContainer) {
+      filterContainer.addEventListener('input', () => saveCurrentFilters(reportKey));
+      filterContainer.addEventListener('change', () => saveCurrentFilters(reportKey));
+    }
+
+    // Restore previously selected filter inputs
+    restoreSavedFilters(reportKey);
+
+    // Restore previously generated report output if available
+    restoreSavedResult(reportKey);
+
     document.getElementById('rpt-export-csv')?.addEventListener('click', () => {
       const out = document.getElementById('report-output');
       if (!out?.dataset.headers) { showToast('Generate the report first', 'warning'); return; }
@@ -3966,5 +4168,8 @@ const ReportsModule = (() => {
     if (el) el.remove();
   }
 
-  return { render, filterAging, showPartBatches, closePartBatches };
+  window.exportCSV = exportCSV;
+  window.exportExcel = exportExcel;
+
+  return { render, filterAging, showPartBatches, closePartBatches, exportCSV, exportExcel };
 })();
