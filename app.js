@@ -509,13 +509,7 @@ function bulkPrintBarcodes(ids) {
         window.onload = function() {
           renderAllQRs();
         };
-      </script>ose();
-          }, 500);
-        }
-        window.onload = function() {
-          setTimeout(triggerPrint, 2500);
-        };
-      <\/script>
+      </script>
     </body>
     </html>
   `);
