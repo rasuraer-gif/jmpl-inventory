@@ -522,18 +522,18 @@ const DeliveryChallanModule = (() => {
     // Save DC Document
     const newDC = DB.DeliveryChallans.insert({
       dcNo,
-      vendorId: selectedVendorId,
-      vendorName: vendor.name,
-      department: vendor.department,
+      vendorId: selectedVendorId || '',
+      vendorName: vendor.name || '',
+      department: vendor.department || '',
       batches: challanItems.map(item => ({
-        batchId: item.batch.id,
-        batchNo: item.batch.batchNo,
-        partNo: item.batch.partNo,
-        jmrefNo: item.batch.jmrefNo,
-        qty: item.qty,
-        sourceStage: item.batch.currentStage
+        batchId: item.batch.id || '',
+        batchNo: item.batch.batchNo || '',
+        partNo: item.batch.partNo || '',
+        jmrefNo: item.batch.jmrefNo || '',
+        qty: Number(item.qty || 0),
+        sourceStage: item.batch.currentStage || ''
       })),
-      totalQty: challanItems.reduce((s,i)=>s+i.qty, 0),
+      totalQty: challanItems.reduce((s,i) => s + Number(i.qty || 0), 0),
       createdAt: new Date().toISOString(),
       createdBy: session?.userId || 'unknown'
     });

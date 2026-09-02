@@ -185,25 +185,6 @@ const DB = (() => {
           if (hasChanges) {
             cache[table] = list;
             saveLocal(table);
-
-            // If the data changed and the app is already loaded, trigger a live UI update
-            if (window.App && typeof App.current === 'string') {
-              const modalOpen = document.querySelector('.modal-overlay:not(.hidden)');
-              const isTyping = document.activeElement && 
-                               (document.activeElement.tagName === 'INPUT' || 
-                                document.activeElement.tagName === 'TEXTAREA');
-              
-              const isProductionCreate = App.current === 'production' && 
-                                         typeof ProductionModule !== 'undefined' && 
-                                         ProductionModule.activeTab === 'create';
-
-              if (!modalOpen && !isTyping && !window.preventAutoRefresh && !App.current.startsWith('report') && App.current !== 'daily-analysis' && !isProductionCreate) {
-                if (refreshTimeout) clearTimeout(refreshTimeout);
-                refreshTimeout = setTimeout(() => {
-                  App.navigate(App.current);
-                }, 300);
-              }
-            }
           }
         }, err => {
           console.warn(`Firestore listener error on table "${table}":`, err.message);
@@ -640,12 +621,32 @@ const DB = (() => {
     }
   }
 
+  function sanitizeFirestoreDoc(obj) {
+    if (!obj || typeof obj !== 'object') return obj;
+    if (Array.isArray(obj)) {
+      return obj.map(item => sanitizeFirestoreDoc(item));
+    }
+    const clean = {};
+    for (const key of Object.keys(obj)) {
+      const val = obj[key];
+      if (val === undefined) {
+        clean[key] = null;
+      } else if (val !== null && typeof val === 'object' && !(val instanceof Date)) {
+        clean[key] = sanitizeFirestoreDoc(val);
+      } else {
+        clean[key] = val;
+      }
+    }
+    return clean;
+  }
+
   function insert(table, record) {
     const id = record.id || genId();
     const row = { 
       ...record, 
       id, 
-      createdAt: record.createdAt || new Date().toISOString() 
+      createdAt: record.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString()
     };
 
     // Update local cache & store
@@ -654,7 +655,7 @@ const DB = (() => {
 
     // Save to Firestore asynchronously
     if (db) {
-      const docData = { ...row };
+      const docData = sanitizeFirestoreDoc({ ...row });
       delete docData.id;
       db.collection(table).doc(id).set(docData).catch(err => {
         console.error(`Firebase insert error on ${table}/${id}:`, err);
@@ -680,7 +681,7 @@ const DB = (() => {
 
     // Save to Firestore asynchronously
     if (db) {
-      const docData = { ...updatedRow };
+      const docData = sanitizeFirestoreDoc({ ...updatedRow });
       delete docData.id;
       db.collection(table).doc(id).set(docData).catch(err => {
         console.error(`Firebase update error on ${table}/${id}:`, err);
