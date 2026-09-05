@@ -132,6 +132,16 @@ const PostCuringModule = (() => {
         return b && b.batchNo.toLowerCase().includes(q);
       });
     }
+
+    list.sort((a, b) => {
+      const bObj = DB.Batches.find(b.batchId) || {};
+      const aObj = DB.Batches.find(a.batchId) || {};
+      const dateA = a.timestamp || a.date || aObj.receivedAt || aObj.createdAt || '';
+      const dateB = b.timestamp || b.date || bObj.receivedAt || bObj.createdAt || '';
+      const dateCompare = dateB.localeCompare(dateA);
+      if (dateCompare !== 0) return dateCompare;
+      return (bObj.batchNo || '').localeCompare(aObj.batchNo || '', undefined, { numeric: true, sensitivity: 'base' });
+    });
     if (!list.length && !historySearch) return '<div class="card card-body"><div class="empty-state"><div class="empty-icon">&#128196;</div><p>No post curing history found</p></div></div>';
 
     const totalItems = list.length;

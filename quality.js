@@ -496,7 +496,8 @@ const QualityModule = (() => {
     const inputQty = parseInt(document.getElementById('qf-reject-input-qty').value)||0;
     const reason = document.getElementById('qf-reject-reason').value.trim();
     const session = Auth.getSession();
-    DB.RejectionTracker.insert({ batchId, stage:'quality', qty:inputQty, date:new Date().toISOString(), reason, rejectedBy:session&&session.userId });
+    const batch = DB.Batches.find(batchId) || {};
+    DB.RejectionTracker.insert({ batchId, batchNo: batch.batchNo||'', jmrefNo: batch.jmrefNo||'', partNo: batch.partNo||'', stage:'quality', qty:inputQty, date:new Date().toISOString(), reason, rejectedBy:session&&session.userId });
     DB.Batches.update(batchId, { status:'rejected' });
     document.getElementById('qf-reject-modal').classList.add('hidden');
     showToast('Batch rejected and recorded', 'success');

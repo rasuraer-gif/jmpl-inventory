@@ -306,7 +306,13 @@ const ProductionModule = (() => {
   }
 
   function completedTab() {
-    const batches = DB.Batches.byStatus('completed');
+    const batches = DB.Batches.byStatus('completed').sort((a, b) => {
+      const dateA = a.createdAt || a.date || a.completedAt || '';
+      const dateB = b.createdAt || b.date || b.completedAt || '';
+      const dateCompare = dateB.localeCompare(dateA);
+      if (dateCompare !== 0) return dateCompare;
+      return (b.batchNo || '').localeCompare(a.batchNo || '', undefined, { numeric: true, sensitivity: 'base' });
+    });
     if (!batches.length) return `<div class="card card-body"><div class="empty-state"><div class="empty-icon">&#9989;</div><p>No completed batches yet</p></div></div>`;
     
     const totalItems = batches.length;

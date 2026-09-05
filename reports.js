@@ -24,11 +24,79 @@ const ReportsModule = (() => {
 
   function filterByDateRange(rows, dateField, from, to) {
     return rows.filter(r => {
-      const d = (r[dateField] || '').slice(0,10);
+      const d = (r[dateField] || r.productionDate || r.createdAt || r.date || '').slice(0,10);
       if (from && d < from) return false;
       if (to   && d > to)   return false;
       return true;
     });
+  }
+
+  function isRawId(val) {
+    if (!val || typeof val !== 'string') return true;
+    return /^[a-z0-9]{10,}$/.test(val) && !val.includes('-') && !val.includes(' ');
+  }
+
+  function resolveBatchDetails(r) {
+    if (!r) return { batchNo: '—', jmrefNo: '—', partNo: '—' };
+
+    let batch = DB.Batches.find(r.batchId) || DB.Batches.all().find(b => b.id === r.batchId || b.batchNo === r.batchId);
+    
+    if (!batch && r.batchId) {
+      const stageRec = DB.StageRecords.all().find(sr => sr.id === r.batchId);
+      if (stageRec && stageRec.batchId) {
+        batch = DB.Batches.find(stageRec.batchId) || DB.Batches.all().find(b => b.id === stageRec.batchId || b.batchNo === stageRec.batchId);
+      }
+    }
+
+    let parentBatch = null;
+    if (batch) {
+      if (batch.parentBatchId) {
+        parentBatch = DB.Batches.find(batch.parentBatchId) || DB.Batches.all().find(b => b.id === batch.parentBatchId || b.batchNo === batch.parentBatchId);
+      } else if (batch.parentBatchNo) {
+        parentBatch = DB.Batches.all().find(b => b.batchNo === batch.parentBatchNo);
+      }
+    }
+    if (!parentBatch && r.parentBatchNo) {
+      parentBatch = DB.Batches.all().find(b => b.batchNo === r.parentBatchNo);
+    }
+
+    let batchNoText = '';
+    let parentNoText = '';
+
+    if (batch && batch.batchNo && !isRawId(batch.batchNo)) {
+      batchNoText = batch.batchNo;
+    } else if (r.batchNo && !isRawId(r.batchNo)) {
+      batchNoText = r.batchNo;
+    }
+
+    if (parentBatch && parentBatch.batchNo && !isRawId(parentBatch.batchNo)) {
+      parentNoText = parentBatch.batchNo;
+    } else if (r.parentBatchNo && !isRawId(r.parentBatchNo)) {
+      parentNoText = r.parentBatchNo;
+    }
+
+    // Always prioritize displaying Parent Batch No for reprocess batches
+    let displayBatchNo = '—';
+    if (parentNoText) {
+      displayBatchNo = parentNoText;
+    } else if (batchNoText && batchNoText.toUpperCase().includes('-REP')) {
+      displayBatchNo = batchNoText.replace(/-REP.*$/i, '');
+    } else if (batchNoText) {
+      displayBatchNo = batchNoText;
+    } else {
+      const anyBatch = DB.Batches.all().find(b => b.id === r.batchId || b.id === r.batchNo || b.parentBatchId === r.batchId);
+      if (anyBatch && anyBatch.batchNo && !isRawId(anyBatch.batchNo)) {
+        displayBatchNo = anyBatch.batchNo.replace(/-REP.*$/i, '');
+      } else {
+        const jm = (batch && batch.jmrefNo) || (parentBatch && parentBatch.jmrefNo) || r.jmrefNo;
+        displayBatchNo = jm ? `Batch (${jm})` : '—';
+      }
+    }
+
+    const jmrefNo = (batch && batch.jmrefNo) || (parentBatch && parentBatch.jmrefNo) || r.jmrefNo || '—';
+    const partNo = (batch && batch.partNo) || (parentBatch && parentBatch.partNo) || r.partNo || '—';
+
+    return { batchNo: displayBatchNo, jmrefNo, partNo, batch, parentBatch };
   }
 
   function emptyState(msg='No records found for the selected filters.') {
@@ -729,12 +797,22 @@ const ReportsModule = (() => {
 
   // ── Generic Stage Loss Report ──────────────────────────────
   function renderStageLoss(stage, filters, extraCols=[]) {
-    const { from, to, jmref, vendorId, rejectionRate } = filters;
+    const { from, to, jmref, vendorId, rejectionRate, prodType } = filters;
     let records = DB.StageRecords.all().filter(r => r.stage === stage);
     if (stage === 'visual') {
       records = records.filter(r => r.inspectorName);
     }
     
+    if (prodType) {
+      records = records.filter(r => {
+        const batch = DB.Batches.find(r.batchId) || {};
+        const bType = batch.productionType || (batch.subcontractorId ? 'subcontractor' : 'inhouse');
+        if (prodType === 'inhouse') return bType === 'inhouse';
+        if (prodType === 'subcontractor') return bType === 'subcontractor';
+        return true;
+      });
+    }
+
     if (vendorId) {
       records = records.filter(r => r.vendorId === vendorId);
     }
@@ -788,7 +866,11 @@ const ReportsModule = (() => {
 
     const headers = ['#','Batch No','JMREF','Part No','Input Qty','Output Qty','Loss Qty','% Loss / Defect','Date', ...extraCols];
     const dataRows = records.map((r, i) => {
-      const batch = DB.Batches.find(r.batchId) || {};
+      const details = resolveBatchDetails(r);
+      const displayBatchNo = details.batchNo.replace(/<[^>]*>/g, ''); // Plain text for export
+      const displayJmref = details.jmrefNo;
+      const displayPartNo = details.partNo;
+
       const extra = extraCols.map(col => {
         if (col === 'Inspector') return r.inspectorName || '-';
         if (col === 'Reprocess Qty') return r.reprocessQty || 0;
@@ -807,7 +889,7 @@ const ReportsModule = (() => {
       const reprocess = r.reprocessQty || 0;
       const totalDefects = Math.max(loss + reprocess, Math.max(0, input - (r.outputQty || 0)));
       const pct = input ? ((totalDefects / input) * 100).toFixed(1) + '%' : '0.0%';
-      return [i+1, batch.batchNo||'', batch.jmrefNo||'', batch.partNo||'', input, r.outputQty||'', loss, pct, (r.date||'').slice(0,10), ...extra];
+      return [i+1, displayBatchNo, displayJmref, displayPartNo, input, r.outputQty||'', loss, pct, (r.date||'').slice(0,10), ...extra];
     });
 
     const totalLoss = records.reduce((s, r) => s + (r.lossQty||0), 0);
@@ -825,7 +907,11 @@ const ReportsModule = (() => {
     dataRows.push(summaryRow);
 
     const htmlRows = records.map((r, i) => {
-      const batch = DB.Batches.find(r.batchId) || {};
+      const details = resolveBatchDetails(r);
+      const displayBatchNo = details.batchNo;
+      const displayJmref = details.jmrefNo;
+      const displayPartNo = details.partNo;
+
       const input = r.inputQty || 0;
       const loss = r.lossQty || 0;
       const reprocess = r.reprocessQty || 0;
@@ -857,9 +943,9 @@ const ReportsModule = (() => {
       return `
         <tr>
           <td>${i + 1}</td>
-          <td class="font-semibold text-blue">${batch.batchNo || '—'}</td>
-          <td><span class="badge badge-teal">${batch.jmrefNo || '—'}</span></td>
-          <td>${batch.partNo || '—'}</td>
+          <td class="font-semibold text-blue">${displayBatchNo}</td>
+          <td><span class="badge badge-teal">${displayJmref}</span></td>
+          <td>${displayPartNo}</td>
           <td>${formatNum(input)}</td>
           <td class="font-semibold text-success">${formatNum(r.outputQty || 0)}</td>
           <td class="${loss > 0 ? 'text-danger font-semibold' : 'text-muted'}">${formatNum(loss)}</td>
@@ -1035,13 +1121,26 @@ const ReportsModule = (() => {
       rejections = filterByDateRange(rejections, 'date', from, to);
     }
 
+    const allBatches = (typeof DB !== 'undefined' && DB.Batches && DB.Batches.allIncludeArchived) 
+      ? DB.Batches.allIncludeArchived() 
+      : ((typeof DB !== 'undefined' && DB.raw) ? DB.raw.getAll('batches') : DB.Batches.all());
+    
+    const batchMap = new Map();
+    allBatches.forEach(b => {
+      if (b.id) batchMap.set(b.id, b);
+      if (b.batchNo) batchMap.set(b.batchNo, b);
+    });
+
     if (jmref) {
       const q = jmref.toLowerCase();
       rejections = rejections.filter(r => {
-        const batch = DB.Batches.find(r.batchId) || {};
-        return (batch.batchNo || '').toLowerCase().includes(q) ||
-               (batch.jmrefNo || '').toLowerCase().includes(q) ||
-               (batch.partNo || '').toLowerCase().includes(q);
+        const batch = batchMap.get(r.batchId) || DB.Batches.find(r.batchId) || {};
+        const bNo = batch.batchNo || r.batchNo || (typeof r.batchId === 'string' && r.batchId.includes('-') ? r.batchId : '');
+        const jNo = batch.jmrefNo || r.jmrefNo || '';
+        const pNo = batch.partNo || r.partNo || '';
+        return bNo.toLowerCase().includes(q) ||
+               jNo.toLowerCase().includes(q) ||
+               pNo.toLowerCase().includes(q);
       });
     }
 
@@ -1049,7 +1148,11 @@ const ReportsModule = (() => {
     const headers = ['#','Batch No','JMREF','Part No','Stage','Qty','Reason','Rejected By','Date & Time'];
     const users = DB.Users.all();
     const dataRows = rejections.map((r, i) => {
-      const batch = DB.Batches.find(r.batchId) || {};
+      const batch = batchMap.get(r.batchId) || DB.Batches.find(r.batchId) || {};
+      const batchNo = batch.batchNo || r.batchNo || (typeof r.batchId === 'string' && r.batchId.includes('-') ? r.batchId : '—');
+      const jmrefNo = batch.jmrefNo || r.jmrefNo || '—';
+      const partNo = batch.partNo || r.partNo || '—';
+
       const user = users.find(u => u.id === r.rejectedBy) || {};
       let dateTimeStr = '—';
       if (r.date) {
@@ -1070,7 +1173,7 @@ const ReportsModule = (() => {
           dateTimeStr = r.date;
         }
       }
-      return [i+1, batch.batchNo||'', batch.jmrefNo||'', batch.partNo||'', STAGE_LABELS[r.stage]||r.stage, r.qty||'', r.reason||'', user.name||'-', dateTimeStr];
+      return [i+1, batchNo, jmrefNo, partNo, STAGE_LABELS[r.stage]||r.stage, r.qty||'', r.reason||'', user.name||'-', dateTimeStr];
     });
     const totalQty = rejections.reduce((s, r) => s + (r.qty||0), 0);
     const summaryRow = ['', '', '', 'TOTAL:', '', totalQty, '', '', ''];
@@ -1090,14 +1193,28 @@ const ReportsModule = (() => {
     rechecks = filterByDateRange(rechecks, 'date', from, to);
 
     if (!rechecks.length) return emptyState();
+
+    const allBatches = (typeof DB !== 'undefined' && DB.Batches && DB.Batches.allIncludeArchived) 
+      ? DB.Batches.allIncludeArchived() 
+      : ((typeof DB !== 'undefined' && DB.raw) ? DB.raw.getAll('batches') : DB.Batches.all());
+    
+    const batchMap = new Map();
+    allBatches.forEach(b => {
+      if (b.id) batchMap.set(b.id, b);
+      if (b.batchNo) batchMap.set(b.batchNo, b);
+    });
+
     const users = DB.Users.all();
     const headers = ['#','Batch No','JMREF','Sent To Stage','Qty','Loss At QF','% Loss','Recheck #','Recorded By','Date'];
     const dataRows = rechecks.map((r, i) => {
-      const batch = DB.Batches.find(r.batchId) || {};
+      const batch = batchMap.get(r.batchId) || DB.Batches.find(r.batchId) || {};
+      const batchNo = batch.batchNo || r.batchNo || (typeof r.batchId === 'string' && r.batchId.includes('-') ? r.batchId : '—');
+      const jmrefNo = batch.jmrefNo || r.jmrefNo || '—';
+
       const user = users.find(u => u.id === r.recordedBy) || {};
       const totalBefore = r.qty + r.lossQty;
       const pct = totalBefore ? ((r.lossQty / totalBefore) * 100).toFixed(1) + '%' : '0.0%';
-      return [i+1, batch.batchNo||'', batch.jmrefNo||'', STAGE_LABELS[r.toStage]||r.toStage, r.qty||0, r.lossQty||0, pct, r.recheckNo||1, user.name||'-', (r.date||'').slice(0,10)];
+      return [i+1, batchNo, jmrefNo, STAGE_LABELS[r.toStage]||r.toStage, r.qty||0, r.lossQty||0, pct, r.recheckNo||1, user.name||'-', (r.date||'').slice(0,10)];
     });
     const totalQty = rechecks.reduce((s, r) => s + (r.qty||0), 0);
     const totalLoss = rechecks.reduce((s, r) => s + (r.lossQty||0), 0);
@@ -2545,6 +2662,16 @@ const ReportsModule = (() => {
         <label class="form-label">To Date</label>
         <input type="date" class="form-control" id="rpt-to">
       </div>`;
+
+    const prodDateRange = `
+      <div class="form-group mb-0">
+        <label class="form-label">Production From Date</label>
+        <input type="date" class="form-control" id="rpt-from">
+      </div>
+      <div class="form-group mb-0">
+        <label class="form-label">Production To Date</label>
+        <input type="date" class="form-control" id="rpt-to">
+      </div>`;
     const jmrefFilter = `
       <div class="form-group mb-0">
         <label class="form-label">JMREF / Part No</label>
@@ -2727,13 +2854,15 @@ const ReportsModule = (() => {
       trimming:  [jmrefFilter, vendorFilter, dateRange].join(''),
       'post-curing':[jmrefFilter, dateRange].join(''),
       'waiting-visual':[jmrefFilter, dateRange].join(''),
-      visual:    [jmrefFilter, rejectionRateFilter, dateRange].join(''),
+      visual:    [jmrefFilter, prodTypeFilter, rejectionRateFilter, dateRange].join(''),
       gauge:     [jmrefFilter, dateRange].join(''),
       rejected:  [jmrefFilter, dateRange].join(''),
       recheck:   [opFilter, dateRange].join(''),
       'pending-batches': [pendingStageFilter, pendingTimeframeFilter].join(''),
-      'sub-pending': [subcontractorFilter, jmrefFilter, dateRange].join(''),
-      'sub-performance': dateRange,
+      'sub-pending': [subcontractorFilter, jmrefFilter, prodDateRange].join(''),
+      'sub-batches': [subcontractorFilter, jmrefFilter, prodDateRange].join(''),
+      'sub-performance': prodDateRange,
+      'sub-vs-inhouse': prodDateRange,
       'qty-gain': [jmrefFilter, dateRange].join(''),
       'qty-loss': [jmrefFilter, dateRange].join(''),
       'op-efficiency': dateRange,
@@ -3166,6 +3295,145 @@ const ReportsModule = (() => {
     return { html, headers, dataRows };
   }
 
+  // ── Subcontractor Batches Report (by Production Date) ─────
+  function renderSubBatchesReport(filters) {
+    const { from, to, jmref, subcontractorId } = filters || {};
+    const batches = DB.Batches.all();
+    const stageRecs = DB.StageRecords.all();
+    const subcontractors = DB.Subcontractors.all();
+    const master = DB.Master.all();
+
+    let subBatches = batches.filter(b => b.productionType === 'subcontractor' || b.subcontractorId);
+
+    if (subcontractorId) {
+      subBatches = subBatches.filter(b => b.subcontractorId === subcontractorId);
+    }
+
+    if (jmref) {
+      const q = jmref.toLowerCase();
+      subBatches = subBatches.filter(b => {
+        const p = master.find(m => m.jmrefNo === b.jmrefNo) || {};
+        return (b.batchNo || '').toLowerCase().includes(q) ||
+               (b.jmrefNo || '').toLowerCase().includes(q) ||
+               (p.partNo || b.partNo || '').toLowerCase().includes(q);
+      });
+    }
+
+    subBatches = filterByDateRange(subBatches, 'productionDate', from, to);
+
+    if (!subBatches.length) {
+      return emptyState('No subcontractor batches found matching the selected Production Date and filter criteria.');
+    }
+
+    subBatches.sort((a, b) => {
+      const dateA = a.productionDate || a.createdAt || a.date || '';
+      const dateB = b.productionDate || b.createdAt || b.date || '';
+      const dateCompare = dateB.localeCompare(dateA);
+      if (dateCompare !== 0) return dateCompare;
+      return (b.batchNo || '').localeCompare(a.batchNo || '', undefined, { numeric: true, sensitivity: 'base' });
+    });
+
+    let totalInitialQty = 0;
+    let totalCurrentQty = 0;
+    let activeWipCount = 0;
+    let completedCount = 0;
+
+    const dataRows = subBatches.map((b, idx) => {
+      const sub = subcontractors.find(s => s.id === b.subcontractorId) || {};
+      const subName = sub.name || 'Unknown / Unassigned';
+      const p = master.find(m => m.jmrefNo === b.jmrefNo) || {};
+
+      let currentQty = b.initialQty || 0;
+      if (b.currentStage !== 'production') {
+        const incoming = stageRecs.filter(r => r.batchId === b.id && r.movedTo === b.currentStage);
+        if (incoming.length > 0) {
+          const lastRec = incoming[incoming.length - 1];
+          currentQty = lastRec.isRecheck ? lastRec.recheckQty : lastRec.outputQty;
+        }
+      }
+
+      totalInitialQty += (b.initialQty || 0);
+      totalCurrentQty += currentQty;
+
+      if (b.status === 'completed') completedCount++;
+      else if (b.status === 'active') activeWipCount++;
+
+      const prodDate = (b.productionDate || b.createdAt || '').slice(0, 10);
+      const stageLabel = STAGE_LABELS[b.currentStage] || b.currentStage || 'Production';
+
+      return [
+        String(idx + 1),
+        prodDate,
+        subName,
+        b.batchNo,
+        b.jmrefNo || '—',
+        p.partNo || b.partNo || '—',
+        p.description || b.description || '—',
+        stageLabel,
+        b.status === 'completed' ? 'Completed' : (b.status === 'rejected' ? 'Rejected' : 'Active WIP'),
+        formatNum(b.initialQty || 0),
+        formatNum(currentQty)
+      ];
+    });
+
+    const headers = ['#', 'Production Date', 'Subcontractor', 'Batch No', 'JMREF No', 'Part No', 'Description', 'Current Stage', 'Status', 'Initial Qty (Pcs)', 'Current Qty (Pcs)'];
+
+    const summaryCards = `
+      <div class="stats-grid mb-6" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:16px;">
+        <div class="stat-card blue">
+          <div class="stat-label">Total Subcontractor Batches</div>
+          <div class="stat-value text-blue">${dataRows.length}</div>
+        </div>
+        <div class="stat-card teal">
+          <div class="stat-label">Total Produced Stock</div>
+          <div class="stat-value text-teal">${formatNum(totalInitialQty)} pcs</div>
+        </div>
+        <div class="stat-card amber">
+          <div class="stat-label">Active WIP Batches</div>
+          <div class="stat-value text-amber">${activeWipCount} (${formatNum(totalCurrentQty)} pcs)</div>
+        </div>
+        <div class="stat-card green">
+          <div class="stat-label">Completed Batches</div>
+          <div class="stat-value text-success">${completedCount}</div>
+        </div>
+      </div>
+    `;
+
+    const htmlRows = dataRows.map(r => `
+      <tr>
+        <td class="text-muted text-xs">${r[0]}</td>
+        <td class="font-bold">${formatDate(r[1])}</td>
+        <td><span class="badge badge-amber">🏢 ${r[2]}</span></td>
+        <td class="font-semibold text-blue">${r[3]}</td>
+        <td><span class="badge badge-teal">${r[4]}</span></td>
+        <td class="font-semibold">${r[5]}</td>
+        <td class="text-muted text-xs">${escapeHtml(r[6])}</td>
+        <td><span class="badge badge-blue">${r[7]}</span></td>
+        <td>
+          <span class="badge ${r[8] === 'Completed' ? 'badge-green' : (r[8] === 'Rejected' ? 'badge-red' : 'badge-amber')}">${r[8]}</span>
+        </td>
+        <td class="font-bold">${r[9]}</td>
+        <td class="font-bold text-success">${r[10]}</td>
+      </tr>
+    `).join('');
+
+    const html = `
+      ${summaryCards}
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr>
+          </thead>
+          <tbody>
+            ${htmlRows}
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    return { html, headers, dataRows };
+  }
+
   const savedFilters = {};
   const savedResults = {};
 
@@ -3250,7 +3518,7 @@ const ReportsModule = (() => {
     const reportsWithDateRange = [
       'reprocess', 'sales', 'production', 'cryogenic', 'deflashing', 'trimming',
       'post-curing', 'waiting-visual', 'visual', 'gauge', 'rejected', 'recheck',
-      'sub-pending', 'sub-performance', 'qty-gain', 'qty-loss', 'op-efficiency',
+      'sub-pending', 'sub-batches', 'sub-performance', 'qty-gain', 'qty-loss', 'op-efficiency',
       'cycle-time', 'sub-vs-inhouse', 'daily-summary', 'analytics'
     ];
     if (reportsWithDateRange.includes(reportKey) && typeof DB !== 'undefined' && DB.Batches && DB.Batches.fetchByDateRange) {
@@ -3280,6 +3548,7 @@ const ReportsModule = (() => {
       case 'aging':      result = renderAging(filters); break;
       case 'pending-batches': result = renderPendingBatches(filters); break;
       case 'sub-pending':     result = renderSubPending(filters); break;
+      case 'sub-batches':     result = renderSubBatchesReport(filters); break;
       case 'sub-performance': result = renderSubPerformance(filters); break;
       case 'qty-gain':        result = renderQtyGainReport(filters); break;
       case 'qty-loss':        result = renderQtyLossReport(filters); break;
@@ -3348,6 +3617,7 @@ const ReportsModule = (() => {
     { key:'wip-valuation',  label:'💰 WIP Inventory Valuation',          desc:'Financial valuation of live inventory based on part sale prices' },
     { key:'sub-vs-inhouse', label:'🏢 Subcontractor vs. In-House Comparison', desc:'Yield, cycle time, and rejection comparison between manufacturing channels' },
     { key:'sub-pending', label:'🏢 Subcontractor Pending Batches', desc:'Batches of subcontractor parts currently in pending/WIP stages other than Store' },
+    { key:'sub-batches', label:'🏢 Subcontractor Batches Report (by Production Date)', desc:'Chronological list of all subcontractor-produced batches filtered by production date and subcontractor' },
     { key:'sub-performance', label:'🏢 Subcontractor & Vendor Performance Scorecard', desc:'Detailed quality, speed, and WIP load scorecard for all subcontractors and process vendors' },
     { key:'store-aging', label:'⏳ Finished-Goods FIFO Aging Report', desc:'Available stock batches in the Store with FIFO-calculated remaining quantities and age' },
     { key:'daily-summary', label:'📊 Daily Production & Scrap Summary', desc:'Daily overview of total pieces molded, completed, reprocessed, and scrap rates across all stages' },

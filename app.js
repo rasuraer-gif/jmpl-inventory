@@ -579,6 +579,7 @@ const NAV = [
   { id:'rpt-wip-valuation', label:'WIP Inventory Valuation', icon:'💰', module:'report_wip_valuation', section:'tools', parent:'reports', perm:'report_wip_valuation' },
   { id:'rpt-sub-vs-inhouse', label:'Subcontractor vs. In-House Comparison', icon:'🏢', module:'report_sub_vs_inhouse', section:'tools', parent:'reports', perm:'report_sub_vs_inhouse' },
   { id:'rpt-sub-pending', label:'Subcontractor Pending Batches', icon:'🏢', module:'report_sub_pending', section:'tools', parent:'reports', perm:'report_sub_pending' },
+  { id:'rpt-sub-batches', label:'Subcontractor Batches (by Prod. Date)', icon:'🏢', module:'report_sub_batches', section:'tools', parent:'reports', perm:'report_sub_batches' },
   { id:'rpt-sub-performance', label:'Subcontractor & Vendor Scorecard', icon:'🏢', module:'report_sub_performance', section:'tools', parent:'reports', perm:'report_sub_performance' },
   { id:'rpt-store-aging', label:'Store FIFO Aging Report', icon:'⏳', module:'report_store_aging', section:'tools', parent:'reports', perm:'report_store_aging' },
   { id:'rpt-daily-summary', label:'Daily Production & Scrap', icon:'📊', module:'report_daily_summary', section:'tools', parent:'reports', perm:'report_daily_summary' },
@@ -653,6 +654,7 @@ const App = (() => {
     report_wip_valuation:  () => ReportsModule?.render('wip-valuation'),
     report_sub_vs_inhouse: () => ReportsModule?.render('sub-vs-inhouse'),
     report_sub_pending:    () => ReportsModule?.render('sub-pending'),
+    report_sub_batches:    () => ReportsModule?.render('sub-batches'),
     report_sub_performance:() => ReportsModule?.render('sub-performance'),
     report_store_aging: () => ReportsModule?.render('store-aging'),
     report_daily_summary: () => ReportsModule?.render('daily-summary'),
@@ -701,6 +703,7 @@ const App = (() => {
     report_wip_valuation:  'WIP Inventory Valuation',
     report_sub_vs_inhouse: 'Subcontractor vs. In-House Comparison',
     report_sub_pending:    'Subcontractor Pending Batches',
+    report_sub_batches:    'Subcontractor Batches Report (by Production Date)',
     report_sub_performance:'Subcontractor & Vendor Scorecard',
     report_store_aging:'Finished-Goods FIFO Aging Report',
     report_daily_summary:'Daily Production & Scrap Summary',
@@ -791,6 +794,22 @@ const App = (() => {
     // Configure sync status badge listener
     DB.onSyncStateChange((table, hasPendingWrites) => {
       updateTableSyncState(table, hasPendingWrites);
+    });
+
+    // Configure automatic view update listener when cloud database changes arrive
+    let dataChangeTimer = null;
+    DB.onDataChange((table) => {
+      if (['batches', 'stageRecords', 'master', 'lossTracker', 'recheckTracker'].includes(table)) {
+        if (dataChangeTimer) clearTimeout(dataChangeTimer);
+        dataChangeTimer = setTimeout(() => {
+          if (currentModule && MODULE_MAP[currentModule]) {
+            const activeModal = document.querySelector('.modal-overlay:not(.hidden)');
+            if (!activeModal) {
+              MODULE_MAP[currentModule]();
+            }
+          }
+        }, 150);
+      }
     });
 
     window.addEventListener('online', triggerSyncStatusUpdate);
@@ -963,6 +982,7 @@ const App = (() => {
     }
   }
 
+  let cloudSearchTimer = null;
   function onGlobalSearchInput(query) {
     const dropdown = document.getElementById('global-search-dropdown');
     if (!dropdown) return;
@@ -977,8 +997,24 @@ const App = (() => {
 
       const qNorm = q.replace(/[\s\-_]/g, '');
 
-      // 1. Search Batches
-      const allBatches = (typeof DB !== 'undefined' && DB.Batches && DB.Batches.all) ? DB.Batches.all() : [];
+      // Trigger asynchronous remote search on Firestore for archived/completed batches
+      if (q.length >= 2 && typeof DB !== 'undefined' && DB.Batches && DB.Batches.searchCloud) {
+        if (cloudSearchTimer) clearTimeout(cloudSearchTimer);
+        cloudSearchTimer = setTimeout(async () => {
+          const activeInput = document.getElementById('global-search-input');
+          if (activeInput && activeInput.value.trim().toLowerCase() === q) {
+            const remoteBatches = await DB.Batches.searchCloud(q);
+            if (remoteBatches && remoteBatches.length) {
+              onGlobalSearchInput(activeInput.value);
+            }
+          }
+        }, 300);
+      }
+
+      // 1. Search Batches (including completed & archived)
+      const allBatches = (typeof DB !== 'undefined' && DB.Batches && DB.Batches.allIncludeArchived) 
+        ? DB.Batches.allIncludeArchived() 
+        : ((typeof DB !== 'undefined' && DB.Batches && DB.Batches.all) ? DB.Batches.all() : []);
       const ops = (typeof DB !== 'undefined' && DB.Operators && DB.Operators.all) ? DB.Operators.all() : [];
       const subs = (typeof DB !== 'undefined' && DB.Subcontractors && DB.Subcontractors.all) ? DB.Subcontractors.all() : [];
       const opMap = {};
@@ -1150,9 +1186,12 @@ const App = (() => {
     }
   }
 
-  function selectBatchFromSearch(batchId) {
+  async function selectBatchFromSearch(batchId) {
     closeGlobalSearch();
-    const batch = DB.Batches.find(batchId);
+    let batch = DB.Batches.find(batchId);
+    if (!batch && DB.Batches.fetchRemoteByNo) {
+      batch = await DB.Batches.fetchRemoteByNo(batchId);
+    }
     if (!batch) return;
     navigateToBatch(batch);
   }
@@ -1339,10 +1378,13 @@ const App = (() => {
     });
   }
 
-  function showBatchGenealogy(batchIdOrNo) {
+  async function showBatchGenealogy(batchIdOrNo) {
     let b = DB.Batches.find(batchIdOrNo);
-    if (!b) {
-      b = DB.Batches.all().find(x => x.batchNo === batchIdOrNo || x.batchNo === batchIdOrNo.split(' ')[0]);
+    if (!b && DB.Batches.allIncludeArchived) {
+      b = DB.Batches.allIncludeArchived().find(x => x.batchNo === batchIdOrNo || x.batchNo === batchIdOrNo.split(' ')[0] || x.id === batchIdOrNo);
+    }
+    if (!b && DB.Batches.fetchRemoteByNo) {
+      b = await DB.Batches.fetchRemoteByNo(batchIdOrNo);
     }
     if (!b) return;
 
@@ -1419,7 +1461,7 @@ const App = (() => {
     const subcontractorName = subcontractor ? subcontractor.name : '—';
 
     modal.innerHTML = `
-      <div class="modal modal-md" style="max-width: 600px; border-radius:16px;">
+      <div class="modal modal-md" style="max-width: 720px; border-radius:16px;">
         <div class="modal-header">
           <h3>🔍 Batch Genealogy & Details</h3>
           <button class="modal-close" onclick="document.getElementById('genealogy-modal-overlay').classList.add('hidden')">&#x2715;</button>
@@ -1470,7 +1512,7 @@ const App = (() => {
             <div class="table-wrap">
               <table class="data-table" style="font-size:12px;">
                 <thead>
-                  <tr><th>Activity / Route</th><th>Input</th><th>Output</th><th>Loss</th><th>Date</th><th>Notes</th></tr>
+                  <tr><th>Activity / Route</th><th>Input</th><th>Output</th><th>Loss</th><th>Changed By</th><th>Date & Time</th><th>Notes</th></tr>
                 </thead>
                 <tbody>
                   ${(() => {
@@ -1487,41 +1529,79 @@ const App = (() => {
                       }
                       filteredRecs.push(r);
                     });
-                    return filteredRecs;
-                  })().map(r => {
-                    const displayLoss = (r.stage === 'store') ? 0 : Math.max(0, (r.inputQty || 0) - (r.outputQty || 0));
-                    const stageNames = {
-                      production: 'Production',
-                      cryogenic: 'Cryogenic',
-                      deflashing: 'DE Flashing',
-                      'waiting-trimming': 'Waiting for Trimming',
-                      trimming: 'Trimming',
-                      'post-curing': 'Post Curing',
-                      'waiting-visual': 'Waiting for Visual',
-                      visual: 'Visual',
-                      gauge: 'Gauge',
-                      quality: 'QC Final',
-                      store: 'Store',
-                      'Stock Upload': 'Stock Upload'
-                    };
-                    const fromLabel = stageNames[r.movedFrom] || r.movedFrom || stageNames[r.stage] || r.stage;
-                    const toLabel = stageNames[r.movedTo] || r.movedTo || stageNames[r.stage] || r.stage;
-                    let routeText = '';
-                    if (r.stage === 'store') {
-                      routeText = `Received in Store (from ${fromLabel})`;
-                    } else {
-                      routeText = (fromLabel === toLabel) ? fromLabel : `${fromLabel} ➔ ${toLabel}`;
-                    }
-                    return `
-                      <tr>
-                        <td class="font-semibold" style="white-space: nowrap; color: var(--primary);">${routeText}</td>
-                        <td>${formatNum(r.inputQty)}</td>
-                        <td>${formatNum(r.outputQty)}</td>
-                        <td class="text-danger">${formatNum(displayLoss)}</td>
-                        <td>${r.date}</td>
-                        <td class="text-muted" style="max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${r.notes||''}">${r.notes || '—'}</td>
-                      </tr>`;
-                  }).join('') || '<tr><td colspan="6" class="text-center text-muted">No stage history recorded</td></tr>'}
+                    const allUsers = DB.Users.all();
+                    return filteredRecs.map(r => {
+                      const displayLoss = (r.stage === 'store') ? 0 : Math.max(0, (r.inputQty || 0) - (r.outputQty || 0));
+                      const stageNames = {
+                        production: 'Production',
+                        cryogenic: 'Cryogenic',
+                        deflashing: 'DE Flashing',
+                        'waiting-trimming': 'Waiting for Trimming',
+                        trimming: 'Trimming',
+                        'post-curing': 'Post Curing',
+                        'waiting-visual': 'Waiting for Visual',
+                        visual: 'Visual',
+                        gauge: 'Gauge',
+                        quality: 'QC Final',
+                        store: 'Store',
+                        'Stock Upload': 'Stock Upload'
+                      };
+                      const fromLabel = stageNames[r.movedFrom] || r.movedFrom || stageNames[r.stage] || r.stage;
+                      const toLabel = stageNames[r.movedTo] || r.movedTo || stageNames[r.stage] || r.stage;
+                      let routeText = '';
+                      if (r.stage === 'store') {
+                        routeText = `Received in Store (from ${fromLabel})`;
+                      } else {
+                        routeText = (fromLabel === toLabel) ? fromLabel : `${fromLabel} ➔ ${toLabel}`;
+                      }
+
+                      let changedBy = '—';
+                      const uid = r.recordedBy || r.userId || r.createdBy || r.movedBy || r.uploadedBy;
+                      if (uid) {
+                        const u = DB.Users.find(uid) || allUsers.find(usr => usr.id === uid || usr.username === uid || usr.name === uid);
+                        if (u) {
+                          changedBy = u.name || u.username || uid;
+                        } else {
+                          changedBy = uid;
+                        }
+                      } else if (r.inspectorName) {
+                        changedBy = r.inspectorName;
+                      } else if (r.operatorName) {
+                        changedBy = r.operatorName;
+                      }
+
+                      let dateTimeDisplay = r.date || '—';
+                      const timeRef = r.createdAt || r.recordedAt || r.timestamp;
+                      if (dateTimeDisplay && dateTimeDisplay.includes('T') && dateTimeDisplay.length >= 16) {
+                        dateTimeDisplay = dateTimeDisplay.slice(0, 16).replace('T', ' ');
+                      } else if (r.time) {
+                        dateTimeDisplay = `${r.date} ${r.time}`;
+                      } else if (timeRef) {
+                        try {
+                          const d = new Date(timeRef);
+                          if (!isNaN(d.getTime())) {
+                            const timePart = d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+                            dateTimeDisplay = `${r.date || d.toISOString().slice(0,10)} ${timePart}`;
+                          }
+                        } catch (e) {
+                          if (typeof timeRef === 'string' && timeRef.includes('T')) {
+                            dateTimeDisplay = `${r.date || timeRef.slice(0,10)} ${timeRef.slice(11,16)}`;
+                          }
+                        }
+                      }
+
+                      return `
+                        <tr>
+                          <td class="font-semibold" style="white-space: nowrap; color: var(--primary);">${routeText}</td>
+                          <td>${formatNum(r.inputQty)}</td>
+                          <td>${formatNum(r.outputQty)}</td>
+                          <td class="text-danger">${formatNum(displayLoss)}</td>
+                          <td class="font-medium" style="white-space: nowrap; color: var(--text-main);">${changedBy}</td>
+                          <td style="white-space: nowrap;">${dateTimeDisplay}</td>
+                          <td class="text-muted" style="max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${r.notes||''}">${r.notes || '—'}</td>
+                        </tr>`;
+                    }).join('') || '<tr><td colspan="7" class="text-center text-muted">No stage history recorded</td></tr>';
+                  })()}
                 </tbody>
               </table>
             </div>
@@ -1918,7 +1998,9 @@ function showLoginPage() {
     const password = document.getElementById('login-password').value;
     
     try {
-      const result = await Auth.login(username, password);
+      const loginPromise = Auth.login(username, password);
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Login verification timed out. Please check your network connection.')), 4000));
+      const result = await Promise.race([loginPromise, timeoutPromise]);
       if (result.ok) {
         App.init();
       } else {
@@ -2134,17 +2216,13 @@ function renderDashboard() {
   // Monthly stats
   const salesThisMonth = sales.filter(s => (s.saleDate||'').startsWith(thisMonth)).reduce((s,r)=>s+(r.qty||0),0);
 
-  // Extract unique months for select options
+  // Extract unique months for select options (using batches and current month)
   const uniqueMonths = new Set();
   uniqueMonths.add(new Date().toISOString().slice(0, 7)); // always include current month
-  batches.forEach(b => {
-    const d = b.productionDate || b.createdAt;
+  for (let i = 0; i < batches.length; i++) {
+    const d = batches[i].productionDate || batches[i].createdAt;
     if (d) uniqueMonths.add(d.slice(0, 7));
-  });
-  DB.StageRecords.all().forEach(r => {
-    const d = r.date || r.createdAt;
-    if (d) uniqueMonths.add(d.slice(0, 7));
-  });
+  }
   const sortedMonths = Array.from(uniqueMonths).sort().reverse();
   const monthOptions = sortedMonths.map(m => {
     const [y, mm] = m.split('-');
@@ -2183,8 +2261,6 @@ function renderDashboard() {
   
   const allStageRecords = DB.StageRecords.all();
   const allBatches = batches;
-
-  // (Quick batch lookups map was built at function start)
 
   // Pre-index active batches by partId & stage
   const activeBatchesByPartAndStage = {};
@@ -2269,17 +2345,40 @@ function renderDashboard() {
   // Recent batches
   const recentBatches = [...batches].sort((a,b) => b.createdAt.localeCompare(a.createdAt)).slice(0,8);
 
-  const stageRecordsThisMonth = DB.StageRecords.all().filter(r => {
+  // Group stage records for thisMonth in a single O(N) pass
+  const stageRecordsThisMonth = [];
+  const recsByStageThisMonth = {};
+  STAGES.forEach(s => recsByStageThisMonth[s] = []);
+
+  let grandCount = 0;
+  let grandIn = 0;
+  let grandOut = 0;
+  let grandLoss = 0;
+
+  for (let i = 0; i < allStageRecords.length; i++) {
+    const r = allStageRecords[i];
     const recordMonth = (r.date || r.createdAt || '').slice(0, 7);
-    return recordMonth === thisMonth;
-  });
+    if (recordMonth === thisMonth) {
+      stageRecordsThisMonth.push(r);
+      if (recsByStageThisMonth[r.stage]) {
+        recsByStageThisMonth[r.stage].push(r);
+        grandCount++;
+        grandIn += (r.inputQty || 0);
+        grandOut += (r.outputQty || 0);
+        grandLoss += (r.lossQty || 0);
+      }
+    }
+  }
 
   const monthlyStageStatsHtml = STAGES.map(stage => {
-    const recs = stageRecordsThisMonth.filter(r => r.stage === stage);
+    const recs = recsByStageThisMonth[stage] || [];
     const count = recs.length;
-    const totalIn = recs.reduce((sum, r) => sum + (r.inputQty || 0), 0);
-    const totalOut = recs.reduce((sum, r) => sum + (r.outputQty || 0), 0);
-    const totalLoss = recs.reduce((sum, r) => sum + (r.lossQty || 0), 0);
+    let totalIn = 0, totalOut = 0, totalLoss = 0;
+    for (let i = 0; i < recs.length; i++) {
+      totalIn += (recs[i].inputQty || 0);
+      totalOut += (recs[i].outputQty || 0);
+      totalLoss += (recs[i].lossQty || 0);
+    }
     const lossPercent = totalIn > 0 ? ((totalLoss / totalIn) * 100).toFixed(1) + '%' : '0.0%';
     
     return `
@@ -2294,10 +2393,6 @@ function renderDashboard() {
   }).join('');
 
   // Grand totals across all stages for the month
-  const grandCount = stageRecordsThisMonth.filter(r => STAGES.includes(r.stage)).length;
-  const grandIn = stageRecordsThisMonth.filter(r => STAGES.includes(r.stage)).reduce((sum, r) => sum + (r.inputQty || 0), 0);
-  const grandOut = stageRecordsThisMonth.filter(r => STAGES.includes(r.stage)).reduce((sum, r) => sum + (r.outputQty || 0), 0);
-  const grandLoss = stageRecordsThisMonth.filter(r => STAGES.includes(r.stage)).reduce((sum, r) => sum + (r.lossQty || 0), 0);
   const grandLossPercent = grandIn > 0 ? ((grandLoss / grandIn) * 100).toFixed(1) + '%' : '0.0%';
 
   // SVG Chart code
@@ -2309,22 +2404,23 @@ function renderDashboard() {
   const paddingBottom = 60;
   
   const chartStages = STAGES.filter(stage => {
-    return stageRecordsThisMonth.some(r => r.stage === stage && ((r.outputQty || 0) > 0 || (r.lossQty || 0) > 0));
+    const recs = recsByStageThisMonth[stage] || [];
+    return recs.some(r => (r.outputQty || 0) > 0 || (r.lossQty || 0) > 0);
   });
   const activeStagesForChart = chartStages.length > 0 ? chartStages : STAGES.slice(0, 5);
   
-  const maxVal = Math.max(...activeStagesForChart.map(stage => {
-    const recs = stageRecordsThisMonth.filter(r => r.stage === stage);
-    return Math.max(recs.reduce((sum, r) => sum + (r.inputQty || 0), 0), 10);
-  }), 100);
-  
   const stageData = activeStagesForChart.map(stage => {
-    const recs = stageRecordsThisMonth.filter(r => r.stage === stage);
-    const totalIn = recs.reduce((sum, r) => sum + (r.inputQty || 0), 0);
-    const totalOut = recs.reduce((sum, r) => sum + (r.outputQty || 0), 0);
-    const totalLoss = recs.reduce((sum, r) => sum + (r.lossQty || 0), 0);
+    const recs = recsByStageThisMonth[stage] || [];
+    let totalIn = 0, totalOut = 0, totalLoss = 0;
+    for (let i = 0; i < recs.length; i++) {
+      totalIn += (recs[i].inputQty || 0);
+      totalOut += (recs[i].outputQty || 0);
+      totalLoss += (recs[i].lossQty || 0);
+    }
     return { name: STAGE_NAMES[stage] || stage, totalIn, totalOut, totalLoss };
   });
+
+  const maxVal = Math.max(...stageData.map(d => Math.max(d.totalIn, 10)), 100);
 
   const barCount = stageData.length;
   const chartInnerWidth = svgWidth - paddingLeft - paddingRight;

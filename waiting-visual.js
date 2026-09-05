@@ -195,6 +195,16 @@ const WaitingVisualModule = (() => {
         return b && b.batchNo.toLowerCase().includes(q);
       });
     }
+
+    list.sort((a, b) => {
+      const bObj = batchMap[b.batchId] || {};
+      const aObj = batchMap[a.batchId] || {};
+      const dateA = a.timestamp || a.date || aObj.receivedAt || aObj.createdAt || '';
+      const dateB = b.timestamp || b.date || bObj.receivedAt || bObj.createdAt || '';
+      const dateCompare = dateB.localeCompare(dateA);
+      if (dateCompare !== 0) return dateCompare;
+      return (bObj.batchNo || '').localeCompare(aObj.batchNo || '', undefined, { numeric: true, sensitivity: 'base' });
+    });
     if (!list.length && !historySearch) return '<div class="card card-body"><div class="empty-state"><div class="empty-icon">&#128196;</div><p>No history found</p></div></div>';
 
     const rows = list.map(r => {

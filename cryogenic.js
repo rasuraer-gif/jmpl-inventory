@@ -119,6 +119,16 @@ const CryogenicModule = (() => {
       });
     }
 
+    recs.sort((a, b) => {
+      const bObj = DB.Batches.find(b.batchId) || {};
+      const aObj = DB.Batches.find(a.batchId) || {};
+      const dateA = a.timestamp || a.date || aObj.receivedAt || aObj.createdAt || '';
+      const dateB = b.timestamp || b.date || bObj.receivedAt || bObj.createdAt || '';
+      const dateCompare = dateB.localeCompare(dateA);
+      if (dateCompare !== 0) return dateCompare;
+      return (bObj.batchNo || '').localeCompare(aObj.batchNo || '', undefined, { numeric: true, sensitivity: 'base' });
+    });
+
     if (!recs.length) return `
       <div class="card card-body">
         <div style="display:flex; align-items:center; gap:8px; margin-bottom: 12px; max-width: 280px;">
@@ -522,8 +532,8 @@ const CryogenicModule = (() => {
     const batchId = document.getElementById('cryo-reject-id').value;
     const reason = document.getElementById('cryo-reject-reason').value.trim();
     const session = Auth.getSession();
-    const batch = DB.Batches.find(batchId);
-    DB.RejectionTracker.insert({ batchId, stage:'cryogenic', qty:getInputQty(batchId), date:new Date().toISOString(), reason, rejectedBy:session?.userId });
+    const batch = DB.Batches.find(batchId) || {};
+    DB.RejectionTracker.insert({ batchId, batchNo: batch.batchNo||'', jmrefNo: batch.jmrefNo||'', partNo: batch.partNo||'', stage:'cryogenic', qty:getInputQty(batchId), date:new Date().toISOString(), reason, rejectedBy:session?.userId });
     DB.Batches.update(batchId, { status:'rejected' });
     document.getElementById('cryo-reject-modal').classList.add('hidden');
     showToast('Batch rejected', 'success');

@@ -25,15 +25,23 @@ const DB = (() => {
 
   let db = null;
   let isInitialized = false;
-  let isCloudSyncComplete = false;
   let syncStateListener = null;
+  let dataChangeListener = null;
   let refreshTimeout = null;
   function onSyncStateChange(callback) {
     syncStateListener = callback;
   }
+  function onDataChange(callback) {
+    dataChangeListener = callback;
+  }
   function triggerSyncStateChange(table, hasPendingWrites) {
     if (syncStateListener) {
       try { syncStateListener(table, hasPendingWrites); } catch(e) {}
+    }
+  }
+  function triggerDataChange(table) {
+    if (dataChangeListener) {
+      try { dataChangeListener(table); } catch(e) {}
     }
   }
 
@@ -67,15 +75,6 @@ const DB = (() => {
 
   // Helper to load localStorage cache into memory on startup
   function loadLocalCache() {
-    const isLocalBackup = localStorage.getItem('jmpl_db_is_local_backup') === 'true';
-    if (!isLocalBackup) {
-      // Wiping local storage cache keys to prevent stale sync issues
-      for (const key of Object.keys(cache)) {
-        localStorage.removeItem('jmpl_' + key);
-        localBackupData[key] = [];
-      }
-      return;
-    }
     for (const key of Object.keys(cache)) {
       try {
         const data = localStorage.getItem(PREFIX + key);
@@ -99,9 +98,10 @@ const DB = (() => {
 
   // Save specific collection to localStorage
   function saveLocal(table) {
-    const isLocalBackup = localStorage.getItem('jmpl_db_is_local_backup') === 'true';
-    if (isLocalBackup) {
-      localStorage.setItem(PREFIX + table, JSON.stringify(cache[table]));
+    try {
+      localStorage.setItem(PREFIX + table, JSON.stringify(cache[table] || []));
+    } catch (e) {
+      console.warn(`Could not save ${table} to local cache:`, e);
     }
   }
 
@@ -116,6 +116,7 @@ const DB = (() => {
 
     // 1. Load what we have in localStorage first so the app boots instantly with cached data
     loadLocalCache();
+    seedDefaults();
 
     // If local backup mode is active, we run strictly in offline fallback mode using local backup cache
     if (localStorage.getItem('jmpl_db_is_local_backup') === 'true') {
@@ -167,9 +168,6 @@ const DB = (() => {
       const collections = Object.keys(cache);
       collections.forEach(table => {
         let query = db.collection(table);
-        if (table === 'batches') {
-          query = query.where('isArchived', '==', false);
-        }
 
         query.onSnapshot({ includeMetadataChanges: true }, snapshot => {
           const hasPendingWrites = snapshot.metadata ? snapshot.metadata.hasPendingWrites : false;
@@ -185,6 +183,7 @@ const DB = (() => {
           if (hasChanges) {
             cache[table] = list;
             saveLocal(table);
+            triggerDataChange(table);
           }
         }, err => {
           console.warn(`Firestore listener error on table "${table}":`, err.message);
@@ -728,21 +727,19 @@ const DB = (() => {
 
   // ── Seed default admin ────────────────────────────────────
   function seedDefaults() {
-    const isLocalBackup = localStorage.getItem('jmpl_db_is_local_backup') === 'true';
-    if (!isLocalBackup) {
-      // In online Firestore mode, the database already contains seeded user accounts.
-      return;
-    }
     const users = getAll('users');
     if (!users.find(u => u.username === 'admin')) {
-      insert('users', {
+      const defaultAdmin = {
+        id: 'user-admin-default',
         name: 'Administrator',
         username: 'admin',
         password: '0ef400d2c3db25692c34e8b7f53a62a91919686099ed5b4d3daf6c72eda461ab', // SHA-256 of default password
         role: 'admin',
         permissions: ['admin','master','production','cryogenic','deflashing','trimming','post-curing','waiting-visual','visual','gauge','quality','store','stock','report_inventory','report_sales','report_production','report_cryogenic','report_deflashing','report_trimming','report_post_curing','report_waiting_visual','report_visual','report_gauge','report_rejected','report_recheck'],
         active: true
-      });
+      };
+      cache.users.push(defaultAdmin);
+      saveLocal('users');
       console.log("[Seeding] Seeded default admin account.");
     }
   }
@@ -760,8 +757,10 @@ const DB = (() => {
       if (!db) return null;
       
       try {
-        const snapshot = await db.collection('users').where('username', '==', username).get();
-        if (!snapshot.empty) {
+        const fetchPromise = db.collection('users').where('username', '==', username).get();
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Network timeout')), 3000));
+        const snapshot = await Promise.race([fetchPromise, timeoutPromise]);
+        if (snapshot && !snapshot.empty) {
           const doc = snapshot.docs[0];
           const user = { id: doc.id, ...doc.data() };
           // Add to local cache if not already present
@@ -775,9 +774,9 @@ const DB = (() => {
           return user;
         }
       } catch (e) {
-        console.error("Error fetching user from Firestore:", e);
+        console.warn("Firestore fetchByUsername timeout/error:", e.message);
       }
-      return null;
+      return getAll('users').find(r => r.username === username) || null;
     },
     insert: (r) => insert('users', r),
     update: (id, c) => update('users', id, c),
@@ -912,7 +911,74 @@ const DB = (() => {
   // ── BATCHES ───────────────────────────────────────────────
   const Batches = {
     all: () => getAll('batches').filter(b => !(b.batchNo && (b.batchNo.includes('-REC-') || b.batchNo.includes('REC')))),
-    find: (id) => findById('batches', id),
+    allIncludeArchived: () => getAll('batches').filter(b => !(b.batchNo && (b.batchNo.includes('-REC-') || b.batchNo.includes('REC')))),
+    find: (idOrNo) => {
+      if (!idOrNo) return null;
+      let b = findById('batches', idOrNo);
+      if (!b) {
+        const allRecs = getAll('batches');
+        b = allRecs.find(x => x.id === idOrNo || x.batchNo === idOrNo || (x.batchNo && x.batchNo.split(' ')[0] === idOrNo));
+      }
+      return b;
+    },
+    fetchRemoteByNo: async (batchNoStr) => {
+      if (!db || !batchNoStr) return null;
+      try {
+        const cleanNo = batchNoStr.trim();
+        const cleanNoUpper = cleanNo.toUpperCase();
+        let found = null;
+
+        const docById = await db.collection('batches').doc(cleanNo).get();
+        if (docById.exists) {
+          found = { id: docById.id, ...docById.data() };
+        } else {
+          const snapshot = await db.collection('batches').where('batchNo', '==', cleanNoUpper).limit(5).get();
+          snapshot.forEach(doc => {
+            found = { id: doc.id, ...doc.data() };
+          });
+        }
+
+        if (found) {
+          const existingIdx = cache.batches.findIndex(x => x.id === found.id);
+          if (existingIdx >= 0) {
+            cache.batches[existingIdx] = found;
+          } else {
+            cache.batches.push(found);
+          }
+        }
+        return found;
+      } catch(e) {
+        console.warn("fetchRemoteByNo error:", e);
+        return null;
+      }
+    },
+    searchCloud: async (qStr) => {
+      if (!db || !qStr || qStr.trim().length < 2) return [];
+      try {
+        const qUpper = qStr.trim().toUpperCase();
+        const results = [];
+        const snapshot = await db.collection('batches')
+          .where('batchNo', '>=', qUpper)
+          .where('batchNo', '<=', qUpper + '\uf8ff')
+          .limit(10)
+          .get();
+
+        snapshot.forEach(doc => {
+          const data = { id: doc.id, ...doc.data() };
+          const existingIdx = cache.batches.findIndex(x => x.id === doc.id);
+          if (existingIdx >= 0) {
+            cache.batches[existingIdx] = data;
+          } else {
+            cache.batches.push(data);
+          }
+          results.push(data);
+        });
+        return results;
+      } catch(e) {
+        console.warn("searchCloud error:", e);
+        return [];
+      }
+    },
     byStage: (stage) => getAll('batches').filter(r => r.currentStage === stage && r.status === 'active' && !(r.batchNo && (r.batchNo.includes('-REC-') || r.batchNo.includes('REC')))),
     byStatus: (status) => getAll('batches').filter(r => r.status === status && !(r.batchNo && (r.batchNo.includes('-REC-') || r.batchNo.includes('REC')))),
 
@@ -1419,8 +1485,79 @@ const DB = (() => {
 
     allParts: () => {
       const master = getAll('master');
+      const stageRecords = getAll('stageRecords');
+      const batches = getAll('batches');
+      const sales = getAll('sales');
+
+      // Pre-index store stage records by batchId: batchId -> inputQty
+      const storeQtyByBatchId = new Map();
+      for (let i = 0; i < stageRecords.length; i++) {
+        const r = stageRecords[i];
+        if (r.stage === 'store' && !storeQtyByBatchId.has(r.batchId)) {
+          storeQtyByBatchId.set(r.batchId, r.inputQty !== undefined ? Number(r.inputQty) : null);
+        }
+      }
+
+      // Pre-aggregate received stock by partId and by normalized jmrefNo
+      const recByPartId = new Map();
+      const recByJmrefNorm = new Map();
+
+      for (let i = 0; i < batches.length; i++) {
+        const b = batches[i];
+        if (b.status !== 'completed' && b.currentStage !== 'store') continue;
+        if (b.notes && (b.notes.includes('Closed via stock') || b.notes.includes('Zeroed via stock') || b.notes.includes('zeroing'))) continue;
+
+        const storeVal = storeQtyByBatchId.get(b.id);
+        const qty = (storeVal !== undefined && storeVal !== null) ? storeVal : Number(b.initialQty || 0);
+
+        if (b.partId) {
+          recByPartId.set(b.partId, (recByPartId.get(b.partId) || 0) + qty);
+        }
+        if (b.jmrefNo) {
+          const bNorm = String(b.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+          if (bNorm) {
+            recByJmrefNorm.set(bNorm, (recByJmrefNorm.get(bNorm) || 0) + qty);
+          }
+        }
+      }
+
+      // Pre-aggregate sales by partId and by normalized jmrefNo
+      const soldByPartId = new Map();
+      const soldByJmrefNorm = new Map();
+
+      for (let i = 0; i < sales.length; i++) {
+        const s = sales[i];
+        const qty = Number(s.qty) || 0;
+        if (s.partId) {
+          soldByPartId.set(s.partId, (soldByPartId.get(s.partId) || 0) + qty);
+        }
+        if (s.jmrefNo) {
+          const sNorm = String(s.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+          if (sNorm) {
+            soldByJmrefNorm.set(sNorm, (soldByJmrefNorm.get(sNorm) || 0) + qty);
+          }
+        }
+      }
+
+      // Map master items in single O(1) lookups per part
       return master.map(m => {
-        const available = StoreInventory.availableByJmref(m.jmrefNo, m.id);
+        const normTarget = String(m.jmrefNo || '').trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+        let totalReceived = 0;
+        let totalSold = 0;
+
+        if (m.id && recByPartId.has(m.id)) {
+          totalReceived = recByPartId.get(m.id);
+        } else if (normTarget && recByJmrefNorm.has(normTarget)) {
+          totalReceived = recByJmrefNorm.get(normTarget);
+        }
+
+        if (m.id && soldByPartId.has(m.id)) {
+          totalSold = soldByPartId.get(m.id);
+        } else if (normTarget && soldByJmrefNorm.has(normTarget)) {
+          totalSold = soldByJmrefNorm.get(normTarget);
+        }
+
+        const available = Math.max(0, totalReceived - totalSold);
         return {
           ...m,
           available
@@ -1614,7 +1751,7 @@ const DB = (() => {
   }
 
   return {
-    init, onSyncStateChange, genId, seedDefaults, clearTable,
+    init, onSyncStateChange, onDataChange, genId, seedDefaults, clearTable,
     Users, Master, Subcontractors, Vendors, Operators, Inspectors,
     Batches, StageRecords, LossTracker, RejectionTracker,
     RecheckTracker, StockUploads, Sales, StoreInventory,
