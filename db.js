@@ -69,7 +69,8 @@ const DB = (() => {
     tasks: [],
     auditSessions: [],
     auditRecords: [],
-    deliveryChallans: []
+    deliveryChallans: [],
+    printHistory: []
   };
   let localBackupData = {};
 
@@ -1250,6 +1251,15 @@ const DB = (() => {
     remove: (id) => remove('monthlyPlans', id)
   };
 
+  // ── PRINT HISTORY ─────────────────────────────────────────
+  const PrintHistory = {
+    all: () => getAll('printHistory'),
+    find: (id) => findById('printHistory', id),
+    insert: (r) => insert('printHistory', r),
+    update: (id, c) => update('printHistory', id, c),
+    remove: (id) => remove('printHistory', id)
+  };
+
   // ── PRODUCTION SCHEDULES ──────────────────────────────────
   const ProductionSchedules = {
     all: () => getAll('productionSchedules'),
@@ -1756,7 +1766,7 @@ const DB = (() => {
     Batches, StageRecords, LossTracker, RejectionTracker,
     RecheckTracker, StockUploads, Sales, StoreInventory,
     ProductionRecords, MonthlyPlans, ProductionSchedules,
-    Moulds, MouldMovements, MouldMaintenance, Tasks, AuditSessions, AuditRecords, DeliveryChallans, exportBackupJSON, importBackupJSON, restoreToOnlineDB,
+    Moulds, MouldMovements, MouldMaintenance, Tasks, AuditSessions, AuditRecords, DeliveryChallans, PrintHistory, exportBackupJSON, importBackupJSON, restoreToOnlineDB,
     raw: { getAll, setAll, insert, update, remove, findById, findWhere }
   };
 })();

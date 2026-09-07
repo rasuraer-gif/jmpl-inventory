@@ -113,7 +113,7 @@ const STAGE_LABELS = {
   store: 'Store'
 };
 
-function printBarcode(batchId) {
+function printBarcode(batchId, isDuplicate = false) {
   const batch = DB.Batches.find(batchId);
   if (!batch) { showToast('Batch not found', 'error'); return; }
 
@@ -139,7 +139,7 @@ function printBarcode(batchId) {
   printWindow.document.write(`
     <html>
     <head>
-      <title>Print Label - ${batch.batchNo}</title>
+      <title>Print Label - ${batch.batchNo}${isDuplicate ? ' (DUPLICATE)' : ''}</title>
       <style>
         @page {
           size: 40mm 60mm;
@@ -182,6 +182,21 @@ function printBarcode(batchId) {
           text-align: center;
           text-transform: uppercase;
           white-space: nowrap;
+          margin-bottom: 1px;
+        }
+        .duplicate-tag {
+          font-size: 7.5px;
+          font-weight: 900;
+          letter-spacing: 0.8px;
+          color: #000;
+          border: 1.5px solid #000;
+          background: #fff;
+          padding: 0.5px 2px;
+          text-align: center;
+          text-transform: uppercase;
+          width: 100%;
+          box-sizing: border-box;
+          margin-top: 1px;
           margin-bottom: 1px;
         }
         .qr-wrapper {
@@ -295,6 +310,7 @@ function printBarcode(batchId) {
     <body>
       <div class="label-container">
         <div class="company-title">JANANI MOULDINGS PVT. LTD.</div>
+        ${isDuplicate ? `<div class="duplicate-tag">*** DUPLICATE ***</div>` : ''}
         <div class="qr-wrapper">
           <div class="flow-text-left">${processFlow}</div>
           <div id="qrcode-box" data-batch="${batch.batchNo}" style="width: 19mm; height: 19mm; display: flex; align-items: center; justify-content: center;"></div>
@@ -796,19 +812,19 @@ const App = (() => {
       updateTableSyncState(table, hasPendingWrites);
     });
 
-    // Configure automatic view update listener when cloud database changes arrive
+    // Update Dashboard screen alone when cloud database changes arrive
     let dataChangeTimer = null;
     DB.onDataChange((table) => {
-      if (['batches', 'stageRecords', 'master', 'lossTracker', 'recheckTracker'].includes(table)) {
+      if (['batches', 'stageRecords', 'master', 'lossTracker', 'recheckTracker', 'sales'].includes(table)) {
         if (dataChangeTimer) clearTimeout(dataChangeTimer);
         dataChangeTimer = setTimeout(() => {
-          if (currentModule && MODULE_MAP[currentModule]) {
+          if (currentModule === 'dashboard') {
             const activeModal = document.querySelector('.modal-overlay:not(.hidden)');
             if (!activeModal) {
-              MODULE_MAP[currentModule]();
+              renderDashboard();
             }
           }
-        }, 150);
+        }, 300);
       }
     });
 

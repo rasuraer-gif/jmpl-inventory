@@ -39,25 +39,25 @@ const ReportsModule = (() => {
   function resolveBatchDetails(r) {
     if (!r) return { batchNo: '—', jmrefNo: '—', partNo: '—' };
 
-    let batch = DB.Batches.find(r.batchId) || DB.Batches.all().find(b => b.id === r.batchId || b.batchNo === r.batchId);
+    let batch = DB.Batches.find(r.batchId) || DB.Batches.allIncludeArchived().find(b => b.id === r.batchId || b.batchNo === r.batchId);
     
     if (!batch && r.batchId) {
       const stageRec = DB.StageRecords.all().find(sr => sr.id === r.batchId);
       if (stageRec && stageRec.batchId) {
-        batch = DB.Batches.find(stageRec.batchId) || DB.Batches.all().find(b => b.id === stageRec.batchId || b.batchNo === stageRec.batchId);
+        batch = DB.Batches.find(stageRec.batchId) || DB.Batches.allIncludeArchived().find(b => b.id === stageRec.batchId || b.batchNo === stageRec.batchId);
       }
     }
 
     let parentBatch = null;
     if (batch) {
       if (batch.parentBatchId) {
-        parentBatch = DB.Batches.find(batch.parentBatchId) || DB.Batches.all().find(b => b.id === batch.parentBatchId || b.batchNo === batch.parentBatchId);
+        parentBatch = DB.Batches.find(batch.parentBatchId) || DB.Batches.allIncludeArchived().find(b => b.id === batch.parentBatchId || b.batchNo === batch.parentBatchId);
       } else if (batch.parentBatchNo) {
-        parentBatch = DB.Batches.all().find(b => b.batchNo === batch.parentBatchNo);
+        parentBatch = DB.Batches.allIncludeArchived().find(b => b.batchNo === batch.parentBatchNo);
       }
     }
     if (!parentBatch && r.parentBatchNo) {
-      parentBatch = DB.Batches.all().find(b => b.batchNo === r.parentBatchNo);
+      parentBatch = DB.Batches.allIncludeArchived().find(b => b.batchNo === r.parentBatchNo);
     }
 
     let batchNoText = '';
@@ -75,18 +75,15 @@ const ReportsModule = (() => {
       parentNoText = r.parentBatchNo;
     }
 
-    // Always prioritize displaying Parent Batch No for reprocess batches
     let displayBatchNo = '—';
-    if (parentNoText) {
-      displayBatchNo = parentNoText;
-    } else if (batchNoText && batchNoText.toUpperCase().includes('-REP')) {
-      displayBatchNo = batchNoText.replace(/-REP.*$/i, '');
-    } else if (batchNoText) {
+    if (batchNoText) {
       displayBatchNo = batchNoText;
+    } else if (parentNoText) {
+      displayBatchNo = parentNoText;
     } else {
-      const anyBatch = DB.Batches.all().find(b => b.id === r.batchId || b.id === r.batchNo || b.parentBatchId === r.batchId);
+      const anyBatch = DB.Batches.allIncludeArchived().find(b => b.id === r.batchId || b.id === r.batchNo || b.parentBatchId === r.batchId);
       if (anyBatch && anyBatch.batchNo && !isRawId(anyBatch.batchNo)) {
-        displayBatchNo = anyBatch.batchNo.replace(/-REP.*$/i, '');
+        displayBatchNo = anyBatch.batchNo;
       } else {
         const jm = (batch && batch.jmrefNo) || (parentBatch && parentBatch.jmrefNo) || r.jmrefNo;
         displayBatchNo = jm ? `Batch (${jm})` : '—';
