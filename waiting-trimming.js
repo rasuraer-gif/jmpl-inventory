@@ -314,6 +314,10 @@ const WaitingTrimmingModule = (() => {
   function openProcess(batchId, inputQty) {
     _wtInputQty = inputQty;
     const b = DB.Batches.find(batchId)||{};
+    if (b && window.QuickMovementHandler && QuickMovementHandler.isQuickMoveConfigured(b)) {
+      QuickMovementHandler.openScannerModal(batchId);
+      return;
+    }
     _activeBatch = b;
     
     document.getElementById('wt-process-batch-id').value = batchId;

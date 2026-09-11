@@ -115,6 +115,9 @@ const Auth = (() => {
     if (!isCorrect) {
       const state = recordFailedAttempt();
       const remaining = MAX_FAILED_ATTEMPTS - state.fails;
+      try {
+        if (DB.AuditLogs) DB.AuditLogs.log('Failed Login', 'security', `Failed login attempt for username: ${username}`, username);
+      } catch (e) {}
       if (remaining > 0 && remaining <= 3) {
         return { ok: false, error: `Invalid credentials. ${remaining} attempt(s) remaining before lockout.` };
       }
@@ -136,6 +139,9 @@ const Auth = (() => {
     };
     sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
     setupActivityListeners();
+    try {
+      if (DB.AuditLogs) DB.AuditLogs.log('User Login', 'security', `User ${user.username} logged in`, user.username);
+    } catch (e) {}
     return { ok: true, session };
   }
 

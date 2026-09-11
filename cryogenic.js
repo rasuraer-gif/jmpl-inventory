@@ -293,6 +293,10 @@ const CryogenicModule = (() => {
   function openProcess(batchId, inputQty) {
     _cryoInputQty = inputQty;
     const b = DB.Batches.find(batchId)||{};
+    if (b && window.QuickMovementHandler && QuickMovementHandler.isQuickMoveConfigured(b)) {
+      QuickMovementHandler.openScannerModal(batchId);
+      return;
+    }
     _activeBatch = b;
     document.getElementById('cryo-batch-id').value = batchId;
     document.getElementById('cryo-input-qty').value = inputQty;

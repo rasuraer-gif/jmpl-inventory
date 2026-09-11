@@ -361,6 +361,10 @@ const DeflashingModule = (() => {
   function openProcess(batchId, inputQty) {
     _deInputQty = inputQty;
     const b = DB.Batches.find(batchId)||{};
+    if (b && window.QuickMovementHandler && QuickMovementHandler.isQuickMoveConfigured(b)) {
+      QuickMovementHandler.openScannerModal(batchId);
+      return;
+    }
     _activeBatch = b;
     document.getElementById('de-batch-id').value = batchId;
     document.getElementById('de-input-qty').value = inputQty;

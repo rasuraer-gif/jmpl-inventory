@@ -300,6 +300,10 @@ const PostCuringModule = (() => {
   function openProcess(batchId, inputQty) {
     _pcInputQty = inputQty;
     const b = DB.Batches.find(batchId)||{};
+    if (b && window.QuickMovementHandler && QuickMovementHandler.isQuickMoveConfigured(b)) {
+      QuickMovementHandler.openScannerModal(batchId);
+      return;
+    }
     _activeBatch = b;
     document.getElementById('pc-batch-id').value = batchId;
     document.getElementById('pc-input-qty').value = inputQty;

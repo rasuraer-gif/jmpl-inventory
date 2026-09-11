@@ -18,17 +18,39 @@ const QualityModule = (() => {
     const lastRec = recs[recs.length - 1];
     const qtyVal = Number(lastRec.isRecheck ? lastRec.recheckQty : lastRec.outputQty);
     return !isNaN(qtyVal) ? qtyVal : (batch.initialQty || 0);
-  }
-
-  function render() {
+  }  function render() {
     currentPage = 1;
     pendingSearch = '';
     const el = document.getElementById('content');
     const batches = DB.Batches.byStage('quality');
-    const allRejected = DB.Batches.byStatus('rejected');
-    const allRechecks = DB.RecheckTracker.all();
     const thisMonth = new Date().toISOString().slice(0,7);
-    const passedThisMonth = DB.Batches.byStatus('completed').filter(b=>(b.completedAt||'').startsWith(thisMonth)).length;
+    const allBatchesList = DB.Batches.allIncludeArchived ? DB.Batches.allIncludeArchived() : DB.Batches.all();
+
+    const passedBatchIdsThisMonth = new Set();
+    DB.StageRecords.all().forEach(r => {
+      const d = (r.date || r.createdAt || '').slice(0, 7);
+      if (d === thisMonth && ((r.stage === 'quality' && r.movedTo === 'store') || (r.stage === 'store' && r.movedFrom === 'quality'))) {
+        if (r.batchId) passedBatchIdsThisMonth.add(r.batchId);
+      }
+    });
+    allBatchesList.forEach(b => {
+      if (b.status === 'completed') {
+        const d = (b.completedAt || b.createdAt || '').slice(0, 7);
+        if (d === thisMonth) {
+          passedBatchIdsThisMonth.add(b.id);
+        }
+      }
+    });
+    const passedThisMonth = passedBatchIdsThisMonth.size;
+
+    const rejectedThisMonth = Math.max(
+      DB.RejectionTracker.all().filter(r => (r.date || r.createdAt || '').slice(0,7) === thisMonth).length,
+      allBatchesList.filter(b => b.status === 'rejected' && (b.updatedAt || b.date || b.createdAt || '').slice(0,7) === thisMonth).length
+    );
+
+    const rechecksThisMonth = DB.RecheckTracker.all()
+      .filter(r => (r.date || r.createdAt || '').slice(0,7) === thisMonth).length;
+
     const totalQty = batches.reduce((sum, b) => sum + getInputQty(b.id), 0);
 
     let contentHtml = '';
@@ -40,12 +62,12 @@ const QualityModule = (() => {
     el.innerHTML = `
       <div class="animate-in">
         <div class="mb-6"><h2 class="font-bold" style="font-size:20px;">Quality Final</h2><p class="text-sm text-muted mt-1">Final quality check — Pass to Store, Reject, or Send for Recheck</p></div>
-        <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));max-width:760px;margin-bottom:24px;">
+        <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));max-width:960px;margin-bottom:24px;">
           <div class="stat-card red"><div class="stat-label">Pending</div><div class="stat-value red">${batches.length}</div></div>
           <div class="stat-card teal"><div class="stat-label">Pending Qty</div><div class="stat-value teal">${formatNum(totalQty)}</div></div>
           <div class="stat-card green"><div class="stat-label">Passed This Month</div><div class="stat-value green">${passedThisMonth}</div></div>
-          <div class="stat-card amber"><div class="stat-label">Total Rejected</div><div class="stat-value amber">${allRejected.length}</div></div>
-          <div class="stat-card blue"><div class="stat-label">Rechecks Issued</div><div class="stat-value blue">${allRechecks.length}</div></div>
+          <div class="stat-card amber"><div class="stat-label">Rejected This Month</div><div class="stat-value amber">${rejectedThisMonth}</div></div>
+          <div class="stat-card blue"><div class="stat-label">Rechecks This Month</div><div class="stat-value blue">${rechecksThisMonth}</div></div>
         </div>
         <div class="tabs" id="qf-tabs">
           <button class="tab-btn ${activeTab === 'pending' ? 'active' : ''}" data-tab="pending">Pending</button>
@@ -147,7 +169,7 @@ const QualityModule = (() => {
   }
 
   function completedBatchesTab() {
-    let completed = DB.Batches.all().filter(b => b.status === 'completed');
+    let completed = (DB.Batches.allIncludeArchived ? DB.Batches.allIncludeArchived() : DB.Batches.all()).filter(b => b.status === 'completed');
     completed.sort((a,b) => (b.completedAt||b.createdAt||'').localeCompare(a.completedAt||a.createdAt||''));
 
     // Pre-map StageRecords and RecheckTracker to optimize lookups to O(1) inside the loop
@@ -318,7 +340,7 @@ const QualityModule = (() => {
   }
 
   function rejectedTab() {
-    let batches = DB.Batches.byStatus('rejected');
+    let batches = (DB.Batches.allIncludeArchived ? DB.Batches.allIncludeArchived() : DB.Batches.all()).filter(b => b.status === 'rejected');
     const recs = DB.RejectionTracker.all();
     if (rejectSearch) {
       const q = rejectSearch.toLowerCase();
@@ -556,18 +578,24 @@ const QualityModule = (() => {
     App.navigate(App.current);
   }
 
-  function filterPending(val) {
+  function filterPending(val, isRemoteUpdate = false) {
     currentPage = 1;
     pendingSearch = val;
+    if (!isRemoteUpdate && val && window.triggerBackgroundSearch) {
+      window.triggerBackgroundSearch(val, () => {
+        const inp = document.getElementById('qf-pending-search');
+        if (inp && inp.value === val) filterPending(val, true);
+      });
+    }
     const content = document.getElementById('qf-content');
     if (content) {
       const batches = DB.Batches.byStage('quality');
       content.innerHTML = pendingTab(batches);
       const inp = document.getElementById('qf-pending-search');
       if (inp) {
-        inp.value = val;
-        inp.focus();
-        inp.setSelectionRange(inp.value.length, inp.value.length);
+        if (inp.value !== val) inp.value = val;
+        if (document.activeElement !== inp) inp.focus();
+        try { inp.setSelectionRange(inp.value.length, inp.value.length); } catch(e) {}
       }
     }
   }

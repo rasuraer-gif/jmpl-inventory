@@ -398,6 +398,10 @@ const TrimmingModule = (() => {
   function openProcess(batchId, inputQty) {
     _trimInputQty = inputQty;
     const b = DB.Batches.find(batchId)||{};
+    if (b && window.QuickMovementHandler && QuickMovementHandler.isQuickMoveConfigured(b)) {
+      QuickMovementHandler.openScannerModal(batchId);
+      return;
+    }
     _activeBatch = b;
     document.getElementById('trim-batch-id').value = batchId;
     document.getElementById('trim-input-qty').value = inputQty;

@@ -50,6 +50,7 @@ const MasterModule = (() => {
         </div>
       </div>
       
+      ${quickMoveConfigModal()}
       <div class="modal-overlay hidden" id="master-modal">
         <div class="modal modal-md">
           <div class="modal-header">
@@ -130,7 +131,13 @@ const MasterModule = (() => {
                 <label class="form-label">Average Target Inventory (Qty)</label>
                 <input type="number" id="master-avgtarget" class="form-control" placeholder="e.g. 5000" min="0">
               </div>
-              <div class="form-group" style="flex:1;"></div>
+              <div class="form-group" style="flex:1; display:flex; flex-direction:column; justify-content:center;">
+                <label class="form-label" style="display:flex; align-items:center; gap:8px; cursor:pointer; margin:0;">
+                  <input type="checkbox" id="master-quick-enable" style="width:16px; height:16px; cursor:pointer;">
+                  <strong style="color:var(--primary);">⚡ Enable Quick Movement for this JMREF</strong>
+                </label>
+                <div class="form-hint" style="font-size:11px; margin-top:2px;">Enables 1-step output Qty stage transitions for high daily volume.</div>
+              </div>
             </div>
 
             <hr style="margin: 16px 0; border: 0; border-top: 1px solid var(--border);">
@@ -221,7 +228,10 @@ const MasterModule = (() => {
       <tr>
         <td class="text-muted">${startIdx + i + 1}</td>
         <td class="font-semibold text-blue">${p.partNo}</td>
-        <td><span class="badge badge-teal">${p.jmrefNo}</span></td>
+        <td>
+          <span class="badge badge-teal">${p.jmrefNo}</span>
+          ${p.quickMovementEnabled ? ' <span class="badge badge-amber" style="font-size:10px;">⚡ Quick Move</span>' : ''}
+        </td>
         <td class="font-semibold">${p.salePrice != null ? p.salePrice : '—'}</td>
         <td>${p.blankWeight != null ? p.blankWeight : '—'}</td>
         <td class="font-semibold text-success">${p.averageTargetInventory != null ? formatNum(p.averageTargetInventory) : '—'}</td>
@@ -237,6 +247,7 @@ const MasterModule = (() => {
         <td>
           <div class="flex gap-2">
             <button class="btn btn-ghost btn-xs" onclick="MasterModule.openEdit('${p.id}')">Edit</button>
+            ${p.quickMovementEnabled ? `<button class="btn btn-secondary btn-xs" style="color:var(--warning); border-color:rgba(245, 158, 11, 0.4);" onclick="MasterModule.openQuickMoveConfig('${p.id}')" title="Configure Quick Movement Stage Sequence">⚡ Quick Move Config</button>` : ''}
             <button class="btn btn-danger btn-xs" onclick="MasterModule.remove('${p.id}')">Delete</button>
           </div>
         </td>
@@ -318,6 +329,8 @@ const MasterModule = (() => {
     document.getElementById('master-length').value = '';
     document.getElementById('master-weight').value = '';
     document.getElementById('master-avgtarget').value = '';
+    const qInp = document.getElementById('master-quick-enable');
+    if (qInp) qInp.checked = false;
     
     const container = document.getElementById('moulds-container');
     if (container) {
@@ -351,6 +364,8 @@ const MasterModule = (() => {
     document.getElementById('master-length').value = p.blankLength != null ? p.blankLength : '';
     document.getElementById('master-weight').value = p.blankWeight != null ? p.blankWeight : '';
     document.getElementById('master-avgtarget').value = p.averageTargetInventory != null ? p.averageTargetInventory : '';
+    const qInp = document.getElementById('master-quick-enable');
+    if (qInp) qInp.checked = !!p.quickMovementEnabled;
     
     const container = document.getElementById('moulds-container');
     if (container) {
@@ -381,6 +396,7 @@ const MasterModule = (() => {
     const blankLength = document.getElementById('master-length').value !== '' ? parseFloat(document.getElementById('master-length').value) : null;
     const blankWeight = document.getElementById('master-weight').value !== '' ? parseFloat(document.getElementById('master-weight').value) : null;
     const averageTargetInventory = document.getElementById('master-avgtarget').value !== '' ? parseInt(document.getElementById('master-avgtarget').value, 10) : null;
+    const quickMovementEnabled = document.getElementById('master-quick-enable')?.checked || false;
 
     if (!partNo || !jmrefNo || !description) { showToast('Part No, JMREF No, and Description are required', 'error'); return; }
 
@@ -420,6 +436,7 @@ const MasterModule = (() => {
       blankLength,
       blankWeight,
       averageTargetInventory,
+      quickMovementEnabled,
       moulds
     };
 
@@ -846,5 +863,725 @@ const MasterModule = (() => {
     });
   }
 
-  return { render, search, openAdd, openEdit, save, remove, openBulk, downloadTemplate, handleFileSelect, saveBulk, addMouldRow, removeMouldRow, handleUpdateCheckboxChange, changePage };
+  // ── Quick Movement Stage Sequence Configuration ───────────
+  let mouldConfigsCache = {};
+
+  const DEFAULT_QUICK_MOVE_STAGES = [
+    { key: 'production', label: 'Production', icon: '🏭', enabled: true },
+    { key: 'cryogenic', label: 'Cryogenic', icon: '❄️', enabled: true },
+    { key: 'deflashing', label: 'Flash Removal', icon: '🔧', enabled: true },
+    { key: 'waiting-trimming', label: 'Waiting for Trimming', icon: '⏳', enabled: true },
+    { key: 'trimming', label: 'Trimming (Subcontractor)', icon: '✂️', enabled: true },
+    { key: 'waiting-visual', label: 'Waiting for Visual Inspection', icon: '⏳', enabled: true }
+  ];
+
+  function quickMoveConfigModal() {
+    return `
+      <div class="modal-overlay hidden" id="master-quick-move-config-modal">
+        <div class="modal modal-lg" style="max-width:850px;">
+          <div class="modal-header" style="background:var(--bg-glass-hover); border-bottom:1px solid var(--border);">
+            <div>
+              <h3 id="qm-config-title" style="display:flex; align-items:center; gap:8px;">
+                <span>⚡ Quick Stage Movement Configuration (Mould-Wise)</span>
+              </h3>
+              <p class="text-xs text-muted" id="qm-config-subtitle">Configure ordered stage progression & subcontractor vendor rules per Mould</p>
+            </div>
+            <button class="modal-close" onclick="document.getElementById('master-quick-move-config-modal').classList.add('hidden')">&#x2715;</button>
+          </div>
+          <div class="modal-body" style="padding:20px;">
+            <input type="hidden" id="qm-config-part-id">
+            <input type="hidden" id="qm-active-mould-no">
+            
+            <!-- Part Info -->
+            <div style="background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius-md); padding:14px 16px; margin-bottom:16px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+              <div>
+                <div style="font-weight:700; font-size:16px; color:var(--primary);" id="qm-config-jmref-display">—</div>
+                <div style="font-size:12px; color:var(--text-secondary);" id="qm-config-moulds-display">Mould Details: —</div>
+              </div>
+              <label style="display:flex; align-items:center; gap:10px; cursor:pointer; background:var(--bg-glass-hover); padding:8px 14px; border-radius:var(--radius-sm); border:1px solid var(--border);">
+                <input type="checkbox" id="qm-config-enable-toggle" style="width:18px; height:18px; cursor:pointer;">
+                <span style="font-weight:700; color:var(--warning);" id="qm-enable-toggle-label">⚡ Enable Quick Movement for this Mould</span>
+              </label>
+            </div>
+
+            <!-- Mould Selector Tabs -->
+            <div style="margin-bottom:16px;">
+              <div style="font-size:12px; font-weight:700; color:var(--text-secondary); margin-bottom:6px;">🛠️ Select Mould No to Configure:</div>
+              <div class="tabs" id="qm-mould-tabs"></div>
+            </div>
+
+            <!-- Configured Stage Pipeline Order -->
+            <div style="margin-bottom:12px; display:flex; justify-content:space-between; align-items:center;">
+              <h4 style="font-size:14px; font-weight:600; margin:0;" id="qm-stage-order-title">📋 Stage Sequence Order & Subcontractor Rules</h4>
+              <span class="text-xs text-muted">Subcontractor vendor details auto-derived from Mould movement details</span>
+            </div>
+
+            <div class="table-wrap">
+              <table class="data-table" style="width:100%; font-size:12px;">
+                <thead>
+                  <tr>
+                    <th style="width:50px;">Order</th>
+                    <th>Stage Name</th>
+                    <th>Stage Key</th>
+                    <th>Subcontractor Vendor</th>
+                    <th style="width:100px;">Max Loss %</th>
+                    <th style="width:80px;">Enabled</th>
+                    <th style="width:80px;">Reorder</th>
+                  </tr>
+                </thead>
+                <tbody id="qm-config-stages-tbody">
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Loss Protection Rules -->
+            <div style="margin-top:20px; background:rgba(239, 68, 68, 0.05); border:1px solid rgba(239, 68, 68, 0.2); border-radius:var(--radius-sm); padding:12px;">
+              <div style="font-weight:600; font-size:12px; color:var(--danger); margin-bottom:4px;">⚠️ High Scrap Loss Guardrail</div>
+              <div style="font-size:11px; color:var(--text-secondary);">
+                If calculated scrap loss exceeds the <strong>Max Loss %</strong> limit during quick stage movement, the operator must enter mandatory remarks before progressing.
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer" style="padding:12px 20px; background:var(--bg-glass-hover); border-top:1px solid var(--border); display:flex; justify-content:flex-end; gap:10px;">
+            <button class="btn btn-secondary" onclick="document.getElementById('master-quick-move-config-modal').classList.add('hidden')">Cancel</button>
+            <button class="btn btn-primary" onclick="MasterModule.saveQuickMoveConfig()">💾 Save Configuration</button>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function openQuickMoveConfig(partId) {
+    const p = DB.Master.find(partId);
+    if (!p) { showToast('Part not found', 'error'); return; }
+
+    document.getElementById('qm-config-part-id').value = p.id;
+    document.getElementById('qm-config-jmref-display').textContent = `${p.jmrefNo} (${p.partNo})`;
+
+    const moulds = (p.moulds && p.moulds.length) ? p.moulds : [{ mouldNo: 1, mouldType: 'Standard', processFlow: 'Standard' }];
+    
+    document.getElementById('qm-config-moulds-display').textContent = 'Configured Moulds: ' + moulds.map(m => `M#${m.mouldNo} (${m.mouldType || 'Std'})`).join(' | ');
+
+    mouldConfigsCache = {};
+
+    moulds.forEach(m => {
+      const k = String(m.mouldNo);
+      let existingConfig = (p.quickMovementMouldConfigs && p.quickMovementMouldConfigs[k]) || m.quickMovementConfig;
+      if (!existingConfig && p.quickMovementConfig) existingConfig = p.quickMovementConfig;
+
+      if (existingConfig && existingConfig.stages) {
+        mouldConfigsCache[k] = JSON.parse(JSON.stringify(existingConfig));
+      } else {
+        mouldConfigsCache[k] = {
+          enabled: true,
+          stages: JSON.parse(JSON.stringify(DEFAULT_QUICK_MOVE_STAGES))
+        };
+      }
+    });
+
+    const tabsEl = document.getElementById('qm-mould-tabs');
+    if (tabsEl) {
+      tabsEl.innerHTML = moulds.map((m, idx) => `
+        <button class="tab-btn ${idx === 0 ? 'active' : ''}" data-mould-no="${m.mouldNo}" onclick="MasterModule.switchQuickMoveMouldTab('${m.mouldNo}')">
+          🛠️ Mould #${m.mouldNo} (${m.mouldType || 'Std'})
+        </button>
+      `).join('');
+    }
+
+    const firstMouldNo = String(moulds[0].mouldNo);
+    document.getElementById('qm-active-mould-no').value = firstMouldNo;
+
+    loadMouldConfigToUI(firstMouldNo);
+    document.getElementById('master-quick-move-config-modal').classList.remove('hidden');
+  }
+
+  function switchQuickMoveMouldTab(targetMouldNo) {
+    targetMouldNo = String(targetMouldNo);
+    const currentMouldNo = document.getElementById('qm-active-mould-no').value;
+
+    if (currentMouldNo) {
+      mouldConfigsCache[currentMouldNo] = {
+        enabled: document.getElementById('qm-config-enable-toggle')?.checked || false,
+        stages: getStagesFromConfigTable()
+      };
+    }
+
+    document.getElementById('qm-active-mould-no').value = targetMouldNo;
+
+    document.querySelectorAll('#qm-mould-tabs .tab-btn').forEach(btn => {
+      if (String(btn.dataset.mouldNo) === targetMouldNo) {
+        btn.classList.add('active');
+      } else {
+        btn.classList.remove('active');
+      }
+    });
+
+    loadMouldConfigToUI(targetMouldNo);
+  }
+
+  function getVendorsForStage(stgKey, stgLabel) {
+    const rawVendors = (DB.Vendors ? DB.Vendors.all() : []);
+    const key = (stgKey || '').toLowerCase();
+    const label = (stgLabel || '').toLowerCase();
+
+    const isFlashStage = key === 'deflashing' || (label.includes('flash') || label.includes('deflashing')) && !label.includes('cryo');
+    const isTrimStage = key === 'trimming' || key === 'waiting-trimming' || label.includes('trimming');
+
+    if (isFlashStage) {
+      return rawVendors.filter(v => {
+        if (!v || !v.name || v.active === false) return false;
+        const dept = (v.department || '').toLowerCase();
+        const name = (v.name || '').toLowerCase();
+        return dept === 'deflashing' || name.includes('flash') || name.includes('shanthi');
+      });
+    }
+
+    if (isTrimStage) {
+      return rawVendors.filter(v => {
+        if (!v || !v.name || v.active === false) return false;
+        const dept = (v.department || '').toLowerCase();
+        const name = (v.name || '').toLowerCase();
+        return dept === 'trimming' || name.includes('trimming') || name.includes('chitra');
+      });
+    }
+
+    return [];
+  }
+
+  function loadMouldConfigToUI(mouldNo) {
+    mouldNo = String(mouldNo);
+    const config = mouldConfigsCache[mouldNo] || { enabled: true, stages: DEFAULT_QUICK_MOVE_STAGES };
+    let rawStages = (config.stages && config.stages.length) ? config.stages : DEFAULT_QUICK_MOVE_STAGES;
+    let filteredStages = rawStages.filter(s => !['visual', 'quality', 'store'].includes(s.key));
+
+    const toggle = document.getElementById('qm-config-enable-toggle');
+    if (toggle) toggle.checked = !!config.enabled;
+
+    const labelEl = document.getElementById('qm-enable-toggle-label');
+    if (labelEl) labelEl.textContent = `⚡ Enable Quick Movement for Mould #${mouldNo}`;
+
+    const titleEl = document.getElementById('qm-stage-order-title');
+    if (titleEl) titleEl.textContent = `📋 Stage Sequence Order & Subcontractor Rules (Mould #${mouldNo})`;
+
+    renderQuickMoveConfigTable(filteredStages);
+  }
+
+  function renderQuickMoveConfigTable(stages) {
+    const tbody = document.getElementById('qm-config-stages-tbody');
+    if (!tbody) return;
+
+    tbody.innerHTML = stages.map((stg, idx) => {
+      const isVendorStage = ['trimming', 'waiting-trimming', 'deflashing'].includes(stg.key) || 
+                            (/trimming|flash removal|deflashing/i.test(stg.label || '') && !/cryo/i.test(stg.label || ''));
+
+      let vendorCellContent = `<span class="text-xs text-muted">N/A (In-House)</span>`;
+
+      if (isVendorStage) {
+        const stageVendors = getVendorsForStage(stg.key, stg.label);
+        const vendorOptions = `<option value="">-- In-House / Direct --</option>` + stageVendors.map(v => 
+          `<option value="${v.id}" ${stg.subcontractorVendorId === v.id ? 'selected' : ''}>${v.name}</option>`
+        ).join('');
+
+        vendorCellContent = `
+          <select class="form-control form-control-sm qm-vendor-select" style="font-size:12px; height:30px;">
+            ${vendorOptions}
+          </select>
+        `;
+      }
+
+      return `
+        <tr data-stage-key="${stg.key}">
+          <td class="font-bold text-center" style="font-size:13px; color:var(--primary);">${idx + 1}</td>
+          <td>
+            <div style="font-weight:600;">${stg.icon || '📌'} ${stg.label}</div>
+          </td>
+          <td><code style="font-size:11px; background:var(--bg-glass-hover); padding:2px 6px; border-radius:4px;">${stg.key}</code></td>
+          <td>
+            ${vendorCellContent}
+          </td>
+          <td>
+            <input type="number" class="form-control form-control-sm qm-max-loss" value="${stg.maxLossPercent != null ? stg.maxLossPercent : 10}" min="0" max="100" style="width:70px; font-size:12px; height:30px;">
+          </td>
+          <td class="text-center">
+            <input type="checkbox" class="qm-stage-enable" ${stg.enabled !== false ? 'checked' : ''} style="width:16px; height:16px; cursor:pointer;">
+          </td>
+          <td class="text-center">
+            <div class="flex justify-center gap-1">
+              <button class="btn btn-ghost btn-xs" onclick="MasterModule.moveStageRow(${idx}, -1)" ${idx === 0 ? 'disabled' : ''}>▲</button>
+              <button class="btn btn-ghost btn-xs" onclick="MasterModule.moveStageRow(${idx}, 1)" ${idx === stages.length - 1 ? 'disabled' : ''}>▼</button>
+            </div>
+          </td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  function moveStageRow(index, delta) {
+    const stages = getStagesFromConfigTable();
+    const newIdx = index + delta;
+    if (newIdx < 0 || newIdx >= stages.length) return;
+    
+    const temp = stages[index];
+    stages[index] = stages[newIdx];
+    stages[newIdx] = temp;
+
+    renderQuickMoveConfigTable(stages);
+  }
+
+  function getStagesFromConfigTable() {
+    const trs = Array.from(document.querySelectorAll('#qm-config-stages-tbody tr'));
+    return trs.map((tr) => {
+      const key = tr.dataset.stageKey;
+      const label = tr.querySelector('div[style*="font-weight:600"]')?.textContent.trim() || key;
+      const vendorSelect = tr.querySelector('.qm-vendor-select');
+      const vendorId = vendorSelect ? vendorSelect.value : '';
+      const vendorName = vendorSelect && vendorSelect.selectedIndex >= 0 ? vendorSelect.options[vendorSelect.selectedIndex].text : '';
+      const maxLossPercent = parseFloat(tr.querySelector('.qm-max-loss')?.value) || 10;
+      const enabled = tr.querySelector('.qm-stage-enable')?.checked || false;
+      const iconMatch = label.match(/^(\S+)\s+(.*)$/);
+      const icon = iconMatch ? iconMatch[1] : '📌';
+      const cleanLabel = iconMatch ? iconMatch[2] : label;
+
+      return {
+        key,
+        label: cleanLabel,
+        icon,
+        enabled,
+        subcontractorVendorId: vendorId,
+        subcontractorVendorName: vendorName.includes('--') ? '' : vendorName,
+        maxLossPercent
+      };
+    });
+  }
+
+  function saveQuickMoveConfig() {
+    const partId = document.getElementById('qm-config-part-id').value;
+    if (!partId) return;
+
+    const currentMouldNo = document.getElementById('qm-active-mould-no').value;
+    if (currentMouldNo) {
+      mouldConfigsCache[currentMouldNo] = {
+        enabled: document.getElementById('qm-config-enable-toggle')?.checked || false,
+        stages: getStagesFromConfigTable()
+      };
+    }
+
+    const p = DB.Master.find(partId);
+    if (!p) return;
+
+    p.quickMovementMouldConfigs = mouldConfigsCache;
+
+    if (p.moulds && p.moulds.length) {
+      p.moulds.forEach(m => {
+        const k = String(m.mouldNo);
+        if (mouldConfigsCache[k]) {
+          m.quickMovementConfig = mouldConfigsCache[k];
+        }
+      });
+    }
+
+    const hasAnyEnabled = Object.values(mouldConfigsCache).some(c => c.enabled);
+    p.quickMovementEnabled = hasAnyEnabled;
+
+    DB.Master.update(partId, p);
+
+    document.getElementById('master-quick-move-config-modal').classList.add('hidden');
+    showToast(`Mould-wise Quick Movement Configuration saved successfully!`, 'success');
+    renderTable();
+  }
+
+  return { render, search, openAdd, openEdit, save, remove, openBulk, downloadTemplate, handleFileSelect, saveBulk, addMouldRow, removeMouldRow, handleUpdateCheckboxChange, changePage, openQuickMoveConfig, saveQuickMoveConfig, moveStageRow, switchQuickMoveMouldTab };
 })();
+
+// ── Global Quick Movement Execution Handler ─────────────────
+window.QuickMovementHandler = {
+  redirectToDeliveryChallan: function(batchId, vendorId) {
+    const modalEl = document.getElementById('quick-move-scanner-modal');
+    if (modalEl) modalEl.classList.add('hidden');
+
+    if (window.App && typeof App.navigate === 'function') {
+      App.navigate('delivery-challan');
+      setTimeout(() => {
+        if (window.DeliveryChallanModule && typeof DeliveryChallanModule.addBatchFromQuickMove === 'function') {
+          DeliveryChallanModule.addBatchFromQuickMove(batchId, vendorId);
+        }
+      }, 300);
+    }
+  },
+
+  isQuickMoveConfigured: function(batch) {
+    if (!batch) return false;
+    const stageKey = batch.currentStage || batch.stage;
+    if (['waiting-visual', 'visual', 'gauge', 'quality', 'store'].includes(stageKey)) return false;
+
+    const part = DB.Master.find(batch.partId) || DB.Master.findByJmref(batch.jmrefNo);
+    if (!part) return false;
+
+    const batchMouldNo = batch.mouldNo != null ? String(batch.mouldNo) : (part.moulds && part.moulds[0] ? String(part.moulds[0].mouldNo) : '1');
+    
+    let mouldConfig = null;
+    if (part.quickMovementMouldConfigs) {
+      mouldConfig = part.quickMovementMouldConfigs[batchMouldNo];
+    }
+    if (!mouldConfig && part.moulds && part.moulds.length) {
+      const matchingMould = part.moulds.find(m => String(m.mouldNo) === batchMouldNo || Number(m.mouldNo) === Number(batchMouldNo));
+      if (matchingMould) mouldConfig = matchingMould.quickMovementConfig;
+    }
+    if (!mouldConfig) {
+      mouldConfig = part.quickMovementConfig;
+    }
+
+    return !!(mouldConfig && mouldConfig.enabled);
+  },
+
+  openScannerModal: function(prefilledBatchId = null) {
+    let modal = document.getElementById('quick-move-scanner-modal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.className = 'modal-overlay hidden';
+      modal.id = 'quick-move-scanner-modal';
+      document.body.appendChild(modal);
+    }
+
+    modal.innerHTML = `
+      <div class="modal modal-md" style="max-width:560px;">
+        <div class="modal-header" style="background:var(--bg-glass-hover); border-bottom:1px solid var(--border);">
+          <div>
+            <h3 style="display:flex; align-items:center; gap:8px;">⚡ Quick Stage Movement Execution</h3>
+            <p class="text-xs text-muted" id="qm-header-subtitle">${prefilledBatchId ? 'Confirm 1-step Quick Stage Movement' : 'Scan batch barcode for 1-step stage progression'}</p>
+          </div>
+          <button class="modal-close" onclick="document.getElementById('quick-move-scanner-modal').classList.add('hidden')">&#x2715;</button>
+        </div>
+        <div class="modal-body" style="padding:20px;">
+          <div class="form-group" id="qm-scan-input-group" style="margin-bottom:16px; ${prefilledBatchId ? 'display:none;' : ''}">
+            <label class="form-label font-bold" style="color:var(--primary);">Scan / Enter Batch Number</label>
+            <div class="flex gap-2">
+              <input type="text" id="qm-scan-input" class="form-control font-mono" placeholder="Scan QR / Batch No..." autofocus onkeydown="if(event.key==='Enter') QuickMovementHandler.lookupBatch(this.value)">
+              <button class="btn btn-primary" onclick="QuickMovementHandler.lookupBatch(document.getElementById('qm-scan-input').value)">🔍 Search</button>
+            </div>
+          </div>
+          <div id="qm-scan-details" style="display:none;"></div>
+        </div>
+      </div>
+    `;
+
+    modal.classList.remove('hidden');
+    const inp = document.getElementById('qm-scan-input');
+    if (inp) {
+      inp.value = '';
+      inp.focus();
+    }
+
+    if (prefilledBatchId) {
+      const b = DB.Batches.find(prefilledBatchId);
+      if (b) {
+        document.getElementById('qm-scan-input').value = b.batchNo;
+        this.lookupBatch(b.batchNo);
+      }
+    }
+  },
+
+  lookupBatch: function(batchNo) {
+    batchNo = (batchNo || '').trim();
+    const detailsEl = document.getElementById('qm-scan-details');
+    if (!batchNo) { if (detailsEl) detailsEl.style.display = 'none'; return; }
+
+    const batch = DB.Batches.find(batchNo) || DB.Batches.allIncludeArchived().find(b => (b.batchNo && b.batchNo.toLowerCase() === batchNo.toLowerCase()) || b.id === batchNo);
+    if (!batch) {
+      showToast('Batch not found: ' + batchNo, 'error');
+      if (detailsEl) detailsEl.style.display = 'none';
+      return;
+    }
+
+    const part = DB.Master.find(batch.partId) || DB.Master.findByJmref(batch.jmrefNo);
+    if (!part) {
+      showToast('Part Master record not found for batch ' + batchNo, 'error');
+      if (detailsEl) detailsEl.style.display = 'none';
+      return;
+    }
+
+    const batchMouldNo = batch.mouldNo != null ? String(batch.mouldNo) : (part.moulds && part.moulds[0] ? String(part.moulds[0].mouldNo) : '1');
+    
+    let mouldConfig = null;
+    if (part.quickMovementMouldConfigs) {
+      mouldConfig = part.quickMovementMouldConfigs[batchMouldNo];
+    }
+    if (!mouldConfig && part.moulds && part.moulds.length) {
+      const matchingMould = part.moulds.find(m => String(m.mouldNo) === batchMouldNo || Number(m.mouldNo) === Number(batchMouldNo));
+      if (matchingMould) mouldConfig = matchingMould.quickMovementConfig;
+    }
+    if (!mouldConfig) {
+      mouldConfig = part.quickMovementConfig;
+    }
+
+    if (!mouldConfig || !mouldConfig.enabled) {
+      showToast(`Quick Movement is not enabled for Mould #${batchMouldNo} of ${batch.jmrefNo}. Configure it in Inventory Master first.`, 'warning');
+      if (detailsEl) detailsEl.style.display = 'none';
+      return;
+    }
+
+    const DEFAULT_STAGES = [
+      { key: 'production', label: 'Production', icon: '🏭', enabled: true },
+      { key: 'cryogenic', label: 'Cryogenic', icon: '❄️', enabled: true },
+      { key: 'deflashing', label: 'Flash Removal', icon: '🔧', enabled: true },
+      { key: 'waiting-trimming', label: 'Waiting for Trimming', icon: '⏳', enabled: true },
+      { key: 'trimming', label: 'Trimming (Subcontractor)', icon: '✂️', enabled: true },
+      { key: 'waiting-visual', label: 'Waiting for Visual Inspection', icon: '⏳', enabled: true }
+    ];
+
+    let rawConfiguredStages = (mouldConfig && mouldConfig.stages && mouldConfig.stages.length) ? mouldConfig.stages : DEFAULT_STAGES;
+    const allConfiguredStages = rawConfiguredStages.filter(s => !['visual', 'quality', 'store'].includes(s.key));
+    const currentStageKey = batch.currentStage || batch.stage || 'production';
+    
+    let currentIdx = allConfiguredStages.findIndex(s => s.key === currentStageKey);
+
+    if (currentIdx === -1) {
+      const STD_ORDER = ['production', 'cryogenic', 'deflashing', 'waiting-trimming', 'trimming', 'post-curing', 'waiting-visual', 'visual', 'gauge', 'quality', 'store'];
+      const stdCurrentIdx = STD_ORDER.indexOf(currentStageKey);
+
+      for (let i = 0; i < allConfiguredStages.length; i++) {
+        const stg = allConfiguredStages[i];
+        if (stg.enabled !== false) {
+          const stgStdIdx = STD_ORDER.indexOf(stg.key);
+          if (stgStdIdx > stdCurrentIdx) {
+            currentIdx = i - 1;
+            break;
+          }
+        }
+      }
+    }
+
+    let nextStage = null;
+    for (let i = currentIdx + 1; i < allConfiguredStages.length; i++) {
+      if (allConfiguredStages[i].enabled !== false) {
+        nextStage = allConfiguredStages[i];
+        break;
+      }
+    }
+
+    if (!nextStage || currentStageKey === 'store') {
+      showToast(`Batch ${batch.batchNo} is already at final stage (${STAGE_LABELS[currentStageKey] || currentStageKey}).`, 'info');
+      if (detailsEl) detailsEl.style.display = 'none';
+      return;
+    }
+
+    const currentQty = Number(batch.currentQty != null ? batch.currentQty : (batch.initialQty || 0));
+    
+    let vendorObj = null;
+    if (nextStage.subcontractorVendorId) {
+      vendorObj = DB.Vendors.find(nextStage.subcontractorVendorId);
+    }
+    const isExternalVendor = !!(vendorObj && vendorObj.name && !vendorObj.name.toLowerCase().includes('in house'));
+    const vendorName = vendorObj ? vendorObj.name : (nextStage.subcontractorVendorName || 'In-House');
+
+    if (isExternalVendor) {
+      detailsEl.style.display = 'block';
+      detailsEl.innerHTML = `
+        <div style="background:rgba(245, 158, 11, 0.08); border:1px solid rgba(245, 158, 11, 0.3); border-radius:var(--radius-md); padding:16px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+            <div>
+              <div style="font-weight:700; font-size:16px; color:var(--primary);">${batch.batchNo}</div>
+              <div class="text-xs text-muted">JMREF: <strong>${batch.jmrefNo}</strong> | Part: ${batch.partNo || '—'}</div>
+            </div>
+            <span class="badge badge-amber">🚚 Subcontractor Dispatch</span>
+          </div>
+
+          <div style="font-size:13px; color:var(--text-main); margin-bottom:12px; background:var(--bg-card); padding:12px; border-radius:6px; border:1px solid var(--border); line-height:1.6;">
+            <div>📌 Target Stage: <strong>${STAGE_LABELS[nextStage.key] || nextStage.key}</strong></div>
+            <div>🏢 Subcontractor Vendor: <strong style="color:var(--warning);">${vendorName}</strong></div>
+            <hr style="margin:8px 0; border:0; border-top:1px dashed var(--border);">
+            <div style="font-size:12px; color:var(--text-secondary);">
+              ⚠️ Direct <em>Process & Move</em> is disabled for external subcontractor vendors.<br>
+              Materials must be dispatched via an official <strong>Delivery Challan</strong> for gate pass & dispatch tracking.
+            </div>
+          </div>
+
+          <div class="flex justify-end gap-2" style="margin-top:14px;">
+            <button class="btn btn-secondary btn-sm" onclick="document.getElementById('quick-move-scanner-modal').classList.add('hidden')">Cancel</button>
+            <button class="btn btn-amber btn-sm font-bold" onclick="QuickMovementHandler.redirectToDeliveryChallan('${batch.id}', '${vendorObj.id}')">
+              🚚 Open Delivery Challan & Add Batch
+            </button>
+          </div>
+        </div>
+      `;
+      return;
+    }
+
+    detailsEl.style.display = 'block';
+    detailsEl.innerHTML = `
+      <div style="background:var(--bg-glass-hover); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px;">
+        <input type="hidden" id="qm-exec-batch-id" value="${batch.id}">
+        <input type="hidden" id="qm-exec-input-qty" value="${currentQty}">
+        <input type="hidden" id="qm-exec-next-stage" value="${nextStage.key}">
+        <input type="hidden" id="qm-exec-vendor-id" value="${nextStage.subcontractorVendorId || ''}">
+        <input type="hidden" id="qm-exec-max-loss" value="${nextStage.maxLossPercent || 10}">
+
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; border-bottom:1px dashed var(--border); padding-bottom:8px;">
+          <div>
+            <div style="font-weight:700; font-size:16px; color:var(--primary);">${batch.batchNo}</div>
+            <div class="text-xs text-muted">JMREF: <strong>${batch.jmrefNo}</strong> | Part: ${batch.partNo || '—'}</div>
+          </div>
+          <span class="badge badge-teal">${batch.mouldNo ? `Mould #${batch.mouldNo}` : 'Standard'}</span>
+        </div>
+
+        <!-- Stage Progression Pipeline -->
+        <div style="display:flex; align-items:center; justify-content:space-between; background:var(--bg-card); padding:10px 14px; border-radius:var(--radius-sm); margin-bottom:14px; border:1px solid var(--border);">
+          <div style="text-align:center;">
+            <div class="text-xs text-muted">Current Stage</div>
+            <div style="font-weight:700; color:var(--warning); font-size:13px;">${STAGE_LABELS[currentStageKey] || currentStageKey}</div>
+          </div>
+          <div style="font-size:18px; color:var(--primary);">➔</div>
+          <div style="text-align:center;">
+            <div class="text-xs text-muted">Next Stage</div>
+            <div style="font-weight:700; color:var(--success); font-size:13px;">${nextStage.icon || '📌'} ${nextStage.label || STAGE_LABELS[nextStage.key]}</div>
+          </div>
+        </div>
+
+        ${(nextStage.key === 'trimming' || nextStage.key === 'waiting-trimming' || nextStage.key === 'deflashing') ? `
+          <div style="margin-bottom:12px; font-size:12px; background:rgba(59, 130, 246, 0.08); padding:8px 12px; border-radius:6px; border:1px solid rgba(59, 130, 246, 0.2);">
+            🏢 <strong>Subcontractor Vendor:</strong> ${vendorName} <span class="text-xs text-muted">(Auto-derived from Mould Config)</span>
+          </div>
+        ` : ''}
+
+        <div class="form-row" style="margin-bottom:12px;">
+          <div class="form-group" style="flex:1;">
+            <label class="form-label text-xs">Input Qty</label>
+            <input type="number" class="form-control" value="${currentQty}" readonly style="background:var(--bg-glass-hover); font-weight:700;">
+          </div>
+          <div class="form-group" style="flex:1;">
+            <label class="form-label text-xs font-bold" style="color:var(--success);">Output Qty <span class="required">*</span></label>
+            <input type="number" id="qm-exec-output-qty" class="form-control font-bold" value="${currentQty}" min="0" max="${currentQty}" autofocus oninput="QuickMovementHandler.calcLoss()">
+          </div>
+        </div>
+
+        <div id="qm-loss-warning-box" style="display:none; margin-bottom:12px;" class="card-warning">
+          <div style="font-size:12px; font-weight:700; color:var(--danger);" id="qm-loss-warning-text">⚠️ High Loss Detected!</div>
+          <div style="margin-top:6px;">
+            <label class="form-label text-xs font-bold" style="color:var(--danger);">Mandatory Reason / Notes for Loss <span class="required">*</span></label>
+            <input type="text" id="qm-exec-comments" class="form-control form-control-sm" placeholder="Enter reason for high loss...">
+          </div>
+        </div>
+
+        <div class="flex justify-end gap-2" style="margin-top:16px;">
+          <button class="btn btn-secondary btn-sm" onclick="document.getElementById('quick-move-scanner-modal').classList.add('hidden')">Cancel</button>
+          <button class="btn btn-success btn-sm font-bold" onclick="QuickMovementHandler.submitStageMove()">🚀 Confirm Stage Move</button>
+        </div>
+      </div>
+    `;
+
+    setTimeout(() => {
+      const outInp = document.getElementById('qm-exec-output-qty');
+      if (outInp) { outInp.focus(); outInp.select(); }
+    }, 100);
+  },
+
+  calcLoss: function() {
+    const inputQty = parseFloat(document.getElementById('qm-exec-input-qty')?.value) || 0;
+    const outputQty = parseFloat(document.getElementById('qm-exec-output-qty')?.value) || 0;
+    const maxLossPct = parseFloat(document.getElementById('qm-exec-max-loss')?.value) || 10;
+    const warnBox = document.getElementById('qm-loss-warning-box');
+    const warnText = document.getElementById('qm-loss-warning-text');
+
+    if (inputQty <= 0) return;
+    const lossQty = Math.max(0, inputQty - outputQty);
+    const lossPct = (lossQty / inputQty) * 100;
+
+    if (lossPct > maxLossPct) {
+      if (warnBox) warnBox.style.display = 'block';
+      if (warnText) warnText.textContent = `⚠️ Scrap Loss is ${lossPct.toFixed(1)}% (${formatNum(lossQty)} pcs lost). Loss exceeds max limit (${maxLossPct}%). Remarks required!`;
+    } else {
+      if (warnBox) warnBox.style.display = 'none';
+    }
+  },
+
+  submitStageMove: function() {
+    const batchId = document.getElementById('qm-exec-batch-id')?.value;
+    const nextStageKey = document.getElementById('qm-exec-next-stage')?.value;
+    const vendorId = document.getElementById('qm-exec-vendor-id')?.value;
+    const inputQty = parseFloat(document.getElementById('qm-exec-input-qty')?.value) || 0;
+    const outputQty = parseFloat(document.getElementById('qm-exec-output-qty')?.value);
+    const maxLossPct = parseFloat(document.getElementById('qm-exec-max-loss')?.value) || 10;
+    const comments = (document.getElementById('qm-exec-comments')?.value || '').trim();
+
+    if (isNaN(outputQty) || outputQty < 0) {
+      showToast('Please enter a valid Output Quantity', 'error');
+      return;
+    }
+    if (outputQty > inputQty) {
+      showToast(`Output Quantity (${outputQty}) cannot exceed Input Quantity (${inputQty})`, 'error');
+      return;
+    }
+
+    const lossQty = Math.max(0, inputQty - outputQty);
+    const lossPct = inputQty > 0 ? (lossQty / inputQty) * 100 : 0;
+
+    if (lossPct > maxLossPct && !comments) {
+      showToast(`Remarks are required because Scrap Loss (${lossPct.toFixed(1)}%) exceeds limit (${maxLossPct}%)`, 'error');
+      const commInp = document.getElementById('qm-exec-comments');
+      if (commInp) commInp.focus();
+      return;
+    }
+
+    const batch = DB.Batches.find(batchId);
+    if (!batch) { showToast('Batch not found', 'error'); return; }
+
+    const fromStage = batch.currentStage || batch.stage || 'production';
+
+    const updateFields = {
+      stage: nextStageKey,
+      currentStage: nextStageKey,
+      currentQty: outputQty,
+      vendorId: vendorId || batch.vendorId || '',
+      updatedAt: new Date().toISOString()
+    };
+
+    if (nextStageKey === 'store') {
+      updateFields.status = 'completed';
+      updateFields.completedAt = new Date().toISOString();
+      updateFields.remainingQty = outputQty;
+    }
+
+    DB.Batches.update(batchId, updateFields);
+
+    DB.StageRecords.insert({
+      batchId: batchId,
+      batchNo: batch.batchNo,
+      jmrefNo: batch.jmrefNo,
+      partNo: batch.partNo,
+      movedFrom: fromStage,
+      movedTo: nextStageKey,
+      inputQty: inputQty,
+      outputQty: outputQty,
+      lossQty: lossQty,
+      lossPercent: lossPct,
+      vendorId: vendorId || '',
+      remarks: comments,
+      date: today(),
+      createdAt: nowISO()
+    });
+
+    if (lossQty > 0) {
+      DB.LossTracker.insert({
+        batchId: batchId,
+        batchNo: batch.batchNo,
+        jmrefNo: batch.jmrefNo,
+        stage: fromStage,
+        lossQty: lossQty,
+        lossPercent: lossPct,
+        reason: comments || 'Quick Move scrap loss',
+        date: today(),
+        createdAt: nowISO()
+      });
+    }
+
+    showToast(`⚡ Batch ${batch.batchNo} moved from ${STAGE_LABELS[fromStage] || fromStage} ➔ ${STAGE_LABELS[nextStageKey] || nextStageKey}!`, 'success');
+
+    const modalEl = document.getElementById('quick-move-scanner-modal');
+    if (modalEl) modalEl.classList.add('hidden');
+    const detailsEl = document.getElementById('qm-scan-details');
+    if (detailsEl) detailsEl.style.display = 'none';
+
+    if (window.App && typeof App.navigate === 'function' && App.current) {
+      try { App.navigate(App.current); } catch(e) {}
+    }
+  }
+};

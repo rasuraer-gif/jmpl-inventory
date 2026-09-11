@@ -100,7 +100,7 @@ function today() { return new Date().toISOString().slice(0,10); }
 function nowISO() { return new Date().toISOString(); }
 
 const STAGE_LABELS = {
-  production: 'Moulding',
+  production: 'Production',
   cryogenic: 'Cryogenic',
   deflashing: 'Manual DE Flashing',
   'waiting-trimming': 'Waiting for Trimming',
@@ -581,6 +581,7 @@ const NAV = [
   { id:'rpt-waiting-visual', label:'Waiting for Visual Report', icon:'⏳', module:'report_waiting_visual', section:'tools', parent:'reports', perm:'report_waiting_visual' },
   { id:'rpt-visual',    label:'Visual Inspection', icon:'👁️', module:'report_visual',    section:'tools', parent:'reports', perm:'report_visual' },
   { id:'rpt-gauge',     label:'Gauge Inspection',  icon:'📏', module:'report_gauge',     section:'tools', parent:'reports', perm:'report_gauge' },
+  { id:'rpt-quality',   label:'Quality Final Report', icon:'⭐', module:'report_quality', section:'tools', parent:'reports', perm:'report_quality' },
   { id:'rpt-rejected',  label:'Rejected Batches',  icon:'🚫', module:'report_rejected',  section:'tools', parent:'reports', perm:'report_rejected' },
   { id:'rpt-recheck',   label:'QF Recheck Report', icon:'🔄', module:'report_recheck',   section:'tools', parent:'reports', perm:'report_recheck' },
   { id:'rpt-slob',      label:'SLOB Report',       icon:'📉', module:'report_slob',      section:'tools', parent:'reports', perm:'report_slob' },
@@ -656,6 +657,7 @@ const App = (() => {
     report_waiting_visual: () => ReportsModule?.render('waiting-visual'),
     report_visual:     () => ReportsModule?.render('visual'),
     report_gauge:      () => ReportsModule?.render('gauge'),
+    report_quality:    () => ReportsModule?.render('quality'),
     report_rejected:   () => ReportsModule?.render('rejected'),
     report_recheck:    () => ReportsModule?.render('recheck'),
     report_slob:       () => ReportsModule?.render('slob'),
@@ -705,6 +707,7 @@ const App = (() => {
     report_waiting_visual:'Waiting for Visual Report',
     report_visual:'Visual Inspection Report',
     report_gauge:'Gauge Inspection Report',
+    report_quality:'Quality Final Report',
     report_rejected:'Rejected Batch Report',
     report_recheck:'Quality Final Recheck',
     report_slob:'SLOB Report',
@@ -953,10 +956,17 @@ const App = (() => {
   }
 
   let pendingSyncCollections = new Set();
+  let syncTimeoutMap = {};
   function updateTableSyncState(table, hasPendingWrites) {
     if (hasPendingWrites) {
       pendingSyncCollections.add(table);
+      if (syncTimeoutMap[table]) clearTimeout(syncTimeoutMap[table]);
+      syncTimeoutMap[table] = setTimeout(() => {
+        pendingSyncCollections.delete(table);
+        triggerSyncStatusUpdate();
+      }, 1200);
     } else {
+      if (syncTimeoutMap[table]) clearTimeout(syncTimeoutMap[table]);
       pendingSyncCollections.delete(table);
     }
     triggerSyncStatusUpdate();
@@ -999,6 +1009,20 @@ const App = (() => {
   }
 
   let cloudSearchTimer = null;
+  function triggerBackgroundSearch(query, callback) {
+    const q = (query || '').trim();
+    if (q.length >= 2 && typeof DB !== 'undefined' && DB.Batches && DB.Batches.searchCloud) {
+      if (cloudSearchTimer) clearTimeout(cloudSearchTimer);
+      cloudSearchTimer = setTimeout(async () => {
+        const results = await DB.Batches.searchCloud(q);
+        if (results && results.length && typeof callback === 'function') {
+          try { callback(results); } catch(e) {}
+        }
+      }, 250);
+    }
+  }
+  window.triggerBackgroundSearch = triggerBackgroundSearch;
+
   function onGlobalSearchInput(query) {
     const dropdown = document.getElementById('global-search-dropdown');
     if (!dropdown) return;
@@ -1014,18 +1038,12 @@ const App = (() => {
       const qNorm = q.replace(/[\s\-_]/g, '');
 
       // Trigger asynchronous remote search on Firestore for archived/completed batches
-      if (q.length >= 2 && typeof DB !== 'undefined' && DB.Batches && DB.Batches.searchCloud) {
-        if (cloudSearchTimer) clearTimeout(cloudSearchTimer);
-        cloudSearchTimer = setTimeout(async () => {
-          const activeInput = document.getElementById('global-search-input');
-          if (activeInput && activeInput.value.trim().toLowerCase() === q) {
-            const remoteBatches = await DB.Batches.searchCloud(q);
-            if (remoteBatches && remoteBatches.length) {
-              onGlobalSearchInput(activeInput.value);
-            }
-          }
-        }, 300);
-      }
+      triggerBackgroundSearch(q, () => {
+        const activeInput = document.getElementById('global-search-input');
+        if (activeInput && activeInput.value.trim().toLowerCase() === q) {
+          onGlobalSearchInput(activeInput.value);
+        }
+      });
 
       // 1. Search Batches (including completed & archived)
       const allBatches = (typeof DB !== 'undefined' && DB.Batches && DB.Batches.allIncludeArchived) 
@@ -1316,8 +1334,6 @@ const App = (() => {
 
     applyFilter();
     setTimeout(applyFilter, 50);
-    setTimeout(applyFilter, 150);
-    setTimeout(applyFilter, 300);
   }
 
   function navigateToBatch(batch) {

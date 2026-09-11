@@ -926,18 +926,24 @@ const VisualModule = (() => {
     }
   });
 
-  function filterPending(val) {
+  function filterPending(val, isRemoteUpdate = false) {
     currentPage = 1;
     pendingSearch = val;
+    if (!isRemoteUpdate && val && window.triggerBackgroundSearch) {
+      window.triggerBackgroundSearch(val, () => {
+        const inp = document.getElementById('vis-pending-search');
+        if (inp && inp.value === val) filterPending(val, true);
+      });
+    }
     const content = document.getElementById('vis-content');
     if (content) {
       const batches = DB.Batches.byStage('visual');
       content.innerHTML = pendingTab(batches);
       const inp = document.getElementById('vis-pending-search');
       if (inp) {
-        inp.value = val;
-        inp.focus();
-        inp.setSelectionRange(inp.value.length, inp.value.length);
+        if (inp.value !== val) inp.value = val;
+        if (document.activeElement !== inp) inp.focus();
+        try { inp.setSelectionRange(inp.value.length, inp.value.length); } catch(e) {}
       }
     }
   }

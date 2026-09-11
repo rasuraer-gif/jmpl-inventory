@@ -20,6 +20,8 @@ const ReplenishmentModule = (() => {
   let stageRecordsByPartAndStage = {};
   let stageRecordsByStage = {};
   let activeBatchesByPartAndStage = {};
+  let generalLossRateByStage = {};
+  let lastOutputQtyByBatchStage = {};
 
   function buildIndexes() {
     stageRecordsByBatch = {};
@@ -27,6 +29,8 @@ const ReplenishmentModule = (() => {
     stageRecordsByPartAndStage = {};
     stageRecordsByStage = {};
     activeBatchesByPartAndStage = {};
+    generalLossRateByStage = {};
+    lastOutputQtyByBatchStage = {};
 
     const allStageRecords = DB.StageRecords.all();
     const allBatches = DB.Batches.all();
@@ -48,6 +52,11 @@ const ReplenishmentModule = (() => {
 
       if (!stageRecordsByStage[r.stage]) stageRecordsByStage[r.stage] = [];
       stageRecordsByStage[r.stage].push(r);
+
+      if (r.batchId && r.movedTo) {
+        const key = `${r.batchId}_${r.movedTo}`;
+        lastOutputQtyByBatchStage[key] = r.isRecheck ? Number(r.recheckQty ?? r.outputQty ?? 0) : Number(r.outputQty ?? 0);
+      }
     });
 
     allBatches.forEach(b => {
@@ -57,20 +66,26 @@ const ReplenishmentModule = (() => {
         activeBatchesByPartAndStage[key].push(b);
       }
     });
+
+    STAGES.forEach(stage => {
+      const generalRecords = stageRecordsByStage[stage] || [];
+      if (generalRecords.length === 0) {
+        generalLossRateByStage[stage] = 0.05;
+      } else {
+        const totalIn = generalRecords.reduce((s, r) => s + (r.inputQty || 0), 0);
+        const totalLoss = generalRecords.reduce((s, r) => s + (r.lossQty || 0), 0);
+        generalLossRateByStage[stage] = totalIn > 0 ? (totalLoss / totalIn) : 0.05;
+      }
+    });
   }
 
   // Calculates historical average loss rate for a stage + part
   function getStageLossRate(partId, stage) {
     const key = `${partId}_${stage}`;
-    const stageRecords = stageRecordsByPartAndStage[key] || [];
+    const stageRecords = stageRecordsByPartAndStage[key];
 
-    if (stageRecords.length === 0) {
-      // General stage loss fallback
-      const generalRecords = stageRecordsByStage[stage] || [];
-      if (generalRecords.length === 0) return 0.05; // 5% default fallback
-      const totalIn = generalRecords.reduce((s, r) => s + (r.inputQty || 0), 0);
-      const totalLoss = generalRecords.reduce((s, r) => s + (r.lossQty || 0), 0);
-      return totalIn > 0 ? (totalLoss / totalIn) : 0.05;
+    if (!stageRecords || stageRecords.length === 0) {
+      return generalLossRateByStage[stage] ?? 0.05;
     }
 
     const totalIn = stageRecords.reduce((s, r) => s + (r.inputQty || 0), 0);
@@ -83,9 +98,9 @@ const ReplenishmentModule = (() => {
     const key = `${partId}_${stage}`;
     const batches = activeBatchesByPartAndStage[key] || [];
     return batches.reduce((sum, b) => {
-      const incoming = stageRecordsByBatch[b.id] ? stageRecordsByBatch[b.id].filter(r => r.movedTo === stage) : [];
-      if (incoming.length) {
-        return sum + (incoming[incoming.length - 1].outputQty || 0);
+      const batchStageKey = `${b.id}_${stage}`;
+      if (lastOutputQtyByBatchStage[batchStageKey] !== undefined) {
+        return sum + lastOutputQtyByBatchStage[batchStageKey];
       }
       return sum + (b.initialQty || 0);
     }, 0);
@@ -131,9 +146,10 @@ const ReplenishmentModule = (() => {
     const el = document.getElementById('content');
     if (!el) return;
 
-    const master = DB.Master.all();
-    const partsPlannerData = master.map(p => {
-      const storeStock = DB.StoreInventory.availableByJmref(p.jmrefNo);
+    // Use fast pre-indexed StoreInventory stock lookup
+    const masterWithStock = DB.StoreInventory.allParts();
+    const partsPlannerData = masterWithStock.map(p => {
+      const storeStock = Number(p.available || 0);
       const wipYieldData = calculateExpectedWIPYield(p.id);
       const wipYield = wipYieldData.total;
       

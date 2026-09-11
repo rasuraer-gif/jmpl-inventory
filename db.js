@@ -70,7 +70,8 @@ const DB = (() => {
     auditSessions: [],
     auditRecords: [],
     deliveryChallans: [],
-    printHistory: []
+    printHistory: [],
+    auditLogs: []
   };
   let localBackupData = {};
 
@@ -170,16 +171,24 @@ const DB = (() => {
       collections.forEach(table => {
         let query = db.collection(table);
 
-        query.onSnapshot({ includeMetadataChanges: true }, snapshot => {
-          const hasPendingWrites = snapshot.metadata ? snapshot.metadata.hasPendingWrites : false;
-          triggerSyncStateChange(table, hasPendingWrites);
+        query.onSnapshot(snapshot => {
           const list = [];
           snapshot.forEach(doc => {
             list.push({ id: doc.id, ...doc.data() });
           });
 
-          // Compare incoming remote snapshot to local memory cache to detect changes
-          const hasChanges = JSON.stringify(cache[table]) !== JSON.stringify(list);
+          // Fast primitive property comparison to detect remote data changes without JSON.stringify overhead
+          let hasChanges = cache[table].length !== list.length;
+          if (!hasChanges) {
+            for (let i = 0; i < list.length; i++) {
+              const a = cache[table][i];
+              const b = list[i];
+              if (!a || !b || a.id !== b.id || a.updatedAt !== b.updatedAt || a.status !== b.status || a.currentStage !== b.currentStage || a.remainingQty !== b.remainingQty) {
+                hasChanges = true;
+                break;
+              }
+            }
+          }
 
           if (hasChanges) {
             cache[table] = list;
@@ -653,12 +662,19 @@ const DB = (() => {
     cache[table].push(row);
     saveLocal(table);
 
-    // Save to Firestore asynchronously
+    // Notify local data change listeners immediately
+    triggerDataChange(table);
+
+    // Save to Firestore asynchronously and signal sync status
     if (db) {
+      triggerSyncStateChange(table, true);
       const docData = sanitizeFirestoreDoc({ ...row });
       delete docData.id;
-      db.collection(table).doc(id).set(docData).catch(err => {
+      db.collection(table).doc(id).set(docData).then(() => {
+        triggerSyncStateChange(table, false);
+      }).catch(err => {
         console.error(`Firebase insert error on ${table}/${id}:`, err);
+        triggerSyncStateChange(table, false);
       });
     }
 
@@ -679,12 +695,19 @@ const DB = (() => {
     cache[table][index] = updatedRow;
     saveLocal(table);
 
-    // Save to Firestore asynchronously
+    // Notify local data change listeners immediately
+    triggerDataChange(table);
+
+    // Save to Firestore asynchronously and signal sync status
     if (db) {
+      triggerSyncStateChange(table, true);
       const docData = sanitizeFirestoreDoc({ ...updatedRow });
       delete docData.id;
-      db.collection(table).doc(id).set(docData).catch(err => {
+      db.collection(table).doc(id).set(docData).then(() => {
+        triggerSyncStateChange(table, false);
+      }).catch(err => {
         console.error(`Firebase update error on ${table}/${id}:`, err);
+        triggerSyncStateChange(table, false);
       });
     }
 
@@ -696,10 +719,17 @@ const DB = (() => {
     cache[table] = cache[table].filter(r => r.id !== id);
     saveLocal(table);
 
-    // Remove from Firestore asynchronously
+    // Notify local data change listeners immediately
+    triggerDataChange(table);
+
+    // Remove from Firestore asynchronously and signal sync status
     if (db) {
-      db.collection(table).doc(id).delete().catch(err => {
+      triggerSyncStateChange(table, true);
+      db.collection(table).doc(id).delete().then(() => {
+        triggerSyncStateChange(table, false);
+      }).catch(err => {
         console.error(`Firebase delete error on ${table}/${id}:`, err);
+        triggerSyncStateChange(table, false);
       });
     }
   }
@@ -855,11 +885,11 @@ const DB = (() => {
           if (!v.name) return false;
           const nameLower = v.name.toLowerCase();
           if (nameLower.includes('chitra trimming')) {
-            const allowed = ['delivery-challan', 'trimming', 'admin', 'reports', 'dashboard'];
+            const allowed = ['master', 'delivery-challan', 'trimming', 'admin', 'reports', 'dashboard'];
             return allowed.includes(App.current) || App.current.startsWith('report');
           }
           if (nameLower.includes('shanthi flash')) {
-            const allowed = ['delivery-challan', 'admin', 'reports', 'dashboard'];
+            const allowed = ['master', 'delivery-challan', 'admin', 'reports', 'dashboard'];
             return allowed.includes(App.current) || App.current.startsWith('report');
           }
           return true;
@@ -874,11 +904,11 @@ const DB = (() => {
           if (!v.name) return false;
           const nameLower = v.name.toLowerCase();
           if (nameLower.includes('chitra trimming')) {
-            const allowed = ['delivery-challan', 'trimming', 'admin', 'reports', 'dashboard'];
+            const allowed = ['master', 'delivery-challan', 'trimming', 'admin', 'reports', 'dashboard'];
             return allowed.includes(App.current) || App.current.startsWith('report');
           }
           if (nameLower.includes('shanthi flash')) {
-            const allowed = ['delivery-challan', 'admin', 'reports', 'dashboard'];
+            const allowed = ['master', 'delivery-challan', 'admin', 'reports', 'dashboard'];
             return allowed.includes(App.current) || App.current.startsWith('report');
           }
           return true;
@@ -956,24 +986,91 @@ const DB = (() => {
     searchCloud: async (qStr) => {
       if (!db || !qStr || qStr.trim().length < 2) return [];
       try {
-        const qUpper = qStr.trim().toUpperCase();
+        const clean = qStr.trim();
+        const qUpper = clean.toUpperCase();
         const results = [];
-        const snapshot = await db.collection('batches')
-          .where('batchNo', '>=', qUpper)
-          .where('batchNo', '<=', qUpper + '\uf8ff')
-          .limit(10)
-          .get();
+        const foundIds = new Set();
 
-        snapshot.forEach(doc => {
-          const data = { id: doc.id, ...doc.data() };
-          const existingIdx = cache.batches.findIndex(x => x.id === doc.id);
+        // 1. Direct Document ID lookup
+        try {
+          const docById = await db.collection('batches').doc(clean).get();
+          if (docById.exists) {
+            const data = { id: docById.id, ...docById.data() };
+            results.push(data);
+            foundIds.add(docById.id);
+          }
+        } catch(e) {}
+
+        // 2. Exact batchNo query
+        try {
+          const snapExact = await db.collection('batches').where('batchNo', '==', qUpper).limit(10).get();
+          snapExact.forEach(doc => {
+            if (!foundIds.has(doc.id)) {
+              const data = { id: doc.id, ...doc.data() };
+              results.push(data);
+              foundIds.add(doc.id);
+            }
+          });
+        } catch(e) {}
+
+        // 3. Range batchNo query (prefix matching)
+        try {
+          const snapRange = await db.collection('batches')
+            .where('batchNo', '>=', qUpper)
+            .where('batchNo', '<=', qUpper + '\uf8ff')
+            .limit(15)
+            .get();
+          snapRange.forEach(doc => {
+            if (!foundIds.has(doc.id)) {
+              const data = { id: doc.id, ...doc.data() };
+              results.push(data);
+              foundIds.add(doc.id);
+            }
+          });
+        } catch(e) {}
+
+        // 4. JMREF No query
+        try {
+          const snapJm = await db.collection('batches').where('jmrefNo', '==', clean).limit(15).get();
+          snapJm.forEach(doc => {
+            if (!foundIds.has(doc.id)) {
+              const data = { id: doc.id, ...doc.data() };
+              results.push(data);
+              foundIds.add(doc.id);
+            }
+          });
+        } catch(e) {}
+
+        // Add all found batches into local memory cache
+        results.forEach(data => {
+          const existingIdx = cache.batches.findIndex(x => x.id === data.id);
           if (existingIdx >= 0) {
             cache.batches[existingIdx] = data;
           } else {
             cache.batches.push(data);
           }
-          results.push(data);
         });
+
+        // Also fetch missing stageRecords in background for any fetched batches
+        if (results.length > 0) {
+          for (const b of results) {
+            try {
+              const srSnap = await db.collection('stageRecords').where('batchId', '==', b.id).get();
+              srSnap.forEach(doc => {
+                const srData = { id: doc.id, ...doc.data() };
+                const srIdx = cache.stageRecords.findIndex(x => x.id === doc.id);
+                if (srIdx >= 0) {
+                  cache.stageRecords[srIdx] = srData;
+                } else {
+                  cache.stageRecords.push(srData);
+                }
+              });
+            } catch(e) {}
+          }
+        }
+
+        saveLocal('batches');
+        saveLocal('stageRecords');
         return results;
       } catch(e) {
         console.warn("searchCloud error:", e);
@@ -1086,9 +1183,12 @@ const DB = (() => {
             if (existingIdx === -1) {
               cache.batches.push(data);
               changed = true;
-            } else if (JSON.stringify(cache.batches[existingIdx]) !== JSON.stringify(data)) {
-              cache.batches[existingIdx] = data;
-              changed = true;
+            } else {
+              const cur = cache.batches[existingIdx];
+              if (cur.updatedAt !== data.updatedAt || cur.status !== data.status || cur.currentStage !== data.currentStage || cur.remainingQty !== data.remainingQty) {
+                cache.batches[existingIdx] = data;
+                changed = true;
+              }
             }
           });
         }
@@ -1449,50 +1549,6 @@ const DB = (() => {
 
   // ── STORE INVENTORY ───────────────────────────────────────
   const StoreInventory = {
-    availableByJmref: (jmrefNo, partId) => {
-      const normTarget = String(jmrefNo || '').trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
-      const stageRecords = getAll('stageRecords');
-      const batches = getAll('batches');
-      const sales = getAll('sales');
-
-      // 1. Sum total store arrival qty for this part (ignoring zeroed/closed batches)
-      let totalReceived = 0;
-      batches.forEach(b => {
-        if (b.status !== 'completed' && b.currentStage !== 'store') return;
-        if (b.notes && (b.notes.includes('Closed via stock') || b.notes.includes('Zeroed via stock') || b.notes.includes('zeroing'))) return;
-
-        let match = false;
-        if (partId && b.partId === partId) match = true;
-        else if (b.jmrefNo) {
-          const bNorm = String(b.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
-          if (normTarget && (bNorm === normTarget || String(b.jmrefNo).trim().toUpperCase() === String(jmrefNo).trim().toUpperCase())) match = true;
-        }
-
-        if (match) {
-          const storeRecs = stageRecords.filter(r => r.batchId === b.id && r.stage === 'store');
-          const storeQty = storeRecs.length ? (storeRecs[0].inputQty !== undefined ? Number(storeRecs[0].inputQty) : Number(b.initialQty || 0)) : Number(b.initialQty || 0);
-          totalReceived += storeQty;
-        }
-      });
-
-      // 2. Sum total sales for this part
-      let totalSold = 0;
-      sales.forEach(s => {
-        if (partId && s.partId === partId) {
-          totalSold += Number(s.qty) || 0;
-          return;
-        }
-        if (s.jmrefNo) {
-          const sNorm = String(s.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
-          if (normTarget && (sNorm === normTarget || String(s.jmrefNo).trim().toUpperCase() === String(jmrefNo).trim().toUpperCase())) {
-            totalSold += Number(s.qty) || 0;
-          }
-        }
-      });
-
-      return Math.max(0, totalReceived - totalSold);
-    },
-
     allParts: () => {
       const master = getAll('master');
       const stageRecords = getAll('stageRecords');
@@ -1508,10 +1564,19 @@ const DB = (() => {
         }
       }
 
-      // Pre-aggregate received stock by partId and by normalized jmrefNo
-      const recByPartId = new Map();
-      const recByJmrefNorm = new Map();
+      // Pre-index master parts by partId and by normalized jmrefNo
+      const masterById = new Map();
+      const masterByJmrefNorm = new Map();
+      for (let i = 0; i < master.length; i++) {
+        const m = master[i];
+        if (m.id) masterById.set(m.id, m);
+        if (m.jmrefNo) {
+          const norm = String(m.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+          if (norm && !masterByJmrefNorm.has(norm)) masterByJmrefNorm.set(norm, m);
+        }
+      }
 
+      const recByMasterId = new Map();
       for (let i = 0; i < batches.length; i++) {
         const b = batches[i];
         if (b.status !== 'completed' && b.currentStage !== 'store') continue;
@@ -1520,60 +1585,92 @@ const DB = (() => {
         const storeVal = storeQtyByBatchId.get(b.id);
         const qty = (storeVal !== undefined && storeVal !== null) ? storeVal : Number(b.initialQty || 0);
 
-        if (b.partId) {
-          recByPartId.set(b.partId, (recByPartId.get(b.partId) || 0) + qty);
-        }
-        if (b.jmrefNo) {
+        let target = null;
+        if (b.partId && masterById.has(b.partId)) {
+          target = masterById.get(b.partId);
+        } else if (b.jmrefNo) {
           const bNorm = String(b.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
-          if (bNorm) {
-            recByJmrefNorm.set(bNorm, (recByJmrefNorm.get(bNorm) || 0) + qty);
+          if (bNorm && masterByJmrefNorm.has(bNorm)) {
+            target = masterByJmrefNorm.get(bNorm);
           }
+        }
+
+        if (target && target.id) {
+          recByMasterId.set(target.id, (recByMasterId.get(target.id) || 0) + qty);
         }
       }
 
-      // Pre-aggregate sales by partId and by normalized jmrefNo
-      const soldByPartId = new Map();
-      const soldByJmrefNorm = new Map();
-
+      const soldByMasterId = new Map();
       for (let i = 0; i < sales.length; i++) {
         const s = sales[i];
         const qty = Number(s.qty) || 0;
-        if (s.partId) {
-          soldByPartId.set(s.partId, (soldByPartId.get(s.partId) || 0) + qty);
-        }
-        if (s.jmrefNo) {
+
+        let target = null;
+        if (s.partId && masterById.has(s.partId)) {
+          target = masterById.get(s.partId);
+        } else if (s.jmrefNo) {
           const sNorm = String(s.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
-          if (sNorm) {
-            soldByJmrefNorm.set(sNorm, (soldByJmrefNorm.get(sNorm) || 0) + qty);
+          if (sNorm && masterByJmrefNorm.has(sNorm)) {
+            target = masterByJmrefNorm.get(sNorm);
           }
+        }
+
+        if (target && target.id) {
+          soldByMasterId.set(target.id, (soldByMasterId.get(target.id) || 0) + qty);
         }
       }
 
-      // Map master items in single O(1) lookups per part
       return master.map(m => {
-        const normTarget = String(m.jmrefNo || '').trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
-        let totalReceived = 0;
-        let totalSold = 0;
-
-        if (m.id && recByPartId.has(m.id)) {
-          totalReceived = recByPartId.get(m.id);
-        } else if (normTarget && recByJmrefNorm.has(normTarget)) {
-          totalReceived = recByJmrefNorm.get(normTarget);
-        }
-
-        if (m.id && soldByPartId.has(m.id)) {
-          totalSold = soldByPartId.get(m.id);
-        } else if (normTarget && soldByJmrefNorm.has(normTarget)) {
-          totalSold = soldByJmrefNorm.get(normTarget);
-        }
-
+        const totalReceived = recByMasterId.get(m.id) || 0;
+        const totalSold = soldByMasterId.get(m.id) || 0;
         const available = Math.max(0, totalReceived - totalSold);
         return {
           ...m,
+          totalReceived,
+          totalSold,
           available
         };
       });
     },
+
+    availableByJmref: (jmrefNo, partId) => {
+      const normTarget = String(jmrefNo || '').trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+      const all = StoreInventory.allParts();
+      const match = all.find(p => (partId && p.id === partId) || (normTarget && String(p.jmrefNo || '').trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase() === normTarget));
+      if (match) return match.available;
+
+      // Fallback for non-master items: direct computation
+      const stageRecords = getAll('stageRecords');
+      const batches = getAll('batches');
+      const sales = getAll('sales');
+      let totalReceived = 0;
+      batches.forEach(b => {
+        if (b.status !== 'completed' && b.currentStage !== 'store') return;
+        if (b.notes && (b.notes.includes('Closed via stock') || b.notes.includes('Zeroed via stock') || b.notes.includes('zeroing'))) return;
+        let isMatch = false;
+        if (partId && b.partId === partId) isMatch = true;
+        if (b.jmrefNo) {
+          const bNorm = String(b.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+          if (normTarget && bNorm === normTarget) isMatch = true;
+        }
+        if (isMatch) {
+          const storeRecs = stageRecords.filter(r => r.batchId === b.id && r.stage === 'store');
+          const storeQty = storeRecs.length ? (storeRecs[0].inputQty !== undefined ? Number(storeRecs[0].inputQty) : Number(b.initialQty || 0)) : Number(b.initialQty || 0);
+          totalReceived += storeQty;
+        }
+      });
+      let totalSold = 0;
+      sales.forEach(s => {
+        let isMatch = false;
+        if (partId && s.partId === partId) isMatch = true;
+        if (s.jmrefNo) {
+          const sNorm = String(s.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+          if (normTarget && sNorm === normTarget) isMatch = true;
+        }
+        if (isMatch) totalSold += Number(s.qty) || 0;
+      });
+      return Math.max(0, totalReceived - totalSold);
+    }
   };
 
   // ── PRODUCTION OPERATOR RECORDS ───────────────────────────
@@ -1648,6 +1745,25 @@ const DB = (() => {
     insert: (r) => insert('deliveryChallans', r),
     update: (id, c) => update('deliveryChallans', id, c),
     remove: (id) => remove('deliveryChallans', id)
+  };
+
+  const AuditLogs = {
+    all: () => getAll('auditLogs').sort((a,b) => (b.timestamp||'').localeCompare(a.timestamp||'')),
+    log: (action, category, details, username) => {
+      let uname = username;
+      if (!uname && typeof Auth !== 'undefined') {
+        const sess = Auth.getSession();
+        uname = sess ? sess.username : 'system';
+      }
+      const entry = {
+        action: String(action || 'Action'),
+        category: String(category || 'system'),
+        details: String(details || ''),
+        username: String(uname || 'system'),
+        timestamp: new Date().toISOString()
+      };
+      return insert('auditLogs', entry);
+    }
   };
 
   function exportBackupJSON() {
@@ -1760,13 +1876,144 @@ const DB = (() => {
     }
   }
 
+  async function reconcileStockBulk(adjustmentsToApply) {
+    const now = new Date();
+    const timeStr = now.toISOString().slice(0, 10);
+    const ts = now.getTime();
+
+    const batchesToAdd = [];
+    const stageRecordsToAdd = [];
+    const salesToAdd = [];
+
+    adjustmentsToApply.forEach((adj, idx) => {
+      const physical = Number(adj.physical);
+      if (isNaN(physical) || physical < 0) return;
+
+      const currentSysQty = StoreInventory.availableByJmref(adj.jmref, adj.partId);
+      const diff = physical - currentSysQty;
+
+      if (diff > 0) {
+        const uniqueId = genId();
+        const batchNo = `STK-ADJ-${adj.jmref}-${ts.toString().slice(-4)}${idx + 1}`;
+        const batchRow = {
+          id: uniqueId,
+          batchNo,
+          jmrefNo: adj.jmref,
+          partNo: adj.partNo,
+          partId: adj.partId,
+          initialQty: diff,
+          remainingQty: diff,
+          currentStage: 'store',
+          status: 'completed',
+          completedAt: now.toISOString(),
+          createdAt: now.toISOString(),
+          updatedAt: now.toISOString(),
+          notes: `Direct Store Stock Reconciliation: Added +${diff} pcs to match physical count (${physical} pcs)`
+        };
+        batchesToAdd.push(batchRow);
+
+        const stageRow = {
+          id: genId(),
+          batchId: uniqueId,
+          batchNo,
+          jmrefNo: adj.jmref,
+          partNo: adj.partNo,
+          partId: adj.partId,
+          stage: 'store',
+          inputQty: diff,
+          outputQty: diff,
+          lossQty: 0,
+          date: timeStr,
+          timestamp: now.toISOString(),
+          createdAt: now.toISOString(),
+          updatedAt: now.toISOString(),
+          notes: `Stock Reconciliation Credit`
+        };
+        stageRecordsToAdd.push(stageRow);
+      } else if (diff < 0) {
+        const debitQty = Math.abs(diff);
+        const salesRow = {
+          id: genId(),
+          date: timeStr,
+          saleDate: timeStr,
+          jmrefNo: adj.jmref,
+          partNo: adj.partNo,
+          partId: adj.partId,
+          qty: debitQty,
+          createdAt: now.toISOString(),
+          updatedAt: now.toISOString(),
+          notes: `Direct Store Stock Reconciliation: Deducted -${debitQty} pcs to match physical count (${physical} pcs)`
+        };
+        salesToAdd.push(salesRow);
+      }
+    });
+
+    if (batchesToAdd.length > 0) {
+      cache['batches'].push(...batchesToAdd);
+      saveLocal('batches');
+      triggerSyncStateChange('batches', true);
+    }
+    if (stageRecordsToAdd.length > 0) {
+      cache['stageRecords'].push(...stageRecordsToAdd);
+      saveLocal('stageRecords');
+      triggerSyncStateChange('stageRecords', true);
+    }
+    if (salesToAdd.length > 0) {
+      cache['sales'].push(...salesToAdd);
+      saveLocal('sales');
+      triggerSyncStateChange('sales', true);
+    }
+
+    if (db) {
+      const allWrites = [];
+      batchesToAdd.forEach(r => {
+        const docData = sanitizeFirestoreDoc({ ...r });
+        delete docData.id;
+        allWrites.push({ collection: 'batches', id: r.id, data: docData });
+      });
+      stageRecordsToAdd.forEach(r => {
+        const docData = sanitizeFirestoreDoc({ ...r });
+        delete docData.id;
+        allWrites.push({ collection: 'stageRecords', id: r.id, data: docData });
+      });
+      salesToAdd.forEach(r => {
+        const docData = sanitizeFirestoreDoc({ ...r });
+        delete docData.id;
+        allWrites.push({ collection: 'sales', id: r.id, data: docData });
+      });
+
+      const chunkSize = 400;
+      for (let i = 0; i < allWrites.length; i += chunkSize) {
+        const chunk = allWrites.slice(i, i + chunkSize);
+        const fBatch = db.batch();
+        chunk.forEach(w => {
+          const docRef = db.collection(w.collection).doc(w.id);
+          fBatch.set(docRef, w.data);
+        });
+        await fBatch.commit().catch(err => {
+          console.error('Firebase bulk stock reconciliation error:', err);
+        });
+      }
+    }
+
+    triggerSyncStateChange('batches', false);
+    triggerSyncStateChange('stageRecords', false);
+    triggerSyncStateChange('sales', false);
+
+    triggerDataChange('batches');
+    triggerDataChange('stageRecords');
+    triggerDataChange('sales');
+
+    return { added: batchesToAdd.length, deducted: salesToAdd.length };
+  }
+
   return {
     init, onSyncStateChange, onDataChange, genId, seedDefaults, clearTable,
     Users, Master, Subcontractors, Vendors, Operators, Inspectors,
     Batches, StageRecords, LossTracker, RejectionTracker,
     RecheckTracker, StockUploads, Sales, StoreInventory,
     ProductionRecords, MonthlyPlans, ProductionSchedules,
-    Moulds, MouldMovements, MouldMaintenance, Tasks, AuditSessions, AuditRecords, DeliveryChallans, PrintHistory, exportBackupJSON, importBackupJSON, restoreToOnlineDB,
+    Moulds, MouldMovements, MouldMaintenance, Tasks, AuditSessions, AuditRecords, DeliveryChallans, PrintHistory, AuditLogs, exportBackupJSON, importBackupJSON, restoreToOnlineDB, reconcileStockBulk,
     raw: { getAll, setAll, insert, update, remove, findById, findWhere }
   };
 })();

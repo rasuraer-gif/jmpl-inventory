@@ -104,6 +104,7 @@ const AdminModule = (() => {
           <button class="tab-btn ${activeTab==='insp'?'active':''}" data-tab="insp">🔍 Inspectors</button>
           <button class="tab-btn ${activeTab==='batches'?'active':''}" data-tab="batches">📦 Batches</button>
           <button class="tab-btn ${activeTab==='tasks'?'active':''}" data-tab="tasks">📋 Tasks</button>
+          <button class="tab-btn ${activeTab==='audit'?'active':''}" data-tab="audit">🛡️ Audit Logs</button>
           <button class="tab-btn ${activeTab==='system'?'active':''}" data-tab="system">⚙️ Maintenance</button>
         </div>
         <div id="admin-tab-content"></div>
@@ -132,6 +133,7 @@ const AdminModule = (() => {
     if (tab === 'insp')   el.innerHTML = inspectorTab();
     if (tab === 'batches') el.innerHTML = batchesTab();
     if (tab === 'tasks')  el.innerHTML = tasksTab();
+    if (tab === 'audit')  el.innerHTML = auditLogsTab();
     if (tab === 'system') el.innerHTML = systemTab();
   }
 
@@ -307,10 +309,12 @@ const AdminModule = (() => {
         updateData.password = await Auth.hashPassword(password);
       }
       DB.Users.update(id, updateData);
+      try { if (DB.AuditLogs) DB.AuditLogs.log('User Updated', 'user_mgmt', `Updated details for user: ${username}`); } catch(e){}
       showToast('User updated successfully', 'success');
     } else {
       const hashed = await Auth.hashPassword(password);
       DB.Users.insert({ name, username, password: hashed, role, permissions, active });
+      try { if (DB.AuditLogs) DB.AuditLogs.log('User Created', 'user_mgmt', `Created user: ${username} (${role})`); } catch(e){}
       showToast('User created successfully', 'success');
     }
     document.getElementById('admin-user-modal').classList.add('hidden');
@@ -322,6 +326,7 @@ const AdminModule = (() => {
     if (!u) return;
     if (u.username === 'admin') { showToast('Cannot disable the main admin account', 'error'); return; }
     DB.Users.update(id, { active: !u.active });
+    try { if (DB.AuditLogs) DB.AuditLogs.log('User Status Changed', 'user_mgmt', `User ${u.username} set to ${u.active ? 'disabled' : 'enabled'}`); } catch(e){}
     showToast('User ' + (u.active ? 'disabled' : 'enabled'), 'success');
     renderTab('users');
   }
@@ -1389,5 +1394,68 @@ const AdminModule = (() => {
     }
   }
 
-  return { render, openAddUser, editUser, saveUser, toggleUser, onRoleChange, toggleCategoryPerms, toggleAllPerms, openAddSub, editSub, saveSub, toggleSub, openAddVendor, editVendor, saveVendor, toggleVendor, openAddOp, editOp, saveOp, toggleOp, openAddInspector, editInspector, saveInspector, toggleInspector, clearTransactionData, toggleDatabaseMode, triggerBackupExport, triggerBackupImport, triggerBackupImportLive, viewTaskDetails, openCreateTask, createTask, filterAdminBatches, saveBatchStage, changeBatchPage };
+  let auditSearch = '';
+  let auditCategoryFilter = '';
+
+  function auditLogsTab() {
+    let logs = DB.AuditLogs.all();
+    if (auditCategoryFilter) {
+      logs = logs.filter(l => l.category === auditCategoryFilter);
+    }
+    if (auditSearch) {
+      const q = auditSearch.toLowerCase();
+      logs = logs.filter(l => (l.username||'').toLowerCase().includes(q) || (l.action||'').toLowerCase().includes(q) || (l.details||'').toLowerCase().includes(q));
+    }
+
+    const rows = logs.map(l => `
+      <tr>
+        <td class="text-sm font-semibold">${l.timestamp ? l.timestamp.replace('T', ' ').slice(0, 19) : '—'}</td>
+        <td class="font-semibold text-blue">${l.username || 'system'}</td>
+        <td><span class="badge badge-teal">${l.action}</span></td>
+        <td><span class="badge badge-secondary">${l.category}</span></td>
+        <td class="text-sm">${l.details || '—'}</td>
+      </tr>
+    `).join('');
+
+    return `
+      <div class="card animate-in">
+        <div class="card-header" style="flex-direction:row; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+          <h3>🛡️ System Audit Logs</h3>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <select class="form-control form-control-sm" style="max-width:150px;" onchange="AdminModule.filterAuditCategory(this.value)">
+              <option value="" ${auditCategoryFilter===''?'selected':''}>All Categories</option>
+              <option value="security" ${auditCategoryFilter==='security'?'selected':''}>Security</option>
+              <option value="user_mgmt" ${auditCategoryFilter==='user_mgmt'?'selected':''}>User Mgmt</option>
+              <option value="system" ${auditCategoryFilter==='system'?'selected':''}>System</option>
+            </select>
+            <div class="search-input" style="max-width: 220px; margin: 0;">
+              <span class="search-icon">&#128269;</span>
+              <input type="text" class="form-control form-control-sm" placeholder="Search logs..." value="${auditSearch}" oninput="AdminModule.filterAuditSearch(this.value)">
+            </div>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr><th>Date &amp; Time</th><th>User</th><th>Action</th><th>Category</th><th>Details</th></tr>
+            </thead>
+            <tbody>${rows || '<tr><td colspan="5" class="text-center text-muted" style="padding:24px;">No audit logs found</td></tr>'}</tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  }
+
+  function filterAuditCategory(val) {
+    auditCategoryFilter = val;
+    renderTab('audit');
+  }
+
+  function filterAuditSearch(val) {
+    auditSearch = val;
+    renderTab('audit');
+  }
+
+  return { render, openAddUser, editUser, saveUser, toggleUser, onRoleChange, toggleCategoryPerms, toggleAllPerms, openAddSub, editSub, saveSub, toggleSub, openAddVendor, editVendor, saveVendor, toggleVendor, openAddOp, editOp, saveOp, toggleOp, openAddInspector, editInspector, saveInspector, toggleInspector, clearTransactionData, toggleDatabaseMode, triggerBackupExport, triggerBackupImport, triggerBackupImportLive, viewTaskDetails, openCreateTask, createTask, filterAdminBatches, saveBatchStage, changeBatchPage, filterAuditCategory, filterAuditSearch };
 })();
+

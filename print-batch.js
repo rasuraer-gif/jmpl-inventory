@@ -89,11 +89,22 @@ const PrintBatchModule = (() => {
     filterDropdown(document.getElementById('pb-search-input')?.value || '');
   }
 
+  let pbCloudTimer = null;
   function filterDropdown(query) {
     const list = document.getElementById('pb-dropdown');
     if (!list) return;
     const q = query.toLowerCase().trim();
-    const batches = DB.Batches.all();
+
+    if (q.length >= 2 && window.triggerBackgroundSearch) {
+      window.triggerBackgroundSearch(q, () => {
+        const activeInput = document.getElementById('pb-search-input');
+        if (activeInput && activeInput.value.trim().toLowerCase() === q) {
+          filterDropdown(activeInput.value);
+        }
+      });
+    }
+
+    const batches = DB.Batches.allIncludeArchived ? DB.Batches.allIncludeArchived() : DB.Batches.all();
     
     const filtered = batches.filter(b => 
       (b.batchNo || '').toLowerCase().includes(q) ||
@@ -102,7 +113,7 @@ const PrintBatchModule = (() => {
     );
 
     if (filtered.length === 0) {
-      list.innerHTML = `<div style="padding:10px; color:var(--text-muted); font-size:12.5px; text-align:center;">No matching batches found.</div>`;
+      list.innerHTML = `<div style="padding:10px; color:var(--text-muted); font-size:12.5px; text-align:center;">No matching batches found. Searching cloud...</div>`;
       return;
     }
 
@@ -133,8 +144,13 @@ const PrintBatchModule = (() => {
     renderDetails();
   }
 
-  function selectBatchByNo(batchNo) {
-    const batch = DB.Batches.all().find(b => (b.batchNo || '').toLowerCase().trim() === batchNo.toLowerCase().trim());
+  async function selectBatchByNo(batchNo) {
+    const cleanNo = (batchNo || '').toLowerCase().trim();
+    let batch = (DB.Batches.allIncludeArchived ? DB.Batches.allIncludeArchived() : DB.Batches.all())
+      .find(b => (b.batchNo || '').toLowerCase().trim() === cleanNo);
+    if (!batch && typeof DB !== 'undefined' && DB.Batches.fetchRemoteByNo) {
+      batch = await DB.Batches.fetchRemoteByNo(batchNo);
+    }
     if (batch) {
       selectBatch(batch.id, batch.batchNo);
     } else {

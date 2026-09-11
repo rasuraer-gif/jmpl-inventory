@@ -8,7 +8,7 @@ const ReportsModule = (() => {
 
   const MODULES = [
     'inventory','store-stock','sales','production','cryogenic','deflashing',
-    'trimming','waiting-visual','visual','gauge','rejected','recheck','slob','aging','reprocess','store-aging','daily-summary','analytics'
+    'trimming','waiting-visual','visual','gauge','quality','rejected','recheck','slob','aging','reprocess','store-aging','daily-summary','analytics'
   ];
 
   const STAGE_LABELS = {
@@ -17,6 +17,9 @@ const ReportsModule = (() => {
   };
 
   let agingSearch = '';
+  let activeTopDefectsMap = {};
+  let currentModalJmrefNo = '';
+  let defectiveModalSearch = '';
 
   // ── Utility ────────────────────────────────────────────────
   function td(val, cls='') { return `<td class="${cls}">${val ?? ''}</td>`; }
@@ -132,6 +135,9 @@ const ReportsModule = (() => {
     }
     if (filters.reprocessDestination) {
       formatted.push(`Reprocess Stage: ${filters.reprocessDestination}`);
+    }
+    if (filters.status) {
+      formatted.push(`Status: ${filters.status}`);
     }
     
     return formatted.join(' | ');
@@ -1224,6 +1230,252 @@ const ReportsModule = (() => {
       <thead><tr>${headers.map(th).join('')}</tr></thead>
       <tbody>${dataRows.map((r,i)=>`<tr class="${i===dataRows.length-1?'font-bold text-danger':''}">${r.map(v=>td(v)).join('')}</tr>`).join('')}</tbody>
     </table></div>`;
+    return { html, headers, dataRows };
+  }
+
+  // ── Render Quality Final Report ────────────────────────────
+  function renderQualityFinalReport(filters) {
+    const { from, to, jmref, status } = filters || {};
+
+    const stageRecs = (typeof DB !== 'undefined' && DB.StageRecords) ? DB.StageRecords.all().filter(r => r.stage === 'quality' || r.movedFrom === 'quality') : [];
+    const recheckRecs = (typeof DB !== 'undefined' && DB.RecheckTracker) ? DB.RecheckTracker.all() : [];
+    const rejectRecs = (typeof DB !== 'undefined' && DB.RejectionTracker) ? DB.RejectionTracker.all().filter(r => r.stage === 'quality' || r.movedFrom === 'quality') : [];
+    const allBatches = (typeof DB !== 'undefined' && DB.Batches) ? (DB.Batches.allIncludeArchived ? DB.Batches.allIncludeArchived() : DB.Batches.all()) : [];
+    const users = (typeof DB !== 'undefined' && DB.Users) ? DB.Users.all() : [];
+
+    const rows = [];
+    const seenBatchKeys = new Set();
+
+    // 1. Process Stage Records (Pass to Store or Quality inspection records)
+    stageRecs.forEach(r => {
+      const bDetails = resolveBatchDetails(r);
+      const inputQty = Number(r.inputQty || r.qty || 0);
+      const passedQty = r.movedTo === 'store' ? Number(r.outputQty !== undefined ? r.outputQty : inputQty) : 0;
+      const lossQty = Number(r.lossQty || Math.max(0, inputQty - passedQty));
+      const inspectorUser = users.find(u => u.id === (r.operatorId || r.recordedBy || r.userId)) || {};
+      const inspectorName = inspectorUser.name || r.inspectorName || r.operatorName || '—';
+
+      let outcome = 'Passed to Store';
+      let outcomeBadge = '<span class="badge badge-green">🟢 Passed to Store</span>';
+      if (r.movedTo && r.movedTo.includes('recheck')) {
+        outcome = 'Recheck Sent';
+        outcomeBadge = '<span class="badge badge-amber">🔄 Recheck Sent</span>';
+      } else if (r.movedTo === 'rejected' || r.status === 'rejected') {
+        outcome = 'Rejected';
+        outcomeBadge = '<span class="badge badge-red">🔴 Rejected</span>';
+      }
+
+      const rawD = r.date || r.createdAt || '';
+      const bKey = `${bDetails.batchNo}_${outcome}_${rawD.slice(0,10)}`;
+      seenBatchKeys.add(bKey);
+
+      rows.push({
+        id: r.id,
+        batchNo: bDetails.batchNo,
+        partNo: bDetails.partNo,
+        jmrefNo: bDetails.jmrefNo,
+        inputQty,
+        passedQty,
+        lossQty,
+        lossPct: inputQty > 0 ? ((lossQty / inputQty) * 100).toFixed(1) : '0.0',
+        outcome,
+        outcomeBadge,
+        inspector: inspectorName,
+        remarks: r.remarks || r.notes || r.defectReason || (outcome === 'Passed to Store' ? 'Passed to Store' : 'QC Final Inspection'),
+        date: rawD.slice(0, 10),
+        rawDate: rawD
+      });
+    });
+
+    // 2. Add Recheck Tracker Records
+    recheckRecs.forEach(rc => {
+      const bDetails = resolveBatchDetails(rc);
+      const inspectorUser = users.find(u => u.id === rc.recordedBy) || {};
+      const inspectorName = inspectorUser.name || '—';
+      const rawD = rc.date || rc.createdAt || '';
+      const bKey = `${bDetails.batchNo}_Recheck Sent_${rawD.slice(0,10)}`;
+
+      if (!seenBatchKeys.has(bKey)) {
+        seenBatchKeys.add(bKey);
+        const inputQty = Number(rc.qty || rc.inputQty || 0);
+        const lossQty = Number(rc.lossQty || 0);
+        rows.push({
+          id: rc.id || ('rc_' + Math.random()),
+          batchNo: bDetails.batchNo,
+          partNo: bDetails.partNo,
+          jmrefNo: bDetails.jmrefNo,
+          inputQty,
+          passedQty: 0,
+          lossQty,
+          lossPct: inputQty > 0 ? ((lossQty / inputQty) * 100).toFixed(1) : '0.0',
+          outcome: 'Recheck Sent',
+          outcomeBadge: '<span class="badge badge-amber">🔄 Recheck Sent</span>',
+          inspector: inspectorName,
+          remarks: rc.recheckReason || rc.remarks || rc.notes || 'Sent for rework/recheck',
+          date: rawD.slice(0, 10),
+          rawDate: rawD
+        });
+      }
+    });
+
+    // 3. Add Rejection Tracker Records
+    rejectRecs.forEach(rj => {
+      const bDetails = resolveBatchDetails(rj);
+      const inspectorUser = users.find(u => u.id === rj.recordedBy) || {};
+      const inspectorName = inspectorUser.name || '—';
+      const rawD = rj.date || rj.createdAt || '';
+      const bKey = `${bDetails.batchNo}_Rejected_${rawD.slice(0,10)}`;
+
+      if (!seenBatchKeys.has(bKey)) {
+        seenBatchKeys.add(bKey);
+        const inputQty = Number(rj.qty || rj.inputQty || 0);
+        rows.push({
+          id: rj.id || ('rj_' + Math.random()),
+          batchNo: bDetails.batchNo,
+          partNo: bDetails.partNo,
+          jmrefNo: bDetails.jmrefNo,
+          inputQty,
+          passedQty: 0,
+          lossQty: inputQty,
+          lossPct: '100.0',
+          outcome: 'Rejected',
+          outcomeBadge: '<span class="badge badge-red">🔴 Rejected</span>',
+          inspector: inspectorName,
+          remarks: rj.rejectReason || rj.remarks || rj.notes || 'Batch Rejected',
+          date: rawD.slice(0, 10),
+          rawDate: rawD
+        });
+      }
+    });
+
+    // 4. Add Completed Batches (Store Completed) if not already present
+    allBatches.filter(b => b.status === 'completed' && !b.isArchived).forEach(b => {
+      const rawD = b.completedAt || b.createdAt || '';
+      const bKey = `${b.batchNo}_Passed to Store_${rawD.slice(0,10)}`;
+      if (!seenBatchKeys.has(bKey) && b.batchNo && !isRawId(b.batchNo)) {
+        seenBatchKeys.add(bKey);
+        const inputQty = Number(b.initialQty || 0);
+        const passedQty = Number(b.remaining !== undefined ? b.remaining : (b.remainingQty !== undefined ? b.remainingQty : inputQty));
+        rows.push({
+          id: 'comp_' + b.id,
+          batchNo: b.batchNo,
+          partNo: b.partNo || '—',
+          jmrefNo: b.jmrefNo || '—',
+          inputQty,
+          passedQty,
+          lossQty: 0,
+          lossPct: '0.0',
+          outcome: 'Passed to Store',
+          outcomeBadge: '<span class="badge badge-green">🟢 Passed to Store</span>',
+          inspector: b.completedBy || 'System / QC',
+          remarks: 'Completed & Passed to Store',
+          date: rawD.slice(0, 10),
+          rawDate: rawD
+        });
+      }
+    });
+
+    // Filter by Date Range
+    let filtered = filterByDateRange(rows, 'date', from, to);
+
+    // Filter by JMREF / Part / Search
+    if (jmref) {
+      const q = jmref.toLowerCase();
+      filtered = filtered.filter(r =>
+        (r.batchNo || '').toLowerCase().includes(q) ||
+        (r.partNo || '').toLowerCase().includes(q) ||
+        (r.jmrefNo || '').toLowerCase().includes(q) ||
+        (r.inspector || '').toLowerCase().includes(q)
+      );
+    }
+
+    // Filter by Outcome status
+    if (status) {
+      const qStat = status.toLowerCase();
+      filtered = filtered.filter(r => r.outcome.toLowerCase() === qStat || r.outcome.toLowerCase().replace(/\s+/g, '-') === qStat);
+    }
+
+    if (!filtered.length) return emptyState('No Quality Final records found for the selected filters.');
+
+    // Sort newest first
+    filtered.sort((a, b) => b.rawDate.localeCompare(a.rawDate));
+
+    // Summary Metrics
+    const totalEvaluated = filtered.length;
+    const totalInputQty = filtered.reduce((s, r) => s + r.inputQty, 0);
+    const totalPassedQty = filtered.reduce((s, r) => s + r.passedQty, 0);
+    const totalLossQty = filtered.reduce((s, r) => s + r.lossQty, 0);
+    const passRate = totalInputQty > 0 ? ((totalPassedQty / totalInputQty) * 100).toFixed(1) : '0.0';
+    const scrapRate = totalInputQty > 0 ? ((totalLossQty / totalInputQty) * 100).toFixed(1) : '0.0';
+    const recheckCount = filtered.filter(r => r.outcome === 'Recheck Sent').length;
+    const rejectCount = filtered.filter(r => r.outcome === 'Rejected').length;
+
+    const summaryCardsHtml = `
+      <div class="stats-grid mb-6" style="grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));">
+        <div class="stat-card blue">
+          <div class="stat-label">Evaluated Batches</div>
+          <div class="stat-value blue">${totalEvaluated}</div>
+          <div class="stat-desc">Total Input: ${formatNum(totalInputQty)} pcs</div>
+        </div>
+        <div class="stat-card green">
+          <div class="stat-label">Passed to Store</div>
+          <div class="stat-value green">${formatNum(totalPassedQty)}</div>
+          <div class="stat-desc">Pass Rate: ${passRate}%</div>
+        </div>
+        <div class="stat-card red">
+          <div class="stat-label">QC Final Scrap Loss</div>
+          <div class="stat-value red">${formatNum(totalLossQty)}</div>
+          <div class="stat-desc">Scrap Loss Rate: ${scrapRate}%</div>
+        </div>
+        <div class="stat-card amber">
+          <div class="stat-label">Recheck / Rework</div>
+          <div class="stat-value amber">${recheckCount}</div>
+          <div class="stat-desc">Batches sent for recheck</div>
+        </div>
+        <div class="stat-card red">
+          <div class="stat-label">Rejected Batches</div>
+          <div class="stat-value red">${rejectCount}</div>
+          <div class="stat-desc">Batches rejected at QC</div>
+        </div>
+      </div>
+    `;
+
+    const headers = ['#', 'Batch No', 'Part No', 'JMREF', 'Input Qty', 'Passed Qty', 'Loss Qty', 'Loss %', 'Status / Outcome', 'Inspector / QC', 'Remarks / Reason', 'Inspection Date'];
+
+    const dataRows = [];
+    const tableRows = filtered.map((r, idx) => {
+      dataRows.push([
+        idx + 1, r.batchNo, r.partNo, r.jmrefNo, r.inputQty, r.passedQty, r.lossQty, `${r.lossPct}%`, r.outcome, r.inspector, r.remarks, r.date
+      ]);
+
+      return `<tr>
+        <td class="text-muted">${idx + 1}</td>
+        <td><strong class="text-blue">${r.batchNo}</strong></td>
+        <td>${r.partNo}</td>
+        <td><span class="badge badge-teal">${r.jmrefNo}</span></td>
+        <td class="font-semibold">${formatNum(r.inputQty)}</td>
+        <td class="font-semibold text-success">${r.passedQty > 0 ? formatNum(r.passedQty) : '—'}</td>
+        <td class="font-semibold text-danger">${r.lossQty > 0 ? formatNum(r.lossQty) + ' pcs' : '—'}</td>
+        <td>${r.lossQty > 0 ? `<span class="badge badge-red">${r.lossPct}%</span>` : '<span class="text-muted">0.0%</span>'}</td>
+        <td>${r.outcomeBadge}</td>
+        <td>${r.inspector}</td>
+        <td class="text-sm text-muted">${r.remarks}</td>
+        <td>${formatDate(r.date)}</td>
+      </tr>`;
+    }).join('');
+
+    const html = `
+      ${summaryCardsHtml}
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>${headers.map(th).join('')}</tr>
+          </thead>
+          <tbody>${tableRows}</tbody>
+        </table>
+      </div>
+    `;
+
     return { html, headers, dataRows };
   }
 
@@ -2853,6 +3105,7 @@ const ReportsModule = (() => {
       'waiting-visual':[jmrefFilter, dateRange].join(''),
       visual:    [jmrefFilter, prodTypeFilter, rejectionRateFilter, dateRange].join(''),
       gauge:     [jmrefFilter, dateRange].join(''),
+      quality:   [jmrefFilter, '<div class="form-group mb-0"><label class="form-label">Outcome / Status</label><select class="form-control" id="rpt-status"><option value="">All Outcomes</option><option value="Passed to Store">Passed to Store</option><option value="Recheck Sent">Recheck Sent</option><option value="Rejected">Rejected</option></select></div>', dateRange].join(''),
       rejected:  [jmrefFilter, dateRange].join(''),
       recheck:   [opFilter, dateRange].join(''),
       'pending-batches': [pendingStageFilter, pendingTimeframeFilter].join(''),
@@ -3451,6 +3704,7 @@ const ReportsModule = (() => {
       subcontractorId: g('rpt-subcontractor'),
       vendorId: g('rpt-vendor'),
       auditSessionId: g('rpt-audit-session'),
+      status: g('rpt-status'),
     };
   }
 
@@ -3477,6 +3731,7 @@ const ReportsModule = (() => {
     setVal('rpt-subcontractor', saved.subcontractorId);
     setVal('rpt-vendor', saved.vendorId);
     setVal('rpt-audit-session', saved.auditSessionId);
+    setVal('rpt-status', saved.status);
   }
 
   function restoreSavedResult(reportKey) {
@@ -3514,7 +3769,7 @@ const ReportsModule = (() => {
     // Run background pre-fetch asynchronously without blocking report generation
     const reportsWithDateRange = [
       'reprocess', 'sales', 'production', 'cryogenic', 'deflashing', 'trimming',
-      'post-curing', 'waiting-visual', 'visual', 'gauge', 'rejected', 'recheck',
+      'post-curing', 'waiting-visual', 'visual', 'gauge', 'quality', 'rejected', 'recheck',
       'sub-pending', 'sub-batches', 'sub-performance', 'qty-gain', 'qty-loss', 'op-efficiency',
       'cycle-time', 'sub-vs-inhouse', 'daily-summary', 'analytics'
     ];
@@ -3539,6 +3794,7 @@ const ReportsModule = (() => {
       case 'waiting-visual':result = renderWaitingVisualReport(filters); break;
       case 'visual':     result = renderStageLoss('visual', filters, ['Inspector', 'Reprocess Qty']); break;
       case 'gauge':      result = renderStageLoss('gauge', filters); break;
+      case 'quality':    result = renderQualityFinalReport(filters); break;
       case 'rejected':   result = renderRejected(filters); break;
       case 'recheck':    result = renderRecheck(filters); break;
       case 'slob':       result = renderSlob(filters); break;
@@ -3601,6 +3857,7 @@ const ReportsModule = (() => {
     { key:'waiting-visual',label:'⏳ Waiting for Visual Report', desc:'Rack allocation and location details' },
     { key:'visual',     label:'👁️ Visual Inspection Report',   desc:'Inspector-wise loss and inspection records' },
     { key:'gauge',      label:'📏 Gauge Inspection Report',    desc:'Loss during gauge inspection' },
+    { key:'quality',    label:'⭐ Quality Final (QC) Report',   desc:'Detailed evaluation outcomes, pass rate, rework history, and scrap loss at Quality Final inspection stage' },
     { key:'rejected',   label:'🚫 Rejected Batch Report',      desc:'All batches rejected due to quality issues' },
     { key:'recheck',    label:'🔄 Quality Final Recheck',      desc:'Date-wise and operator-wise recheck tracking' },
     { key:'slob',       label:'📉 SLOB Report',                desc:'Slow-moving and Obsolete inventory aging analysis' },
@@ -3779,18 +4036,69 @@ const ReportsModule = (() => {
       }
     });
 
+    activeTopDefectsMap = {};
     const partScrapMap = {};
     rangeRecords.forEach(r => {
-      if ((r.lossQty || 0) <= 0) return;
+      const loss = Number(r.lossQty || 0);
+      if (loss <= 0) return;
       const b = DB.Batches.find(r.batchId);
       if (!b) return;
-      partScrapMap[b.jmrefNo || 'Unknown'] = (partScrapMap[b.jmrefNo || 'Unknown'] || 0) + r.lossQty;
+      
+      const jmref = b.jmrefNo || 'Unknown';
+      if (!partScrapMap[jmref]) {
+        partScrapMap[jmref] = {
+          jmrefNo: jmref,
+          partNo: b.partNo || '—',
+          totalScrap: 0,
+          batches: []
+        };
+      }
+
+      partScrapMap[jmref].totalScrap += loss;
+      partScrapMap[jmref].batches.push({
+        batchId: b.id,
+        batchNo: b.batchNo || '—',
+        partNo: b.partNo || '—',
+        stage: STAGE_LABELS[r.stage] || STAGE_LABELS[r.movedFrom] || r.stage || '—',
+        date: r.date || (r.createdAt ? r.createdAt.slice(0,10) : '—'),
+        inputQty: r.inputQty || 0,
+        outputQty: r.outputQty || 0,
+        lossQty: loss,
+        notes: r.notes || '—'
+      });
     });
 
-    const topDefects = Object.entries(partScrapMap)
-      .map(([jmrefNo, scrap]) => ({ jmrefNo, scrap }))
-      .sort((a, b) => b.scrap - a.scrap)
+    const topDefects = Object.values(partScrapMap)
+      .sort((a, b) => b.totalScrap - a.totalScrap)
       .slice(0, 5);
+
+    topDefects.forEach(d => {
+      activeTopDefectsMap[d.jmrefNo] = d;
+    });
+
+    const defectRowsHtml = topDefects.map((d, idx) => `
+      <tr style="cursor:pointer;" onclick="ReportsModule.openDefectiveBatchesModal('${d.jmrefNo}')">
+        <td style="padding:6px 8px;"><span class="badge ${idx===0?'badge-red':idx===1?'badge-amber':'badge-secondary'}">#${idx + 1}</span></td>
+        <td style="padding:6px 8px;" class="font-semibold text-blue">${d.jmrefNo} <span class="text-xs text-muted">(${d.partNo})</span></td>
+        <td style="padding:6px 8px;" class="font-bold text-danger">${formatNum(d.totalScrap)} pcs</td>
+        <td style="padding:6px 8px;" class="text-right">
+          <button class="btn btn-ghost btn-xs text-blue" onclick="event.stopPropagation(); ReportsModule.openDefectiveBatchesModal('${d.jmrefNo}')">
+            🔍 View ${d.batches.length} Batch(es)
+          </button>
+        </td>
+      </tr>
+    `).join('');
+
+    const topDefectsTableHtml = topDefects.length > 0 ? `
+      <div class="mt-4" style="border-top:1px solid var(--border); padding-top:10px;">
+        <table class="data-table" style="font-size:11.5px; width:100%;">
+          <thead>
+            <tr><th style="padding:4px 8px;">Rank</th><th style="padding:4px 8px;">Part (JMREF)</th><th style="padding:4px 8px;">Scrap Qty</th><th style="padding:4px 8px;" class="text-right">Action</th></tr>
+          </thead>
+          <tbody>${defectRowsHtml}</tbody>
+        </table>
+      </div>
+    ` : '<p class="text-xs text-muted mt-2 text-center">No scrap recorded for selected date range.</p>';
 
     const html = `
       <div class="animate-in" style="display:flex; flex-direction:column; gap:24px;">
@@ -3804,9 +4112,10 @@ const ReportsModule = (() => {
           
           <div class="card" style="padding: 16px;">
             <h3 style="font-size:14px; font-weight:700; color:var(--primary); margin-bottom:12px;">🚫 Top 5 Defective Parts (Total Scrap Qty)</h3>
-            <div style="height: 300px; position: relative;">
+            <div style="height: 220px; position: relative;">
               <canvas id="chart-defects"></canvas>
             </div>
+            ${topDefectsTableHtml}
           </div>
         </div>
 
@@ -3822,7 +4131,7 @@ const ReportsModule = (() => {
     const headers = ['Metric/Part/Stage', 'Values'];
     const dataRows = [
       ['Date Range', `${fromDate} to ${toDate}`],
-      ['Top Defects', JSON.stringify(topDefects)],
+      ['Top Defects', JSON.stringify(topDefects.map(d => ({ jmrefNo: d.jmrefNo, scrap: d.totalScrap })))],
       ['WIP Counts', JSON.stringify(wipCounts)]
     ];
 
@@ -3864,7 +4173,7 @@ const ReportsModule = (() => {
             labels: topDefects.map(d => d.jmrefNo),
             datasets: [{
               label: 'Scrap Quantity',
-              data: topDefects.map(d => d.scrap),
+              data: topDefects.map(d => d.totalScrap),
               backgroundColor: '#ef4444',
               borderRadius: 6
             }]
@@ -3873,6 +4182,15 @@ const ReportsModule = (() => {
             indexAxis: 'y',
             responsive: true,
             maintainAspectRatio: false,
+            onClick: (evt, activeElements) => {
+              if (activeElements && activeElements.length > 0) {
+                const index = activeElements[0].index;
+                const clickedItem = topDefects[index];
+                if (clickedItem) {
+                  openDefectiveBatchesModal(clickedItem.jmrefNo);
+                }
+              }
+            },
             plugins: {
               legend: { display: false }
             },
@@ -4435,8 +4753,115 @@ const ReportsModule = (() => {
     if (el) el.remove();
   }
 
+  function openDefectiveBatchesModal(jmrefNo) {
+    currentModalJmrefNo = jmrefNo;
+    defectiveModalSearch = '';
+
+    const item = activeTopDefectsMap[jmrefNo];
+    if (!item) {
+      showToast('No batch scrap details found for ' + jmrefNo, 'info');
+      return;
+    }
+
+    const existing = document.getElementById('defective-batches-modal');
+    if (existing) existing.remove();
+
+    const modal = document.createElement('div');
+    modal.className = 'modal-overlay';
+    modal.id = 'defective-batches-modal';
+    modal.style.zIndex = '2100';
+
+    modal.innerHTML = `
+      <div class="modal modal-lg" style="max-width: 880px; border-radius: 16px; width: 92%;">
+        <div class="modal-header">
+          <div>
+            <h3 style="margin:0; font-size:17px; font-weight:700;">🚫 Batch Scrap &amp; Defect Details</h3>
+            <p class="text-sm text-muted mt-1" style="margin:0;">
+              Part: <strong class="text-teal">${item.jmrefNo}</strong> (${item.partNo}) | 
+              Total Scrap: <strong class="text-danger">${formatNum(item.totalScrap)} pcs</strong>
+            </p>
+          </div>
+          <button class="modal-close" onclick="document.getElementById('defective-batches-modal').remove()">✕</button>
+        </div>
+        <div class="modal-body" style="padding: 16px;">
+          <div style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+            <span class="text-sm font-semibold text-muted">Showing ${item.batches.length} loss record(s)</span>
+            <div class="search-input" style="max-width: 240px; margin: 0;">
+              <span class="search-icon">&#128269;</span>
+              <input type="text" id="defective-modal-search" class="form-control form-control-sm" placeholder="Search batch or notes..." oninput="ReportsModule.filterDefectiveModalBatches(this.value)">
+            </div>
+          </div>
+          <div class="table-wrap" style="max-height: 400px; overflow-y: auto;">
+            <table class="data-table" style="font-size:12px;">
+              <thead>
+                <tr>
+                  <th style="width:35px;">#</th>
+                  <th>Batch Number</th>
+                  <th>Stage</th>
+                  <th>Loss Date</th>
+                  <th>Input Qty</th>
+                  <th>Output Qty</th>
+                  <th class="text-danger">Scrap Qty</th>
+                  <th>Notes / Remarks</th>
+                </tr>
+              </thead>
+              <tbody id="defective-modal-tbody">
+                ${renderDefectiveModalRows(item.batches, '')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="modal-footer" style="justify-content: space-between; align-items: center;">
+          <span class="text-sm font-bold text-danger">Total Scrap Qty: ${formatNum(item.totalScrap)} pcs</span>
+          <button class="btn btn-secondary" onclick="document.getElementById('defective-batches-modal').remove()">Close</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(modal);
+  }
+
+  function renderDefectiveModalRows(batches, searchVal) {
+    let filtered = batches;
+    if (searchVal) {
+      const q = searchVal.toLowerCase();
+      filtered = filtered.filter(b => 
+        (b.batchNo || '').toLowerCase().includes(q) ||
+        (b.stage || '').toLowerCase().includes(q) ||
+        (b.notes || '').toLowerCase().includes(q)
+      );
+    }
+
+    if (!filtered.length) {
+      return `<tr><td colspan="8" class="text-center text-muted" style="padding:24px;">No matching batch loss records found</td></tr>`;
+    }
+
+    return filtered.map((b, idx) => `
+      <tr>
+        <td class="text-muted">${idx + 1}</td>
+        <td><strong class="text-blue">${b.batchNo}</strong></td>
+        <td><span class="badge badge-teal">${b.stage}</span></td>
+        <td>${b.date}</td>
+        <td>${formatNum(b.inputQty)}</td>
+        <td>${formatNum(b.outputQty)}</td>
+        <td class="font-bold text-danger">${formatNum(b.lossQty)} pcs</td>
+        <td class="text-sm text-muted">${b.notes}</td>
+      </tr>
+    `).join('');
+  }
+
+  function filterDefectiveModalBatches(val) {
+    defectiveModalSearch = val;
+    const item = activeTopDefectsMap[currentModalJmrefNo];
+    if (!item) return;
+    const tbody = document.getElementById('defective-modal-tbody');
+    if (tbody) {
+      tbody.innerHTML = renderDefectiveModalRows(item.batches, val);
+    }
+  }
+
   window.exportCSV = exportCSV;
   window.exportExcel = exportExcel;
 
-  return { render, filterAging, showPartBatches, closePartBatches, exportCSV, exportExcel };
+  return { render, filterAging, showPartBatches, closePartBatches, openDefectiveBatchesModal, filterDefectiveModalBatches, exportCSV, exportExcel };
 })();

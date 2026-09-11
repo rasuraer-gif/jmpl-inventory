@@ -8,7 +8,7 @@ const DeliveryChallanModule = (() => {
   let historySearch = '';
 
   const STAGE_NAMES = {
-    production: 'Moulding',
+    production: 'Production',
     cryogenic: 'Cryogenic',
     deflashing: 'Flash Removal (DE Flashing)',
     'waiting-trimming': 'Waiting for Trimming',
@@ -203,7 +203,7 @@ const DeliveryChallanModule = (() => {
             <div class="form-group mt-4">
               <label class="form-label">Add Batch (Scan or Type) <span class="required">*</span></label>
               <div class="flex gap-2">
-                <input type="text" id="dc-batch-input" class="form-control" style="flex:1;" placeholder="Type or scan Batch No..." list="dc-batch-list" onkeydown="if(event.key === 'Enter') { DeliveryChallanModule.addBatchItem(); event.preventDefault(); }">
+                <input type="text" id="dc-batch-input" class="form-control" style="flex:1;" placeholder="Type or scan Batch No..." list="dc-batch-list" oninput="DeliveryChallanModule.checkAutoAdd(this.value)" onkeydown="if(event.key === 'Enter') { DeliveryChallanModule.addBatchItem(); event.preventDefault(); }">
                 <datalist id="dc-batch-list"></datalist>
                 <button class="btn btn-secondary" onclick="DeliveryChallanModule.startScan()" style="padding:0 12px; display:flex; align-items:center; justify-content:center; height:42px;" title="Scan QR Code">📷 Scan</button>
               </div>
@@ -316,6 +316,12 @@ const DeliveryChallanModule = (() => {
     // Clear items if changing vendor (since destination changes)
     challanItems = [];
     render();
+    if (selectedVendorId) {
+      setTimeout(() => {
+        const input = document.getElementById('dc-batch-input');
+        if (input) input.focus();
+      }, 60);
+    }
   }
 
   function populateBatchDropdown() {
@@ -345,6 +351,25 @@ const DeliveryChallanModule = (() => {
     });
 
     dl.innerHTML = html;
+
+    if (selectedVendorId) {
+      setTimeout(() => {
+        const input = document.getElementById('dc-batch-input');
+        if (input && document.activeElement !== input) {
+          input.focus();
+        }
+      }, 50);
+    }
+  }
+
+  function checkAutoAdd(val) {
+    if (!val || !selectedVendorId) return;
+    const cleanVal = val.trim();
+    if (!cleanVal) return;
+    const b = DB.Batches.all().find(x => x.batchNo && x.batchNo.toLowerCase() === cleanVal.toLowerCase() && x.status === 'active');
+    if (b && !challanItems.some(item => item.batch.id === b.id)) {
+      addBatchToChallan(b);
+    }
   }
 
   function startScan() {
@@ -356,10 +381,12 @@ const DeliveryChallanModule = (() => {
       showToast('Scanner module not loaded', 'error');
       return;
     }
-    Scanner.start(null, (scannedText) => {
-      const b = DB.Batches.all().find(x => x.batchNo === scannedText.trim());
+    Scanner.start('dc-batch-input', (scannedText) => {
+      const cleanText = (scannedText || '').trim();
+      if (!cleanText) return;
+      const b = DB.Batches.all().find(x => x.batchNo && x.batchNo.toLowerCase() === cleanText.toLowerCase());
       if (!b) {
-        showToast('Batch not found: ' + scannedText, 'error');
+        showToast('Batch not found: ' + cleanText, 'error');
         return;
       }
       addBatchToChallan(b);
@@ -373,20 +400,24 @@ const DeliveryChallanModule = (() => {
       return;
     }
     const batchNoVal = input.value.trim();
-    const b = DB.Batches.all().find(x => x.batchNo === batchNoVal);
+    const b = DB.Batches.all().find(x => x.batchNo && x.batchNo.toLowerCase() === batchNoVal.toLowerCase());
     if (!b) {
       showToast('Batch not found: ' + batchNoVal, 'error');
       return;
     }
 
     addBatchToChallan(b);
-    input.value = '';
-    input.focus();
   }
 
   function addBatchToChallan(b) {
+    if (!selectedVendorId) {
+      showToast('Please select a Subcontractor Vendor first', 'warning');
+      return;
+    }
     if (challanItems.some(item => item.batch.id === b.id)) {
       showToast('Batch already added to challan: ' + b.batchNo, 'warning');
+      const input = document.getElementById('dc-batch-input');
+      if (input) { input.value = ''; input.focus(); }
       return;
     }
 
@@ -406,6 +437,13 @@ const DeliveryChallanModule = (() => {
 
     showToast(`Added ${b.batchNo} to challan`, 'success');
     render();
+    setTimeout(() => {
+      const input = document.getElementById('dc-batch-input');
+      if (input) {
+        input.value = '';
+        input.focus();
+      }
+    }, 60);
   }
 
   function removeItem(idx) {
@@ -608,7 +646,7 @@ const DeliveryChallanModule = (() => {
   }
 
   function openPrintWindow(dc, logoUrl) {
-    const printWindow = window.open('', '_blank', 'width=800,height=600');
+    const printWindow = window.open('', '_blank', 'width=900,height=750');
     if (!printWindow) {
       showToast('Popup blocker blocked challan preview. Please enable popups.', 'error');
       return;
@@ -618,9 +656,10 @@ const DeliveryChallanModule = (() => {
 
     const rows = dc.batches.map((b, idx) => `
       <tr>
-        <td style="width: 10%; border: 1px solid #1e293b; padding: 5px; text-align: center;">${idx + 1}</td>
-        <td style="width: 65%; border: 1px solid #1e293b; padding: 5px; font-weight: bold;">${b.batchNo}</td>
-        <td style="width: 25%; border: 1px solid #1e293b; padding: 5px; text-align: right; font-weight: bold;">${formatNum(b.qty)}</td>
+        <td style="width: 6%; border: 1px solid #1e293b; padding: 6px; text-align: center;">${idx + 1}</td>
+        <td style="width: 44%; border: 1px solid #1e293b; padding: 6px; font-weight: bold;">${b.batchNo}</td>
+        <td style="width: 25%; border: 1px solid #1e293b; padding: 6px;">${b.partNo || '—'} <span style="color:#64748b; font-size:9px;">(${b.jmrefNo || '—'})</span></td>
+        <td style="width: 25%; border: 1px solid #1e293b; padding: 6px; text-align: right; font-weight: bold;">${formatNum(b.qty)} pcs</td>
       </tr>
     `).join('');
 
@@ -632,37 +671,48 @@ const DeliveryChallanModule = (() => {
         <style>
           * { box-sizing: border-box; }
           @page { size: A4 portrait; margin: 10mm; }
-          body { font-family: system-ui, -apple-system, sans-serif; color: #1e293b; padding: 5px; margin: 0; line-height: 1.4; }
-          .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #1e293b; padding-bottom: 10px; margin-bottom: 16px; }
+          body { font-family: system-ui, -apple-system, sans-serif; color: #0f172a; padding: 15px; margin: 0; line-height: 1.4; background: #fff; }
+          .toolbar { display: flex; justify-content: flex-end; gap: 10px; margin-bottom: 15px; }
+          .btn-print { background: #2563eb; color: #fff; border: none; padding: 8px 18px; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 13px; }
+          .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #0f172a; padding-bottom: 12px; margin-bottom: 16px; }
           .logo-container { display: flex; align-items: center; gap: 14px; }
-          .logo { height: 48px; width: auto; }
+          .logo { height: 52px; width: auto; }
           .company-info { display: flex; flex-direction: column; }
-          .company-name { font-size: 20px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; margin: 0; color: #0f172a; }
-          .company-address { font-size: 9.5px; color: #475569; margin-top: 2px; font-weight: 500; max-width: 480px; }
-          .dc-badge { font-size: 12px; font-weight: 700; border: 1.5px solid #1e293b; padding: 5px 12px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.5px; background-color: #f8fafc; color: #0f172a; }
-          table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 10px; border: 1px solid #1e293b; table-layout: fixed; }
-          th { background-color: #f1f5f9; font-weight: 700; border: 1px solid #1e293b; padding: 6px; text-transform: uppercase; font-size: 9px; }
-          td { border: 1px solid #1e293b; padding: 5px; word-wrap: break-word; overflow-wrap: break-word; }
-          .total-row td { background: #f8fafc; font-weight: bold; border-top: 2px solid #1e293b; }
-          .sig-row { display: flex; justify-content: space-between; margin-top: 50px; font-size: 11px; font-weight: 600; }
-          .sig-box { text-align: center; width: 200px; border-top: 1px dashed #64748b; padding-top: 8px; }
+          .company-name { font-size: 21px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; margin: 0; color: #0f172a; }
+          .company-address { font-size: 10px; color: #475569; margin-top: 2px; font-weight: 500; max-width: 500px; }
+          .dc-badge { text-align: right; }
+          .dc-title { font-size: 14px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; color: #0f172a; border: 2px solid #0f172a; padding: 6px 14px; border-radius: 4px; background: #f8fafc; }
+          .dc-sub { font-size: 9.5px; color: #64748b; margin-top: 4px; font-weight: 600; text-transform: uppercase; }
+          table { width: 100%; border-collapse: collapse; margin-bottom: 16px; font-size: 11px; border: 1px solid #0f172a; table-layout: fixed; }
+          th { background-color: #f1f5f9; font-weight: 700; border: 1px solid #0f172a; padding: 7px; text-transform: uppercase; font-size: 9.5px; }
+          td { border: 1px solid #0f172a; padding: 6px; word-wrap: break-word; overflow-wrap: break-word; }
+          .total-row td { background: #f8fafc; font-weight: bold; border-top: 2px solid #0f172a; }
+          .terms-box { border: 1px solid #cbd5e1; background: #f8fafc; padding: 10px 14px; border-radius: 4px; font-size: 9.5px; color: #475569; margin-bottom: 30px; }
+          .terms-title { font-weight: 700; color: #0f172a; text-transform: uppercase; margin-bottom: 4px; font-size: 10px; }
+          .sig-row { display: flex; justify-content: space-between; margin-top: 60px; font-size: 11px; font-weight: 600; }
+          .sig-box { text-align: center; width: 220px; border-top: 1.5px dashed #475569; padding-top: 8px; color: #0f172a; }
           @media print {
             body { padding: 0; }
-            .no-print { display: none; }
+            .toolbar { display: none; }
           }
         </style>
       </head>
       <body>
+        <div class="toolbar">
+          <button class="btn-print" onclick="window.print()">🖨️ Print / Save as PDF</button>
+        </div>
+
         <div class="header">
           <div class="logo-container">
             <img class="logo" src="${logoUrl}" alt="JMPL Logo">
             <div class="company-info">
               <div class="company-name">Janani Mouldings Pvt Ltd</div>
-              <div class="company-address">Survey no, 36 2B, Kelambakkam - Vandalur Rd, Pudupakkam, Tamil Nadu 603103</div>
+              <div class="company-address">Survey no. 36 2B, Kelambakkam - Vandalur Rd, Pudupakkam, Tamil Nadu 603103 | Phone: +91 44 2747 4000</div>
             </div>
           </div>
           <div class="dc-badge">
-            Delivery Challan
+            <div class="dc-title">Delivery Challan</div>
+            <div class="dc-sub">Job Work Dispatch Voucher</div>
           </div>
         </div>
 
@@ -670,16 +720,16 @@ const DeliveryChallanModule = (() => {
         <table style="margin-bottom: 16px; table-layout: fixed; width: 100%;">
           <tbody>
             <tr>
-              <td style="width: 25%; background-color: #f1f5f9; font-weight: bold;">DC Number:</td>
-              <td style="width: 25%; font-weight: bold; font-size: 11px; color: #0f172a;">${dc.dcNo}</td>
-              <td style="width: 25%; background-color: #f1f5f9; font-weight: bold;">Challan Date &amp; Time:</td>
-              <td style="width: 25%;">${dateFormatted}</td>
+              <td style="width: 20%; background-color: #f1f5f9; font-weight: bold;">DC Number:</td>
+              <td style="width: 30%; font-weight: bold; font-size: 12px; color: #0f172a;">${dc.dcNo}</td>
+              <td style="width: 20%; background-color: #f1f5f9; font-weight: bold;">Challan Date:</td>
+              <td style="width: 30%; font-weight: bold;">${dateFormatted}</td>
             </tr>
             <tr>
-              <td style="width: 25%; background-color: #f1f5f9; font-weight: bold;">Subcontractor Vendor:</td>
-              <td style="width: 25%; font-weight: bold;">${dc.vendorName}</td>
-              <td style="width: 25%; background-color: #f1f5f9; font-weight: bold;">Destination Stage:</td>
-              <td style="width: 25%; text-transform: capitalize;">${dc.department === 'deflashing' ? 'Flash Removal' : 'Trimming'} Department</td>
+              <td style="width: 20%; background-color: #f1f5f9; font-weight: bold;">Subcontractor / Vendor:</td>
+              <td style="width: 30%; font-weight: bold; color: #1e3a8a;">${dc.vendorName}</td>
+              <td style="width: 20%; background-color: #f1f5f9; font-weight: bold;">Destination Department:</td>
+              <td style="width: 30%; text-transform: capitalize; font-weight: bold;">${dc.department === 'deflashing' ? 'Flash Removal (DE Flashing)' : 'Trimming'}</td>
             </tr>
           </tbody>
         </table>
@@ -687,44 +737,58 @@ const DeliveryChallanModule = (() => {
         <table style="table-layout: fixed; width: 100%;">
           <thead>
             <tr>
-              <th style="width: 10%; text-align: center;">#</th>
-              <th style="width: 65%; text-align: left;">Batch Number</th>
+              <th style="width: 6%; text-align: center;">#</th>
+              <th style="width: 44%; text-align: left;">Batch Number</th>
+              <th style="width: 25%; text-align: left;">Part No (JMREF)</th>
               <th style="width: 25%; text-align: right;">Quantity (pcs)</th>
             </tr>
           </thead>
           <tbody>
             ${rows}
             <tr class="total-row">
-              <td colspan="2" style="width: 75%; border: 1px solid #1e293b; padding: 6px; text-align: right; font-weight: bold;">GRAND TOTAL:</td>
-              <td style="width: 25%; border: 1px solid #1e293b; padding: 6px; text-align: right; font-size: 10.5px; font-weight: bold;">${formatNum(dc.totalQty)} pcs</td>
+              <td colspan="3" style="width: 75%; border: 1px solid #0f172a; padding: 7px; text-align: right; font-weight: bold; font-size: 11px;">GRAND TOTAL DISPATCH QUANTITY:</td>
+              <td style="width: 25%; border: 1px solid #0f172a; padding: 7px; text-align: right; font-size: 12px; font-weight: bold; color: #0f172a;">${formatNum(dc.totalQty)} pcs</td>
             </tr>
           </tbody>
         </table>
 
-        <div class="sig-row">
-          <div class="sig-box">Prepared &amp; Dispatched By</div>
-          <div class="sig-box">Authorized Signature</div>
-          <div class="sig-box">Subcontractor Acknowledgment</div>
+        <div class="terms-box">
+          <div class="terms-title">Job Work Dispatch Terms &amp; Conditions:</div>
+          1. Goods dispatched above are strictly for Job Work processing (${dc.department === 'deflashing' ? 'Flash Removal' : 'Trimming'}) and remain property of Janani Mouldings Pvt Ltd.<br>
+          2. The vendor/subcontractor must acknowledge receipt and return processed components along with delivery challan copy.<br>
+          3. Process loss must be recorded accurately upon return.
         </div>
 
-        <script>
-          let printed = false;
-          function triggerPrint() {
-            if (printed) return;
-            printed = true;
-            setTimeout(function() {
-              window.print();
-              window.close();
-            }, 300);
-          }
-          window.onload = function() {
-            setTimeout(triggerPrint, 800);
-          };
-        </script>
+        <div class="sig-row">
+          <div class="sig-box">Dispatched By (JMPL Store)</div>
+          <div class="sig-box">Authorized Signatory</div>
+          <div class="sig-box">Receiver Signature &amp; Seal</div>
+        </div>
       </body>
       </html>
     `);
     printWindow.document.close();
+  }
+
+  function addBatchFromQuickMove(batchId, vendorId) {
+    activeTab = 'create';
+    if (vendorId) {
+      selectedVendorId = vendorId;
+    }
+    const b = DB.Batches.find(batchId);
+    if (b) {
+      const currentQty = getBatchCurrentQty(b);
+      const vendor = DB.Vendors.find(vendorId);
+      const isAlready = vendor && b.currentStage === vendor.department;
+      const existingIdx = challanItems.findIndex(i => i.batch.id === b.id);
+      if (existingIdx === -1) {
+        challanItems.push({ batch: b, qty: currentQty, isAlreadyAtDestination: isAlready });
+      }
+    }
+    render();
+    if (b) {
+      showToast(`Batch ${b.batchNo} pre-selected for Delivery Challan dispatch`, 'info');
+    }
   }
 
   return {
@@ -739,7 +803,9 @@ const DeliveryChallanModule = (() => {
     saveChallan,
     deleteChallan,
     printChallan,
-    filterHistory
+    filterHistory,
+    checkAutoAdd,
+    addBatchFromQuickMove
   };
 })();
 window.DeliveryChallanModule = DeliveryChallanModule;

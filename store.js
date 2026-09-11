@@ -1211,6 +1211,7 @@ const StoreModule = (() => {
           </div>
           <div class="flex gap-2">
             <button class="btn btn-secondary btn-sm" onclick="StoreModule.downloadAdjustTemplate()">⬇️ Download Excel Template</button>
+            <button class="btn btn-secondary btn-sm" onclick="StoreModule.downloadAdjustCSVTemplate()">📄 Download CSV Template</button>
             <button class="btn btn-warning" onclick="StoreModule.applyStockAdjustments()">💾 Save &amp; Reconcile Store Stock</button>
           </div>
         </div>
@@ -1316,49 +1317,218 @@ const StoreModule = (() => {
     }
   }
 
+  function downloadAdjustCSVTemplate() {
+    const headers = ['JMREF_No', 'Part_No', 'Physical_Stock_Qty', 'Reason'];
+    const parts = DB.StoreInventory.allParts();
+    const rows = parts.map(p => [
+      p.jmrefNo || '',
+      p.partNo || '',
+      '',
+      'Physical Stock Reconciliation'
+    ]);
+    const escapeCsv = (val) => {
+      const str = String(val || '');
+      return str.includes(',') || str.includes('"') || str.includes('\n') ? `"${str.replace(/"/g, '""')}"` : str;
+    };
+    const csvStr = '\uFEFF' + [headers.map(escapeCsv).join(','), ...rows.map(r => r.map(escapeCsv).join(','))].join('\n');
+    const blob = new Blob([csvStr], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'JMPL_Store_Stock_Adjustment_Template.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast('CSV Template downloaded successfully', 'success');
+  }
+
+  function parseCSVText(csvText) {
+    const lines = csvText.split(/\r?\n/).filter(l => l.trim().length > 0);
+    if (lines.length < 2) return [];
+
+    const headerLine = lines[0];
+    let delimiter = ',';
+    if (headerLine.includes('\t')) delimiter = '\t';
+    else if (headerLine.includes(';') && !headerLine.includes(',')) delimiter = ';';
+
+    function splitLine(rowStr) {
+      const result = [];
+      let current = '';
+      let inQuotes = false;
+      for (let i = 0; i < rowStr.length; i++) {
+        const char = rowStr[i];
+        if (char === '"') {
+          inQuotes = !inQuotes;
+        } else if (char === delimiter && !inQuotes) {
+          result.push(current.trim());
+          current = '';
+        } else {
+          current += char;
+        }
+      }
+      result.push(current.trim());
+      return result;
+    }
+
+    const headers = splitLine(lines[0]);
+    const dataRows = [];
+
+    for (let i = 1; i < lines.length; i++) {
+      const values = splitLine(lines[i]);
+      if (values.length === 0 || (values.length === 1 && !values[0])) continue;
+      const rowObj = {};
+      headers.forEach((h, idx) => {
+        const key = h.replace(/^"|"$/g, '').trim();
+        const val = (values[idx] !== undefined ? values[idx] : '').replace(/^"|"$/g, '').trim();
+        rowObj[key] = val;
+      });
+      dataRows.push(rowObj);
+    }
+    return dataRows;
+  }
+
+  function processParsedAdjustmentRows(rows) {
+    if (!rows || !rows.length) {
+      showToast('No rows found in uploaded file', 'warning');
+      return;
+    }
+
+    let updatedCount = 0;
+    const allInputs = Array.from(document.querySelectorAll('.adj-phy-input'));
+
+    rows.forEach(r => {
+      let jmrefVal = '';
+      let partVal = '';
+      let phyQtyVal = undefined;
+
+      Object.keys(r).forEach(k => {
+        const cleanKey = k.trim().toLowerCase().replace(/[\s_\-\.\(\)]/g, '');
+        const rawVal = r[k];
+
+        if (['jmrefno', 'jmref', 'jmrefnumber', 'jmrefcode', 'jmrefnum'].includes(cleanKey)) {
+          if (rawVal != null && String(rawVal).trim()) jmrefVal = String(rawVal).trim();
+        } else if (['partno', 'part', 'partnumber', 'partcode', 'partnum'].includes(cleanKey)) {
+          if (rawVal != null && String(rawVal).trim()) partVal = String(rawVal).trim();
+        }
+
+        if (['physicalstockqty', 'physicalqty', 'physicalstock', 'actualphysicalstock', 'physicalcount', 'physical', 'qty', 'physicalstockqtypcs', 'stockqty', 'count'].includes(cleanKey)) {
+          if (rawVal !== undefined && rawVal !== null && String(rawVal).trim() !== '') {
+            const parsed = Number(rawVal);
+            if (!isNaN(parsed) && parsed >= 0) phyQtyVal = parsed;
+          }
+        }
+      });
+
+      if (phyQtyVal === undefined) {
+        Object.keys(r).forEach(k => {
+          const cleanKey = k.trim().toLowerCase().replace(/[\s_\-\.\(\)]/g, '');
+          if (!['jmrefno', 'jmref', 'partno', 'part', 'reason', 'description', 'notes', 'createddate'].includes(cleanKey)) {
+            const parsed = Number(r[k]);
+            if (!isNaN(parsed) && parsed >= 0 && r[k] !== '' && r[k] !== null) {
+              phyQtyVal = parsed;
+            }
+          }
+        });
+      }
+
+      if ((jmrefVal || partVal) && phyQtyVal !== undefined) {
+        const normJmrefVal = jmrefVal ? String(jmrefVal).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase() : '';
+        const normPartVal = partVal ? String(partVal).trim().toUpperCase() : '';
+
+        const inputEl = allInputs.find(inp => {
+          const inpJmref = (inp.dataset.jmref || '').trim();
+          const normInpJmref = inpJmref.replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+          const inpPart = (inp.dataset.partno || '').trim().toUpperCase();
+
+          if (normJmrefVal && normInpJmref === normJmrefVal) return true;
+          if (normPartVal && inpPart === normPartVal) return true;
+          if (normJmrefVal && inpPart === normJmrefVal) return true;
+          return false;
+        });
+
+        if (inputEl) {
+          inputEl.value = phyQtyVal;
+          const sysQty = Number(inputEl.dataset.sys || 0);
+          const targetJmref = inputEl.dataset.jmref;
+          onAdjQtyChange(targetJmref, sysQty, phyQtyVal);
+          updatedCount++;
+        }
+      }
+    });
+
+    if (updatedCount === 0) {
+      showToast('Parsed 0 matching physical stock entries. Please ensure file has columns: "JMREF_No" and "Physical_Stock_Qty".', 'warning');
+    } else {
+      showToast(`Successfully parsed and updated ${updatedCount} physical stock counts!`, 'success');
+      setTimeout(() => {
+        if (confirm(`Successfully loaded ${updatedCount} physical stock counts!\n\nWould you like to SAVE and RECONCILE these ${updatedCount} stock adjustments to the database now?`)) {
+          applyStockAdjustments(true);
+        } else {
+          showToast('Click "💾 Save & Reconcile Store Stock" at top right to apply changes when ready.', 'info');
+        }
+      }, 300);
+    }
+  }
+
   function onAdjExcelSelected(input) {
     const file = input.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        let rows = [];
-        if (typeof XLSX !== 'undefined') {
-          const workbook = XLSX.read(e.target.result, { type: 'binary' });
-          const firstSheet = workbook.SheetNames[0];
-          rows = XLSX.utils.sheet_to_json(workbook.Sheets[firstSheet]);
-        } else {
-          showToast('XLSX parser library unavailable. Please enter physical stock in table.', 'error');
-          return;
-        }
+    const isCSV = file.name.toLowerCase().endsWith('.csv') || file.type.includes('csv') || file.type.includes('text');
 
-        let updatedCount = 0;
-        rows.forEach(r => {
-          const jmref = String(r.JMREF_No || r.JMREF || r.jmref || '').trim();
-          const phyQty = r.Physical_Stock_Qty ?? r.Physical_Qty ?? r.PhysicalQty ?? r.qty;
-
-          if (jmref && phyQty !== undefined && phyQty !== '') {
-            const inputEl = document.querySelector(`.adj-phy-input[data-jmref="${jmref}"]`);
-            if (inputEl) {
-              inputEl.value = Number(phyQty);
-              const sysQty = Number(inputEl.dataset.sys || 0);
-              onAdjQtyChange(jmref, sysQty, phyQty);
-              updatedCount++;
-            }
+    if (typeof XLSX === 'undefined' && !isCSV) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const text = e.target.result;
+          const rows = parseCSVText(text);
+          if (rows && rows.length) {
+            processParsedAdjustmentRows(rows);
+          } else {
+            showToast('Offline Mode: Please save file as CSV (.csv format) to import offline.', 'warning');
           }
-        });
+        } catch(err) {
+          showToast('Offline Mode: Please save file as CSV (.csv format) to import offline.', 'warning');
+        }
+      };
+      reader.readAsText(file);
+      return;
+    }
 
-        showToast(`Parsed ${updatedCount} physical stock counts from Excel`, 'success');
-      } catch (err) {
-        console.error('Excel parse error:', err);
-        showToast('Failed to parse Excel file: ' + err.message, 'error');
-      }
-    };
-    reader.readAsBinaryString(file);
+    const reader = new FileReader();
+
+    if (typeof XLSX !== 'undefined') {
+      reader.onload = (e) => {
+        try {
+          const data = new Uint8Array(e.target.result);
+          const workbook = XLSX.read(data, { type: 'array' });
+          const firstSheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[firstSheetName];
+          const rows = XLSX.utils.sheet_to_json(worksheet);
+          processParsedAdjustmentRows(rows);
+        } catch (err) {
+          console.error('Excel parse error:', err);
+          showToast('Failed to parse Excel file: ' + err.message, 'error');
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    } else {
+      reader.onload = (e) => {
+        try {
+          const text = e.target.result;
+          const rows = parseCSVText(text);
+          processParsedAdjustmentRows(rows);
+        } catch (err) {
+          console.error('CSV parse error:', err);
+          showToast('Failed to parse CSV file: ' + err.message, 'error');
+        }
+      };
+      reader.readAsText(file);
+    }
   }
 
-  async function applyStockAdjustments() {
+  async function applyStockAdjustments(skipConfirm = false) {
     const inputs = document.querySelectorAll('.adj-phy-input');
     const adjustmentsToApply = [];
 
@@ -1383,64 +1553,75 @@ const StoreModule = (() => {
       return;
     }
 
-    const confirmMsg = `Reconcile ${adjustmentsToApply.length} item(s) to match physical stock counts?\n\n` +
-      adjustmentsToApply.slice(0, 5).map(a => `• ${a.jmref}: System ${a.sysQty} → Physical ${a.physical} (${a.diff > 0 ? '+' : ''}${a.diff})`).join('\n') +
-      (adjustmentsToApply.length > 5 ? `\n...and ${adjustmentsToApply.length - 5} more.` : '');
+    if (!skipConfirm) {
+      const confirmMsg = `Reconcile ${adjustmentsToApply.length} item(s) to match physical stock counts?\n\n` +
+        adjustmentsToApply.slice(0, 5).map(a => `• ${a.jmref}: System ${a.sysQty} → Physical ${a.physical} (${a.diff > 0 ? '+' : ''}${a.diff})`).join('\n') +
+        (adjustmentsToApply.length > 5 ? `\n...and ${adjustmentsToApply.length - 5} more.` : '');
 
-    if (!confirm(confirmMsg)) return;
+      if (!confirm(confirmMsg)) return;
+    }
 
-    let totalAdded = 0;
-    let totalDeducted = 0;
+    showToast('Reconciling stock... Please wait', 'info');
 
-    adjustmentsToApply.forEach(adj => {
+    if (typeof DB !== 'undefined' && typeof DB.reconcileStockBulk === 'function') {
+      await DB.reconcileStockBulk(adjustmentsToApply);
+    } else {
+      let totalAdded = 0;
+      let totalDeducted = 0;
       const now = new Date();
       const timeStr = now.toISOString().slice(0,10);
+      const ts = now.getTime();
 
-      if (adj.diff > 0) {
-        // Physical count is higher than system stock -> Create store adjustment batch to credit stock
-        const batchNo = `STK-ADJ-${adj.jmref}-${now.getTime().toString().slice(-5)}`;
-        DB.Batches.insert({
-          batchNo,
-          jmrefNo: adj.jmref,
-          partNo: adj.partNo,
-          partId: adj.partId,
-          initialQty: adj.diff,
-          currentStage: 'store',
-          status: 'completed',
-          completedAt: now.toISOString(),
-          notes: `Direct Store Stock Reconciliation: Added +${adj.diff} pcs to match physical count (${adj.physical} pcs)`
-        });
+      adjustmentsToApply.forEach((adj, idx) => {
+        if (adj.diff > 0) {
+          const uniqueId = typeof DB.genId === 'function' ? DB.genId() : (`adj_${ts}_${idx}`);
+          const batchNo = `STK-ADJ-${adj.jmref}-${ts.toString().slice(-4)}${idx + 1}`;
+          DB.Batches.insert({
+            id: uniqueId,
+            batchNo,
+            jmrefNo: adj.jmref,
+            partNo: adj.partNo,
+            partId: adj.partId,
+            initialQty: adj.diff,
+            currentStage: 'store',
+            status: 'completed',
+            completedAt: now.toISOString(),
+            notes: `Direct Store Stock Reconciliation: Added +${adj.diff} pcs to match physical count (${adj.physical} pcs)`
+          });
 
-        DB.StageRecords.insert({
-          batchId: batchNo,
-          stage: 'store',
-          inputQty: adj.diff,
-          outputQty: adj.diff,
-          lossQty: 0,
-          date: timeStr,
-          timestamp: now.toISOString(),
-          notes: `Stock Reconciliation Credit`
-        });
+          DB.StageRecords.insert({
+            batchId: uniqueId,
+            stage: 'store',
+            jmrefNo: adj.jmref,
+            partNo: adj.partNo,
+            partId: adj.partId,
+            inputQty: adj.diff,
+            outputQty: adj.diff,
+            lossQty: 0,
+            date: timeStr,
+            timestamp: now.toISOString(),
+            notes: `Stock Reconciliation Credit`
+          });
 
-        totalAdded += adj.diff;
-      } else {
-        // Physical count is lower than system stock -> Record sales/reconciliation debit for difference
-        const debitQty = Math.abs(adj.diff);
-        DB.Sales.insert({
-          date: timeStr,
-          saleDate: timeStr,
-          jmrefNo: adj.jmref,
-          partNo: adj.partNo,
-          partId: adj.partId,
-          qty: debitQty,
-          notes: `Direct Store Stock Reconciliation: Deducted -${debitQty} pcs to match physical count (${adj.physical} pcs)`
-        });
+          totalAdded += adj.diff;
+        } else {
+          const debitQty = Math.abs(adj.diff);
+          DB.Sales.insert({
+            date: timeStr,
+            saleDate: timeStr,
+            jmrefNo: adj.jmref,
+            partNo: adj.partNo,
+            partId: adj.partId,
+            qty: debitQty,
+            notes: `Direct Store Stock Reconciliation: Deducted -${debitQty} pcs to match physical count (${adj.physical} pcs)`
+          });
 
-        totalDeducted += debitQty;
-      }
-    });
+          totalDeducted += debitQty;
+        }
+      });
+    }
 
-    showToast(`Store stock successfully reconciled! Added: ${totalAdded} pcs, Deducted: ${totalDeducted} pcs.`, 'success');
+    showToast(`Store stock successfully reconciled across ${adjustmentsToApply.length} items!`, 'success');
     render();
   }
 
@@ -1461,6 +1642,7 @@ const StoreModule = (() => {
     onAdjQtyChange,
     filterAdjustGrid,
     downloadAdjustTemplate,
+    downloadAdjustCSVTemplate,
     onAdjExcelSelected,
     applyStockAdjustments
   };
