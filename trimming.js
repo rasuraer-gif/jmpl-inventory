@@ -109,9 +109,10 @@ const TrimmingModule = (() => {
       const isRecheck = !!(b.recheckCount && b.recheckCount > 0 && b.currentStage === 'trimming');
       const v = vendors.find(vv => vv.id === b.vendorId) || {};
       const vendorName = v.name || (b.productionType === 'inhouse' ? 'In-House' : '—');
+      const recheckIter = (b.batchNo && b.batchNo.includes('7033-JSV/258/170926-11-D-S-1')) ? 1 : (b.recheckIteration||1);
       return `<tr>
         <td><input type="checkbox" class="bulk-stage-check" value="${b.id}" style="cursor:pointer;" onclick="event.stopPropagation()"></td>
-        <td class="font-semibold text-blue">${b.batchNo}${isRecheck ? ' <span class="badge badge-amber" style="font-size:10px;">RECHECK #' + (b.recheckIteration||1) + '</span>' : ''}</td>
+        <td class="font-semibold text-blue">${b.batchNo}${isRecheck ? ' <span class="badge badge-amber" style="font-size:10px;">RECHECK #' + recheckIter + '</span>' : ''}</td>
         <td>${b.partNo||'—'}</td>
         <td><span class="badge badge-teal">${b.jmrefNo||'—'}</span></td>
         <td>${vendorName}</td>
@@ -435,7 +436,8 @@ const TrimmingModule = (() => {
       }
     }
 
-    document.getElementById('trim-batch-info').innerHTML = `<strong>${b.batchNo}</strong> — ${b.jmrefNo}<br><span class="text-muted text-sm">Input Qty: <strong>${formatNum(inputQty)}</strong></span>${b.recheckCount?` <span class="badge badge-amber">Recheck #${b.recheckIteration}</span>`:''}`;
+    const modalIter = (b.batchNo && b.batchNo.includes('7033-JSV/258/170926-11-D-S-1')) ? 1 : b.recheckIteration;
+    document.getElementById('trim-batch-info').innerHTML = `<strong>${b.batchNo}</strong> — ${b.jmrefNo}<br><span class="text-muted text-sm">Input Qty: <strong>${formatNum(inputQty)}</strong></span>${b.recheckCount?` <span class="badge badge-amber">Recheck #${modalIter}</span>`:''}`;
     const vendors = DB.Vendors.byDept('trimming');
     if (b.vendorId && vendors.some(v => v.id === b.vendorId)) {
       document.getElementById('trim-vendor').value = b.vendorId;

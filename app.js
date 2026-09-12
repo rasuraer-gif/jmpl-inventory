@@ -735,6 +735,11 @@ const App = (() => {
     if (!nav) return;
 
     // Permission check
+    const currentSession = Auth.getSession();
+    if (!currentSession) {
+      showLoginPage();
+      return;
+    }
     if (nav.adminOnly && !Auth.isAdmin()) { showToast('Admin access required', 'error'); return; }
     if (nav.perm && !Auth.hasPermission(nav.perm) && !Auth.isAdmin()) {
       showToast('You do not have permission to access this module', 'error'); return;
@@ -782,30 +787,22 @@ const App = (() => {
   }
 
   async function init() {
-    // Show a global loader if page loads and Firebase isn't synced
-    const root = document.getElementById('app-root') || document.body;
-    if (root) {
-      root.innerHTML = `
-        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background-color:#0f172a;color:#f8fafc;font-family:system-ui,-apple-system,sans-serif;">
-          <div style="font-size:36px;margin-bottom:16px;animation:spin 1s linear infinite;">🔩</div>
-          <h2 style="font-size:18px;font-weight:600;margin-bottom:8px;">Connecting to JMPL Cloud...</h2>
-          <p style="font-size:13px;color:#94a3b8;">Syncing database with Firestore</p>
-          <style>
-            @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-          </style>
-        </div>`;
+    // 1. Immediately initialize local cache & defaults (< 5ms) without blocking
+    if (typeof DB !== 'undefined' && typeof DB.initLocal === 'function') {
+      DB.initLocal();
+    } else if (typeof DB !== 'undefined' && typeof DB.seedDefaults === 'function') {
+      DB.seedDefaults();
     }
-
-    try {
-      await DB.init();
-    } catch(e) {
-      console.error("Database initialization failed:", e);
-    }
-
-    DB.seedDefaults();
 
     const session = Auth.getSession();
-    if (!session) { showLoginPage(); return; }
+    if (!session) {
+      showLoginPage();
+      // Connect to cloud in background
+      if (typeof DB !== 'undefined' && typeof DB.init === 'function') {
+        DB.init().catch(e => console.warn("Background DB init:", e));
+      }
+      return;
+    }
 
     showAppShell(session);
     setupInternalBatchNoObserver();
@@ -835,9 +832,14 @@ const App = (() => {
     window.addEventListener('offline', triggerSyncStatusUpdate);
     triggerSyncStatusUpdate(); // initial call
 
-    // Route to module from hash or default
+    // Route to module from hash or default IMMEDIATELY
     const hash = location.hash.replace('#', '');
     navigate(hash && MODULE_MAP[hash] ? hash : 'dashboard');
+
+    // Connect to cloud in background without blocking UI render
+    if (typeof DB !== 'undefined' && typeof DB.init === 'function') {
+      DB.init().catch(e => console.error("Database initialization failed:", e));
+    }
   }
 
   function toggleReportsMenu() {
@@ -2031,7 +2033,7 @@ function showLoginPage() {
     
     try {
       const loginPromise = Auth.login(username, password);
-      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Login verification timed out. Please check your network connection.')), 4000));
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Login verification timed out. Please check your network connection.')), 15000));
       const result = await Promise.race([loginPromise, timeoutPromise]);
       if (result.ok) {
         App.init();

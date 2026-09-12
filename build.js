@@ -39,7 +39,8 @@ const filesToCopy = [
   'daily-analysis.js',
   'ai-agent.js',
   'stock-audit.js',
-  'delivery-challan.js'
+  'delivery-challan.js',
+  'xlsx.full.min.js'
 ];
 
 filesToCopy.forEach(file => {

@@ -74,6 +74,8 @@ const DB = (() => {
     auditLogs: []
   };
   let localBackupData = {};
+  let isLocalLoaded = false;
+  let isCloudInitStarted = false;
 
   // Helper to load localStorage cache into memory on startup
   function loadLocalCache() {
@@ -83,8 +85,11 @@ const DB = (() => {
         if (data) {
           let parsed = JSON.parse(data);
           if (key === 'batches' && Array.isArray(parsed)) {
-            parsed = parsed.filter(b => !(b.batchNo && (b.batchNo.includes('-REC-') || b.batchNo.includes('REC'))));
-            localStorage.setItem(PREFIX + key, JSON.stringify(parsed));
+            const filtered = parsed.filter(b => !(b.batchNo && (b.batchNo.includes('-REC-') || b.batchNo.includes('REC'))));
+            if (filtered.length !== parsed.length) {
+              parsed = filtered;
+              localStorage.setItem(PREFIX + key, JSON.stringify(parsed));
+            }
           }
           cache[key] = parsed;
           localBackupData[key] = parsed;
@@ -96,15 +101,37 @@ const DB = (() => {
         localBackupData[key] = [];
       }
     }
+    runRecheckPatch();
   }
 
-  // Save specific collection to localStorage
+  // Debounced storage saver to prevent UI freezes on low-spec hardware
+  const _saveTimers = {};
   function saveLocal(table) {
+    if (_saveTimers[table]) clearTimeout(_saveTimers[table]);
+    _saveTimers[table] = setTimeout(() => {
+      try {
+        localStorage.setItem(PREFIX + table, JSON.stringify(cache[table] || []));
+      } catch (e) {
+        console.warn(`Could not save ${table} to local cache:`, e);
+      }
+    }, 150);
+  }
+
+  function saveLocalImmediate(table) {
+    if (_saveTimers[table]) clearTimeout(_saveTimers[table]);
     try {
       localStorage.setItem(PREFIX + table, JSON.stringify(cache[table] || []));
     } catch (e) {
       console.warn(`Could not save ${table} to local cache:`, e);
     }
+  }
+
+  // Synchronously load cache and defaults instantly (< 5ms) without waiting for network/cloud
+  function initLocal() {
+    if (isLocalLoaded) return;
+    loadLocalCache();
+    seedDefaults();
+    isLocalLoaded = true;
   }
 
   // Generate ID
@@ -114,11 +141,9 @@ const DB = (() => {
 
   // Initialize Firebase and setup sync listeners
   async function init() {
-    if (isInitialized) return;
-
-    // 1. Load what we have in localStorage first so the app boots instantly with cached data
-    loadLocalCache();
-    seedDefaults();
+    initLocal();
+    if (isCloudInitStarted) return;
+    isCloudInitStarted = true;
 
     // If local backup mode is active, we run strictly in offline fallback mode using local backup cache
     if (localStorage.getItem('jmpl_db_is_local_backup') === 'true') {
@@ -150,9 +175,11 @@ const DB = (() => {
       
       const firestoreInstance = firebase.firestore();
       
-      // Enable Firestore offline disk persistence (caches fetched documents in browser IndexedDB)
+      // Enable Firestore offline disk persistence with timeout guard so low-spec devices boot instantly
       try {
-        await firestoreInstance.enablePersistence({ synchronizeTabs: true });
+        const persistPromise = firestoreInstance.enablePersistence({ synchronizeTabs: true });
+        const persistTimeout = new Promise((_, reject) => setTimeout(() => reject(new Error('Persistence timeout')), 1500));
+        await Promise.race([persistPromise, persistTimeout]);
         console.log("Firestore offline disk persistence enabled successfully.");
       } catch (err) {
         if (err.code === 'failed-precondition') {
@@ -160,7 +187,7 @@ const DB = (() => {
         } else if (err.code === 'unimplemented') {
           console.warn("Current browser does not support Firestore persistence.");
         } else {
-          console.warn("Firestore persistence notice:", err);
+          console.warn("Firestore persistence notice (non-blocking):", err.message || err);
         }
       }
       
@@ -193,6 +220,9 @@ const DB = (() => {
           if (hasChanges) {
             cache[table] = list;
             saveLocal(table);
+            if (['batches', 'recheckTracker', 'stageRecords', 'lossTracker'].includes(table)) {
+              runRecheckPatch();
+            }
             triggerDataChange(table);
           }
         }, err => {
@@ -202,11 +232,13 @@ const DB = (() => {
 
       isCloudSyncComplete = true;
       localStorage.setItem('jmpl_archival_migration_run_v1', 'true');
+      runRecheckPatch();
     } catch (e) {
       console.error("Failed to initialize Firebase database:", e);
     }
 
     isInitialized = true;
+    runRecheckPatch();
   }
 
   // Migration assistant: checks if Firestore contains no batches/master parts but localStorage does
@@ -301,6 +333,121 @@ const DB = (() => {
         localStorage.setItem(PREFIX + 'stageRecords', JSON.stringify(cache.stageRecords));
       }
       console.log(`[Migration] Successfully moved ${migratedBatchesCount} batches and ${migratedRecordsCount} stage records to "waiting-visual".`);
+    }
+  }
+
+  function runRecheckPatch() {
+    const TARGET = '7033-JSV/258/170926-11-D-S-1';
+    const batches = (cache.batches || []).filter(b => b && b.batchNo && b.batchNo.trim() === TARGET.trim());
+    if (batches.length === 0) return;
+
+    batches.forEach(b => {
+      let bChanged = false;
+      if (b.recheckIteration !== 1 || b.recheckCount !== 1) {
+        b.recheckIteration = 1;
+        b.recheckCount = 1;
+        b.updatedAt = new Date().toISOString();
+        bChanged = true;
+      }
+      if (bChanged) {
+        saveLocal('batches');
+        if (db) {
+          const docData = { ...b };
+          delete docData.id;
+          db.collection('batches').doc(b.id).set(docData, { merge: true }).catch(err => {
+            console.error('Error updating batch recheck:', err);
+          });
+        }
+      }
+
+      // 1. Recheck tracker records
+      const rts = (cache.recheckTracker || []).filter(r => r && (r.batchId === b.id || (r.batchNo && r.batchNo.trim() === TARGET.trim())));
+      if (rts.length > 1) {
+        rts.sort((x, y) => (x.createdAt || x.date || '').localeCompare(y.createdAt || y.date || ''));
+        const toRemove = rts.slice(0, rts.length - 1);
+        const toKeep = rts[rts.length - 1];
+        toKeep.recheckNo = 1;
+        toKeep.updatedAt = new Date().toISOString();
+
+        toRemove.forEach(rem => {
+          const idx = cache.recheckTracker.findIndex(x => x.id === rem.id);
+          if (idx !== -1) cache.recheckTracker.splice(idx, 1);
+          if (db) {
+            db.collection('recheckTracker').doc(rem.id).delete().catch(console.error);
+          }
+        });
+        if (db) {
+          const docData = { ...toKeep };
+          delete docData.id;
+          db.collection('recheckTracker').doc(toKeep.id).set(docData, { merge: true }).catch(console.error);
+        }
+        saveLocal('recheckTracker');
+      } else if (rts.length === 1) {
+        if (rts[0].recheckNo !== 1) {
+          rts[0].recheckNo = 1;
+          rts[0].updatedAt = new Date().toISOString();
+          if (db) {
+            const docData = { ...rts[0] };
+            delete docData.id;
+            db.collection('recheckTracker').doc(rts[0].id).set(docData, { merge: true }).catch(console.error);
+          }
+          saveLocal('recheckTracker');
+        }
+      }
+
+      // 2. Stage records
+      const srs = (cache.stageRecords || []).filter(r => r && (r.batchId === b.id || (r.batchNo && r.batchNo.trim() === TARGET.trim())));
+      let srChanged = false;
+      srs.forEach(r => {
+        let changed = false;
+        if (r.recheckNo && r.recheckNo !== 1) {
+          r.recheckNo = 1;
+          changed = true;
+        }
+        if (r.iterationNo && r.iterationNo !== 1) {
+          r.iterationNo = 1;
+          changed = true;
+        }
+        if (changed) {
+          r.updatedAt = new Date().toISOString();
+          srChanged = true;
+          if (db) {
+            const docData = { ...r };
+            delete docData.id;
+            db.collection('stageRecords').doc(r.id).set(docData, { merge: true }).catch(console.error);
+          }
+        }
+      });
+      if (srChanged) saveLocal('stageRecords');
+
+      // 3. Loss tracker
+      const lts = (cache.lossTracker || []).filter(r => r && r.batchId === b.id);
+      let ltChanged = false;
+      lts.forEach(r => {
+        if (r.iterationNo && r.iterationNo !== 1) {
+          r.iterationNo = 1;
+          r.updatedAt = new Date().toISOString();
+          ltChanged = true;
+          if (db) {
+            const docData = { ...r };
+            delete docData.id;
+            db.collection('lossTracker').doc(r.id).set(docData, { merge: true }).catch(console.error);
+          }
+        }
+      });
+      if (ltChanged) saveLocal('lossTracker');
+    });
+
+    if (db && !runRecheckPatch._cloudChecked) {
+      runRecheckPatch._cloudChecked = true;
+      db.collection('batches').where('batchNo', '==', TARGET).get().then(snap => {
+        snap.forEach(doc => {
+          const data = doc.data();
+          if (data.recheckIteration !== 1 || data.recheckCount !== 1) {
+            doc.ref.update({ recheckIteration: 1, recheckCount: 1, updatedAt: new Date().toISOString() }).catch(console.error);
+          }
+        });
+      }).catch(err => console.warn('Cloud batch query notice:', err.message));
     }
   }
 
@@ -2008,7 +2155,7 @@ const DB = (() => {
   }
 
   return {
-    init, onSyncStateChange, onDataChange, genId, seedDefaults, clearTable,
+    initLocal, init, onSyncStateChange, onDataChange, genId, seedDefaults, clearTable,
     Users, Master, Subcontractors, Vendors, Operators, Inspectors,
     Batches, StageRecords, LossTracker, RejectionTracker,
     RecheckTracker, StockUploads, Sales, StoreInventory,

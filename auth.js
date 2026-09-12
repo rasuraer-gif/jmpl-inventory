@@ -6,11 +6,31 @@ const Auth = (() => {
   const SESSION_KEY = 'jmpl_session';
   const LOCKOUT_KEY = 'jmpl_login_lockout';
 
-  // Security thresholds
-  const MAX_FAILED_ATTEMPTS = 5;
-  const LOCKOUT_DURATION_MS = 15 * 60 * 1000; // 15 minutes
-  const SESSION_MAX_AGE_MS = 8 * 60 * 60 * 1000; // 8 hours max session length
-  const SESSION_MAX_IDLE_MS = 30 * 60 * 1000; // 30 minutes idle timeout
+  // Industrial shift thresholds — designed for continuous factory floor operations
+  const MAX_FAILED_ATTEMPTS = 10;
+  const LOCKOUT_DURATION_MS = 30 * 1000; // 30 seconds temporary cooldown (not 15 minutes)
+  const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days persistent login
+  const SESSION_MAX_IDLE_MS = 24 * 60 * 60 * 1000; // 24 hours idle timeout for shop floor shifts
+
+  // ── Storage Helpers (Dual LocalStorage + SessionStorage) ──
+  function getStoredSessionRaw() {
+    try {
+      return localStorage.getItem(SESSION_KEY) || sessionStorage.getItem(SESSION_KEY);
+    } catch {
+      return null;
+    }
+  }
+
+  function setStoredSession(session) {
+    const str = JSON.stringify(session);
+    try { localStorage.setItem(SESSION_KEY, str); } catch {}
+    try { sessionStorage.setItem(SESSION_KEY, str); } catch {}
+  }
+
+  function removeStoredSession() {
+    try { localStorage.removeItem(SESSION_KEY); } catch {}
+    try { sessionStorage.removeItem(SESSION_KEY); } catch {}
+  }
 
   // ── Rate Limiting / Lockout Helpers ───────────────────────
   function getLockoutState() {
@@ -27,19 +47,19 @@ const Auth = (() => {
     if (state.fails >= MAX_FAILED_ATTEMPTS) {
       state.lockUntil = Date.now() + LOCKOUT_DURATION_MS;
     }
-    localStorage.setItem(LOCKOUT_KEY, JSON.stringify(state));
+    try { localStorage.setItem(LOCKOUT_KEY, JSON.stringify(state)); } catch {}
     return state;
   }
 
   function clearLockoutState() {
-    localStorage.removeItem(LOCKOUT_KEY);
+    try { localStorage.removeItem(LOCKOUT_KEY); } catch {}
   }
 
   function checkLockout() {
     const state = getLockoutState();
     if (state.lockUntil && Date.now() < state.lockUntil) {
-      const minutesLeft = Math.ceil((state.lockUntil - Date.now()) / 60000);
-      return { locked: true, error: `Too many failed login attempts. Account locked for ${minutesLeft} minute(s).` };
+      const secondsLeft = Math.ceil((state.lockUntil - Date.now()) / 1000);
+      return { locked: true, error: `Too many failed attempts. Please wait ${secondsLeft} second(s).` };
     }
     if (state.lockUntil && Date.now() >= state.lockUntil) {
       clearLockoutState();
@@ -47,14 +67,82 @@ const Auth = (() => {
     return { locked: false };
   }
 
-  // ── Password Hashing (Web Crypto API — SHA-256) ────────────
+  // ── Pure JavaScript SHA-256 Implementation (HTTP / Non-Secure Context Fallback) ──
+  function sha256Pure(ascii) {
+    function rightRotate(value, amount) {
+      return (value >>> amount) | (value << (32 - amount));
+    }
+    const mathPow = Math.pow;
+    const maxWord = mathPow(2, 32);
+    let lengthProperty = 'length';
+    let i, j;
+    let result = '';
+    const words = [];
+    const asciiBitLength = ascii[lengthProperty] * 8;
+    let hash = sha256Pure.h = sha256Pure.h || [];
+    const k = sha256Pure.k = sha256Pure.k || [];
+    let primeCounter = k[lengthProperty];
+    const isComposite = {};
+    for (let candidate = 2; primeCounter < 64; candidate++) {
+      if (!isComposite[candidate]) {
+        for (i = 0; i < 313; i += candidate) {
+          isComposite[i] = candidate;
+        }
+        hash[primeCounter] = (mathPow(candidate, .5) * maxWord) | 0;
+        k[primeCounter++] = (mathPow(candidate, 1/3) * maxWord) | 0;
+      }
+    }
+    ascii += '\x80';
+    while (ascii[lengthProperty] % 64 - 56) ascii += '\x00';
+    for (i = 0; i < ascii[lengthProperty]; i++) {
+      j = ascii.charCodeAt(i);
+      words[i >> 2] |= j << ((3 - i % 4) * 8);
+    }
+    words[words[lengthProperty]] = ((asciiBitLength / maxWord) | 0);
+    words[words[lengthProperty]] = (asciiBitLength | 0);
+    for (j = 0; j < words[lengthProperty];) {
+      const w = words.slice(j, j += 16);
+      const oldHash = hash;
+      hash = hash.slice(0, 8);
+      for (i = 0; i < 64; i++) {
+        const w15 = w[i - 15], w2 = w[i - 2];
+        const s0 = rightRotate(w15, 7) ^ rightRotate(w15, 18) ^ (w15 >>> 3);
+        const s1 = rightRotate(w2, 17) ^ rightRotate(w2, 19) ^ (w2 >>> 10);
+        const ch = (hash[4] & hash[5]) ^ (~hash[4] & hash[6]);
+        const maj = (hash[0] & hash[1]) ^ (hash[0] & hash[2]) ^ (hash[1] & hash[2]);
+        const temp1 = hash[7] + (rightRotate(hash[4], 6) ^ rightRotate(hash[4], 11) ^ rightRotate(hash[4], 25)) + ch + k[i] + (w[i] = (i < 16) ? w[i] : (w[i - 16] + s0 + w[i - 7] + s1) | 0);
+        const temp2 = (rightRotate(hash[0], 2) ^ rightRotate(hash[0], 13) ^ rightRotate(hash[0], 22)) + maj;
+        hash = [(temp1 + temp2) | 0].concat(hash);
+        hash[4] = (hash[4] + temp1) | 0;
+      }
+      for (i = 0; i < 8; i++) {
+        hash[i] = (hash[i] + oldHash[i]) | 0;
+      }
+    }
+    for (i = 0; i < 8; i++) {
+      for (j = 3; j + 1; j--) {
+        const b = (hash[i] >> (j * 8)) & 255;
+        result += ((b < 16) ? '0' : '') + b.toString(16);
+      }
+    }
+    return result;
+  }
+
+  // ── Password Hashing (Web Crypto API with Pure JS Fallback) ──
   async function hashPassword(password) {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(password);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-    return Array.from(new Uint8Array(hashBuffer))
-      .map(b => b.toString(16).padStart(2, '0'))
-      .join('');
+    if (typeof window !== 'undefined' && window.crypto && window.crypto.subtle && typeof window.crypto.subtle.digest === 'function') {
+      try {
+        const encoder = new TextEncoder();
+        const data = encoder.encode(password);
+        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+        return Array.from(new Uint8Array(hashBuffer))
+          .map(b => b.toString(16).padStart(2, '0'))
+          .join('');
+      } catch (e) {
+        console.warn('Web Crypto digest failed, using JS fallback:', e);
+      }
+    }
+    return sha256Pure(password);
   }
 
   function isHashed(value) {
@@ -137,7 +225,7 @@ const Auth = (() => {
       loginAt: now,
       lastActive: now
     };
-    sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    setStoredSession(session);
     setupActivityListeners();
     try {
       if (DB.AuditLogs) DB.AuditLogs.log('User Login', 'security', `User ${user.username} logged in`, user.username);
@@ -146,26 +234,26 @@ const Auth = (() => {
   }
 
   function logout() {
-    sessionStorage.removeItem(SESSION_KEY);
+    removeStoredSession();
     window.location.reload();
   }
 
   function getSession() {
     try {
-      const raw = sessionStorage.getItem(SESSION_KEY);
+      const raw = getStoredSessionRaw();
       if (!raw) return null;
       const s = JSON.parse(raw);
       const now = Date.now();
 
-      // Check max total age (8 hrs)
+      // Check max total age (30 days)
       if (s.loginAt && (now - s.loginAt > SESSION_MAX_AGE_MS)) {
-        sessionStorage.removeItem(SESSION_KEY);
+        removeStoredSession();
         return null;
       }
 
-      // Check idle time (30 mins)
+      // Check idle time (24 hours)
       if (s.lastActive && (now - s.lastActive > SESSION_MAX_IDLE_MS)) {
-        sessionStorage.removeItem(SESSION_KEY);
+        removeStoredSession();
         return null;
       }
 
@@ -181,26 +269,24 @@ const Auth = (() => {
     if (now - lastActivityUpdate < 10000) return; // Throttle storage writes to once per 10s
     lastActivityUpdate = now;
     try {
-      const raw = sessionStorage.getItem(SESSION_KEY);
+      const raw = getStoredSessionRaw();
       if (!raw) return;
       const s = JSON.parse(raw);
       s.lastActive = now;
-      sessionStorage.setItem(SESSION_KEY, JSON.stringify(s));
+      setStoredSession(s);
     } catch {}
   }
 
   function setupActivityListeners() {
     if (window._authListenersAttached) return;
     window._authListenersAttached = true;
-    ['mousemove', 'keydown', 'click', 'touchstart'].forEach(evt => {
+    ['mousemove', 'keydown', 'click', 'touchstart', 'scroll', 'input'].forEach(evt => {
       window.addEventListener(evt, updateActivity, { passive: true });
     });
   }
 
-  // Initialize activity listeners on script load if session exists
-  if (getSession()) {
-    setupActivityListeners();
-  }
+  // Always attach activity listeners
+  setupActivityListeners();
 
   function isAdmin() {
     const s = getSession();

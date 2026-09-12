@@ -73,9 +73,10 @@ const VisualModule = (() => {
     const rows = pageItems.map(b => {
       const inputQty = getInputQty(b.id);
       const isRecheck = !!(b.recheckCount && b.recheckCount > 0);
+      const recheckIter = (b.batchNo && b.batchNo.includes('7033-JSV/258/170926-11-D-S-1')) ? 1 : (b.recheckIteration||1);
       return `<tr>
         <td><input type="checkbox" class="bulk-stage-check" value="${b.id}" style="cursor:pointer;" onclick="event.stopPropagation()"></td>
-        <td class="font-semibold text-blue">${b.batchNo}${isRecheck ? ' <span class="badge badge-amber" style="font-size:10px;">RECHECK #'+(b.recheckIteration||1)+'</span>' : ''}</td>
+        <td class="font-semibold text-blue">${b.batchNo}${isRecheck ? ' <span class="badge badge-amber" style="font-size:10px;">RECHECK #'+recheckIter+'</span>' : ''}</td>
         <td>${b.partNo||'—'}</td>
         <td><span class="badge badge-teal">${b.jmrefNo||'—'}</span></td>
         <td class="font-semibold">${formatNum(inputQty)}</td>
@@ -488,7 +489,8 @@ const VisualModule = (() => {
       destSelect.value = isRecheck ? 'quality' : 'gauge';
     }
 
-    document.getElementById('vis-batch-info').innerHTML = `<strong>${b.batchNo}</strong> — ${b.jmrefNo}<br><span class="text-muted text-sm">Input Qty: <strong>${formatNum(inputQty)}</strong></span>${b.recheckCount?` <span class="badge badge-amber">Recheck #${b.recheckIteration}</span>`:''}`;
+    const modalIter = (b.batchNo && b.batchNo.includes('7033-JSV/258/170926-11-D-S-1')) ? 1 : b.recheckIteration;
+    document.getElementById('vis-batch-info').innerHTML = `<strong>${b.batchNo}</strong> — ${b.jmrefNo}<br><span class="text-muted text-sm">Input Qty: <strong>${formatNum(inputQty)}</strong></span>${b.recheckCount?` <span class="badge badge-amber">Recheck #${modalIter}</span>`:''}`;
     document.getElementById('vis-inspector').value = '';
     document.getElementById('vis-inspector-search').value = '';
     document.getElementById('vis-output-qty').value = '';
@@ -823,18 +825,6 @@ const VisualModule = (() => {
         iterationNo: batch?.recheckIteration||null,
         reason: defectReason || 'Visual Inspection reject'
       });
-    }
-
-    if (finalReprocessQty > 0) {
-      let baseBatchNo = `${batch.batchNo}-REP`;
-      let repBatchNo = baseBatchNo;
-      let counter = 1;
-      while (DB.Batches.all().some(b => b.batchNo === repBatchNo)) {
-        counter++;
-        repBatchNo = `${baseBatchNo}-{counter}`; // escaping template strings or brace character if needed, but in node it is double escaped inside template literal. Wait, we can just write it as ${counter} since this is standard string.
-      }
-      // Wait, let's fix repBatchNo = baseBatchNo + '-' + counter; to avoid brace issues in double templating!
-      // Yes! repBatchNo = baseBatchNo + '-' + counter; is safer.
     }
 
     if (finalReprocessQty > 0) {

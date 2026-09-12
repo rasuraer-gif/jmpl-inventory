@@ -11,10 +11,8 @@
 
   <link rel="stylesheet" href="index.css">
   
-  <!-- SheetJS for Excel export & import with CDN fallbacks -->
-  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-  <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+  <!-- SheetJS for Excel export & import (Local offline bundle with defer) -->
+  <script src="xlsx.full.min.js" defer></script>
   <!-- Chart.js for visual report charts -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>
   <!-- JsBarcode for label barcode generation -->
@@ -66,15 +64,8 @@
   <script src="app.js" defer></script>
 </head>
 <body class="landing-body">
-  <!-- Default Global Loading Screen (Prevents Loading Flash) -->
-  <div id="app-root" style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background-color:#0f172a;color:#f8fafc;font-family:system-ui,-apple-system,sans-serif;">
-    <div style="font-size:36px;margin-bottom:16px;animation:spin 1s linear infinite;">🌀</div>
-    <h2 style="font-size:18px;font-weight:600;margin-bottom:8px;">Connecting to JMPL Cloud...</h2>
-    <p style="font-size:13px;color:#94a3b8;">Syncing database with Firestore</p>
-    <style>
-      @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-    </style>
-  </div>
+  <!-- Minimal App Root (Immediately replaced on script boot in < 50ms) -->
+  <div id="app-root"></div>
   
   <div id="toast-container"></div>
 </body>

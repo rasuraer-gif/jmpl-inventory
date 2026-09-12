@@ -621,55 +621,67 @@ const ReportsModule = (() => {
     const { from, to, jmref, operatorId, prodType } = filters;
     let records = DB.ProductionRecords.all();
 
-    // Filter by jmref
+    // Attach resolved production date to each record for filtering & display
+    records = records.map(r => {
+      const batch = DB.Batches.find(r.batchId) || {};
+      const prodDate = (r.productionDate || r.date || batch.productionDate || r.createdAt || '').slice(0, 10);
+      return { ...r, _prodDate: prodDate, _batch: batch };
+    });
+
+    // Filter by jmref / partNo
     if (jmref) {
-      records = records.filter(r => {
-        const batch = DB.Batches.find(r.batchId) || {};
-        return (batch.jmrefNo || '').toLowerCase().includes(jmref.toLowerCase()) ||
-               (batch.partNo || '').toLowerCase().includes(jmref.toLowerCase());
-      });
+      const q = jmref.toLowerCase();
+      records = records.filter(r =>
+        (r._batch.jmrefNo || '').toLowerCase().includes(q) ||
+        (r._batch.partNo || '').toLowerCase().includes(q) ||
+        (r._batch.batchNo || '').toLowerCase().includes(q)
+      );
     }
 
-    // Filter records by date
-    records = filterByDateRange(records, 'date', from, to);
+    // Filter by production date range
+    if (from) records = records.filter(r => r._prodDate >= from);
+    if (to)   records = records.filter(r => r._prodDate <= to);
+
     if (operatorId) records = records.filter(r => r.operatorId === operatorId);
 
     // Filter by production type (In House vs Subcontractor)
     if (prodType) {
-      records = records.filter(r => {
-        const batch = DB.Batches.find(r.batchId) || {};
-        return batch.productionType === prodType;
-      });
+      records = records.filter(r => r._batch.productionType === prodType);
     }
 
     if (!records.length) return emptyState();
 
+    // Sort by production date ascending (oldest first)
+    records.sort((a, b) => a._prodDate.localeCompare(b._prodDate));
+
     const operators = DB.Operators.all();
     const subcontractors = DB.Subcontractors.all();
-    const headers = ['#','Batch No','JMREF','Operator','Subcontractor Name','Press No','No. of Lifts','Prod Type','Date'];
+    const headers = ['#','Production Date','Batch No','JMREF','Part No','Operator','Subcontractor Name','Press No','No. of Lifts','Prod Type'];
     const dataRows = records.map((r, i) => {
-      const batch = DB.Batches.find(r.batchId) || {};
+      const batch = r._batch;
       const op = operators.find(o => o.id === r.operatorId) || {};
       const sub = subcontractors.find(s => s.id === batch.subcontractorId) || {};
       const typeStr = batch.productionType === 'subcontractor' ? 'Subcontractor' : 'In House';
       return [
-        i+1, 
-        batch.batchNo||'', 
-        batch.jmrefNo||'', 
-        op.name||r.operatorName||'-', 
+        i + 1,
+        r._prodDate || '—',
+        batch.batchNo || '',
+        batch.jmrefNo || '',
+        batch.partNo || '',
+        op.name || r.operatorName || '-',
         (sub.name && sub.name !== '-') ? sub.name : typeStr,
-        r.pressNo||batch.pressNo||'-', 
-        r.noOfLifts||0, 
-        typeStr, 
+        r.pressNo || batch.pressNo || '-',
+        r.noOfLifts || 0,
+        typeStr,
       ];
     });
-    const totalLifts = records.reduce((s, r) => s + (r.noOfLifts||0), 0);
-    const summaryRow = ['', '', '', 'TOTAL:', '', '', totalLifts, '', ''];
+    const totalLifts = records.reduce((s, r) => s + (r.noOfLifts || 0), 0);
+    const summaryRow = ['', '', '', '', 'TOTAL:', '', '', '', totalLifts, ''];
     dataRows.push(summaryRow);
 
     const html = `<div class="table-wrap"><table class="data-table">
       <thead><tr>${headers.map(th).join('')}</tr></thead>
-      <tbody>${dataRows.map((r,i)=>`<tr class="${i===dataRows.length-1?'font-bold text-danger':''}">${r.map(v=>td(v)).join('')}</tr>`).join('')}</tbody>
+      <tbody>${dataRows.map((r, i) => `<tr class="${i === dataRows.length - 1 ? 'font-bold text-danger' : ''}">${r.map(v => td(v)).join('')}</tr>`).join('')}</tbody>
     </table></div>`;
     return { html, headers, dataRows };
   }
@@ -1237,142 +1249,100 @@ const ReportsModule = (() => {
   function renderQualityFinalReport(filters) {
     const { from, to, jmref, status } = filters || {};
 
-    const stageRecs = (typeof DB !== 'undefined' && DB.StageRecords) ? DB.StageRecords.all().filter(r => r.stage === 'quality' || r.movedFrom === 'quality') : [];
-    const recheckRecs = (typeof DB !== 'undefined' && DB.RecheckTracker) ? DB.RecheckTracker.all() : [];
-    const rejectRecs = (typeof DB !== 'undefined' && DB.RejectionTracker) ? DB.RejectionTracker.all().filter(r => r.stage === 'quality' || r.movedFrom === 'quality') : [];
-    const allBatches = (typeof DB !== 'undefined' && DB.Batches) ? (DB.Batches.allIncludeArchived ? DB.Batches.allIncludeArchived() : DB.Batches.all()) : [];
+    function isStkAdj(bNo, notes) {
+      const s = String(bNo || '').toUpperCase();
+      const n = String(notes || '');
+      if (s.includes('STK-ADJ') || s.includes('STK_ADJ') || s.includes('STKADJ') || s.includes('REC-')) return true;
+      if (n.includes('Direct Store Stock Reconciliation') || n.includes('Stock Reconciliation') || n.includes('Closed via stock') || n.includes('Zeroed via stock') || n.includes('zeroing')) return true;
+      return false;
+    }
+
+    const stageRecs = (typeof DB !== 'undefined' && DB.StageRecords)
+      ? DB.StageRecords.all().filter(r => 
+          ((r.stage === 'quality' && r.movedTo === 'store') || (r.stage === 'store' && r.movedFrom === 'quality')) &&
+          !isStkAdj(r.batchNo, r.notes || r.remarks)
+        )
+      : [];
+    const allBatches = (typeof DB !== 'undefined' && DB.Batches)
+      ? (DB.Batches.allIncludeArchived ? DB.Batches.allIncludeArchived() : DB.Batches.all())
+      : [];
     const users = (typeof DB !== 'undefined' && DB.Users) ? DB.Users.all() : [];
 
     const rows = [];
-    const seenBatchKeys = new Set();
+    const seenBatchNos = new Set();
 
-    // 1. Process Stage Records (Pass to Store or Quality inspection records)
-    stageRecs.forEach(r => {
+    // Sort stageRecs so records with positive output/passed qty come first
+    const sortedStageRecs = [...stageRecs].sort((a, b) => {
+      const aPassed = Number(a.outputQty !== undefined ? a.outputQty : (a.inputQty || 0));
+      const bPassed = Number(b.outputQty !== undefined ? b.outputQty : (b.inputQty || 0));
+      return bPassed - aPassed;
+    });
+
+    // 1. Process QC Final ➔ Store movement stage records
+    sortedStageRecs.forEach(r => {
       const bDetails = resolveBatchDetails(r);
+      const batchNo = bDetails.batchNo || r.batchNo;
+      if (!batchNo || isStkAdj(batchNo, bDetails.notes || r.notes)) return;
+      if (seenBatchNos.has(batchNo)) return;
+
       const inputQty = Number(r.inputQty || r.qty || 0);
-      const passedQty = r.movedTo === 'store' ? Number(r.outputQty !== undefined ? r.outputQty : inputQty) : 0;
+      const passedQty = Number(r.outputQty !== undefined ? r.outputQty : inputQty);
+      if (passedQty <= 0) return;
+
       const lossQty = Number(r.lossQty || Math.max(0, inputQty - passedQty));
       const inspectorUser = users.find(u => u.id === (r.operatorId || r.recordedBy || r.userId)) || {};
       const inspectorName = inspectorUser.name || r.inspectorName || r.operatorName || '—';
 
-      let outcome = 'Passed to Store';
-      let outcomeBadge = '<span class="badge badge-green">🟢 Passed to Store</span>';
-      if (r.movedTo && r.movedTo.includes('recheck')) {
-        outcome = 'Recheck Sent';
-        outcomeBadge = '<span class="badge badge-amber">🔄 Recheck Sent</span>';
-      } else if (r.movedTo === 'rejected' || r.status === 'rejected') {
-        outcome = 'Rejected';
-        outcomeBadge = '<span class="badge badge-red">🔴 Rejected</span>';
-      }
-
       const rawD = r.date || r.createdAt || '';
-      const bKey = `${bDetails.batchNo}_${outcome}_${rawD.slice(0,10)}`;
-      seenBatchKeys.add(bKey);
+      seenBatchNos.add(batchNo);
 
       rows.push({
         id: r.id,
-        batchNo: bDetails.batchNo,
+        batchNo,
         partNo: bDetails.partNo,
         jmrefNo: bDetails.jmrefNo,
         inputQty,
         passedQty,
         lossQty,
         lossPct: inputQty > 0 ? ((lossQty / inputQty) * 100).toFixed(1) : '0.0',
-        outcome,
-        outcomeBadge,
+        outcome: 'Passed to Store',
+        outcomeBadge: '<span class="badge badge-green">🟢 Passed to Store</span>',
         inspector: inspectorName,
-        remarks: r.remarks || r.notes || r.defectReason || (outcome === 'Passed to Store' ? 'Passed to Store' : 'QC Final Inspection'),
+        remarks: r.remarks || r.notes || r.defectReason || 'Passed to Store',
         date: rawD.slice(0, 10),
         rawDate: rawD
       });
     });
 
-    // 2. Add Recheck Tracker Records
-    recheckRecs.forEach(rc => {
-      const bDetails = resolveBatchDetails(rc);
-      const inspectorUser = users.find(u => u.id === rc.recordedBy) || {};
-      const inspectorName = inspectorUser.name || '—';
-      const rawD = rc.date || rc.createdAt || '';
-      const bKey = `${bDetails.batchNo}_Recheck Sent_${rawD.slice(0,10)}`;
+    // 2. Add Completed Batches (Store Completed) if not already present
+    allBatches.filter(b => b.status === 'completed' && !b.isArchived && !isStkAdj(b.batchNo, b.notes)).forEach(b => {
+      const batchNo = b.batchNo;
+      if (!batchNo || isRawId(batchNo) || isStkAdj(batchNo, b.notes)) return;
+      if (seenBatchNos.has(batchNo)) return;
 
-      if (!seenBatchKeys.has(bKey)) {
-        seenBatchKeys.add(bKey);
-        const inputQty = Number(rc.qty || rc.inputQty || 0);
-        const lossQty = Number(rc.lossQty || 0);
-        rows.push({
-          id: rc.id || ('rc_' + Math.random()),
-          batchNo: bDetails.batchNo,
-          partNo: bDetails.partNo,
-          jmrefNo: bDetails.jmrefNo,
-          inputQty,
-          passedQty: 0,
-          lossQty,
-          lossPct: inputQty > 0 ? ((lossQty / inputQty) * 100).toFixed(1) : '0.0',
-          outcome: 'Recheck Sent',
-          outcomeBadge: '<span class="badge badge-amber">🔄 Recheck Sent</span>',
-          inspector: inspectorName,
-          remarks: rc.recheckReason || rc.remarks || rc.notes || 'Sent for rework/recheck',
-          date: rawD.slice(0, 10),
-          rawDate: rawD
-        });
-      }
-    });
-
-    // 3. Add Rejection Tracker Records
-    rejectRecs.forEach(rj => {
-      const bDetails = resolveBatchDetails(rj);
-      const inspectorUser = users.find(u => u.id === rj.recordedBy) || {};
-      const inspectorName = inspectorUser.name || '—';
-      const rawD = rj.date || rj.createdAt || '';
-      const bKey = `${bDetails.batchNo}_Rejected_${rawD.slice(0,10)}`;
-
-      if (!seenBatchKeys.has(bKey)) {
-        seenBatchKeys.add(bKey);
-        const inputQty = Number(rj.qty || rj.inputQty || 0);
-        rows.push({
-          id: rj.id || ('rj_' + Math.random()),
-          batchNo: bDetails.batchNo,
-          partNo: bDetails.partNo,
-          jmrefNo: bDetails.jmrefNo,
-          inputQty,
-          passedQty: 0,
-          lossQty: inputQty,
-          lossPct: '100.0',
-          outcome: 'Rejected',
-          outcomeBadge: '<span class="badge badge-red">🔴 Rejected</span>',
-          inspector: inspectorName,
-          remarks: rj.rejectReason || rj.remarks || rj.notes || 'Batch Rejected',
-          date: rawD.slice(0, 10),
-          rawDate: rawD
-        });
-      }
-    });
-
-    // 4. Add Completed Batches (Store Completed) if not already present
-    allBatches.filter(b => b.status === 'completed' && !b.isArchived).forEach(b => {
       const rawD = b.completedAt || b.createdAt || '';
-      const bKey = `${b.batchNo}_Passed to Store_${rawD.slice(0,10)}`;
-      if (!seenBatchKeys.has(bKey) && b.batchNo && !isRawId(b.batchNo)) {
-        seenBatchKeys.add(bKey);
-        const inputQty = Number(b.initialQty || 0);
-        const passedQty = Number(b.remaining !== undefined ? b.remaining : (b.remainingQty !== undefined ? b.remainingQty : inputQty));
-        rows.push({
-          id: 'comp_' + b.id,
-          batchNo: b.batchNo,
-          partNo: b.partNo || '—',
-          jmrefNo: b.jmrefNo || '—',
-          inputQty,
-          passedQty,
-          lossQty: 0,
-          lossPct: '0.0',
-          outcome: 'Passed to Store',
-          outcomeBadge: '<span class="badge badge-green">🟢 Passed to Store</span>',
-          inspector: b.completedBy || 'System / QC',
-          remarks: 'Completed & Passed to Store',
-          date: rawD.slice(0, 10),
-          rawDate: rawD
-        });
-      }
+      const inputQty = Number(b.initialQty || 0);
+      const passedQty = Number(b.remaining !== undefined ? b.remaining : (b.remainingQty !== undefined ? b.remainingQty : inputQty));
+      if (passedQty <= 0) return;
+
+      seenBatchNos.add(batchNo);
+
+      rows.push({
+        id: 'comp_' + b.id,
+        batchNo,
+        partNo: b.partNo || '—',
+        jmrefNo: b.jmrefNo || '—',
+        inputQty,
+        passedQty,
+        lossQty: 0,
+        lossPct: '0.0',
+        outcome: 'Passed to Store',
+        outcomeBadge: '<span class="badge badge-green">🟢 Passed to Store</span>',
+        inspector: b.completedBy || 'System / QC',
+        remarks: 'Completed & Passed to Store',
+        date: rawD.slice(0, 10),
+        rawDate: rawD
+      });
     });
 
     // Filter by Date Range
@@ -1395,47 +1365,39 @@ const ReportsModule = (() => {
       filtered = filtered.filter(r => r.outcome.toLowerCase() === qStat || r.outcome.toLowerCase().replace(/\s+/g, '-') === qStat);
     }
 
-    if (!filtered.length) return emptyState('No Quality Final records found for the selected filters.');
+    if (!filtered.length) return emptyState('No Quality Final ➔ Store movement records found for the selected filters.');
 
     // Sort newest first
     filtered.sort((a, b) => b.rawDate.localeCompare(a.rawDate));
 
     // Summary Metrics
-    const totalEvaluated = filtered.length;
+    const totalPassedBatches = filtered.length;
     const totalInputQty = filtered.reduce((s, r) => s + r.inputQty, 0);
     const totalPassedQty = filtered.reduce((s, r) => s + r.passedQty, 0);
     const totalLossQty = filtered.reduce((s, r) => s + r.lossQty, 0);
     const passRate = totalInputQty > 0 ? ((totalPassedQty / totalInputQty) * 100).toFixed(1) : '0.0';
-    const scrapRate = totalInputQty > 0 ? ((totalLossQty / totalInputQty) * 100).toFixed(1) : '0.0';
-    const recheckCount = filtered.filter(r => r.outcome === 'Recheck Sent').length;
-    const rejectCount = filtered.filter(r => r.outcome === 'Rejected').length;
 
     const summaryCardsHtml = `
-      <div class="stats-grid mb-6" style="grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));">
+      <div class="stats-grid mb-6" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));">
         <div class="stat-card blue">
-          <div class="stat-label">Evaluated Batches</div>
-          <div class="stat-value blue">${totalEvaluated}</div>
-          <div class="stat-desc">Total Input: ${formatNum(totalInputQty)} pcs</div>
+          <div class="stat-label">Passed Batches</div>
+          <div class="stat-value blue">${totalPassedBatches}</div>
+          <div class="stat-desc">QC Final ➔ Store Batches</div>
         </div>
         <div class="stat-card green">
-          <div class="stat-label">Passed to Store</div>
-          <div class="stat-value green">${formatNum(totalPassedQty)}</div>
+          <div class="stat-label">Passed to Store Qty</div>
+          <div class="stat-value green">${formatNum(totalPassedQty)} pcs</div>
           <div class="stat-desc">Pass Rate: ${passRate}%</div>
         </div>
-        <div class="stat-card red">
-          <div class="stat-label">QC Final Scrap Loss</div>
-          <div class="stat-value red">${formatNum(totalLossQty)}</div>
-          <div class="stat-desc">Scrap Loss Rate: ${scrapRate}%</div>
-        </div>
-        <div class="stat-card amber">
-          <div class="stat-label">Recheck / Rework</div>
-          <div class="stat-value amber">${recheckCount}</div>
-          <div class="stat-desc">Batches sent for recheck</div>
+        <div class="stat-card teal">
+          <div class="stat-label">Total QC Input Qty</div>
+          <div class="stat-value teal">${formatNum(totalInputQty)} pcs</div>
+          <div class="stat-desc">Received at QC Final</div>
         </div>
         <div class="stat-card red">
-          <div class="stat-label">Rejected Batches</div>
-          <div class="stat-value red">${rejectCount}</div>
-          <div class="stat-desc">Batches rejected at QC</div>
+          <div class="stat-label">QC Final Loss</div>
+          <div class="stat-value red">${formatNum(totalLossQty)} pcs</div>
+          <div class="stat-desc">Trim/Inspection Loss</div>
         </div>
       </div>
     `;

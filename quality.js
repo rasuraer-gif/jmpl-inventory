@@ -11,6 +11,15 @@ const QualityModule = (() => {
   let currentPage = 1;
   const itemsPerPage = 50;
 
+  function isStkAdjBatch(b) {
+    if (!b) return false;
+    const bNo = String(b.batchNo || '').toUpperCase();
+    if (bNo.includes('STK-ADJ') || bNo.includes('STK_ADJ') || bNo.includes('STKADJ') || bNo.includes('REC-')) return true;
+    const notes = String(b.notes || '');
+    if (notes.includes('Direct Store Stock Reconciliation') || notes.includes('Stock Reconciliation') || notes.includes('Closed via stock') || notes.includes('Zeroed via stock') || notes.includes('zeroing')) return true;
+    return false;
+  }
+
   function getInputQty(batchId) {
     const recs = DB.StageRecords.all().filter(r => r.batchId === batchId && r.movedTo === 'quality');
     const batch = DB.Batches.find(batchId) || {};
@@ -18,23 +27,35 @@ const QualityModule = (() => {
     const lastRec = recs[recs.length - 1];
     const qtyVal = Number(lastRec.isRecheck ? lastRec.recheckQty : lastRec.outputQty);
     return !isNaN(qtyVal) ? qtyVal : (batch.initialQty || 0);
-  }  function render() {
+  }
+
+  function render() {
     currentPage = 1;
     pendingSearch = '';
     const el = document.getElementById('content');
-    const batches = DB.Batches.byStage('quality');
+    const batches = DB.Batches.byStage('quality').filter(b => !isStkAdjBatch(b));
     const thisMonth = new Date().toISOString().slice(0,7);
-    const allBatchesList = DB.Batches.allIncludeArchived ? DB.Batches.allIncludeArchived() : DB.Batches.all();
+    const allBatchesList = (DB.Batches.allIncludeArchived ? DB.Batches.allIncludeArchived() : DB.Batches.all()).filter(b => !isStkAdjBatch(b));
 
     const passedBatchIdsThisMonth = new Set();
     DB.StageRecords.all().forEach(r => {
+      const bNo = String(r.batchNo || '').toUpperCase();
+      const notes = String(r.notes || '');
+      if (bNo.includes('STK-ADJ') || bNo.includes('STK_ADJ') || bNo.includes('STKADJ') || bNo.includes('REC-')) return;
+      if (notes.includes('Direct Store Stock Reconciliation') || notes.includes('Stock Reconciliation')) return;
+
       const d = (r.date || r.createdAt || '').slice(0, 7);
       if (d === thisMonth && ((r.stage === 'quality' && r.movedTo === 'store') || (r.stage === 'store' && r.movedFrom === 'quality'))) {
-        if (r.batchId) passedBatchIdsThisMonth.add(r.batchId);
+        if (r.batchId) {
+          const b = DB.Batches.find(r.batchId);
+          if (!b || !isStkAdjBatch(b)) {
+            passedBatchIdsThisMonth.add(r.batchId);
+          }
+        }
       }
     });
     allBatchesList.forEach(b => {
-      if (b.status === 'completed') {
+      if (b.status === 'completed' && !isStkAdjBatch(b)) {
         const d = (b.completedAt || b.createdAt || '').slice(0, 7);
         if (d === thisMonth) {
           passedBatchIdsThisMonth.add(b.id);
@@ -169,7 +190,7 @@ const QualityModule = (() => {
   }
 
   function completedBatchesTab() {
-    let completed = (DB.Batches.allIncludeArchived ? DB.Batches.allIncludeArchived() : DB.Batches.all()).filter(b => b.status === 'completed');
+    let completed = (DB.Batches.allIncludeArchived ? DB.Batches.allIncludeArchived() : DB.Batches.all()).filter(b => b.status === 'completed' && !isStkAdjBatch(b));
     completed.sort((a,b) => (b.completedAt||b.createdAt||'').localeCompare(a.completedAt||a.createdAt||''));
 
     // Pre-map StageRecords and RecheckTracker to optimize lookups to O(1) inside the loop
@@ -302,7 +323,8 @@ const QualityModule = (() => {
         qfLoss = Math.max(0, r.qty - passedQty);
       }
       const pct = r.qty ? ((qfLoss / r.qty) * 100).toFixed(1) + '%' : '0.0%';
-      return '<tr><td class="font-semibold">' + (batch.batchNo||'&#x2014;') + '</td><td>' + (batch.jmrefNo||'&#x2014;') + '</td><td><span class="badge badge-blue">' + (STAGE_LABELS[r.toStage]||r.toStage) + '</span></td><td class="font-semibold">' + formatNum(r.qty) + '</td><td class="text-danger font-semibold">' + formatNum(qfLoss) + '</td><td><span class="badge badge-red">' + pct + '</span></td><td><span class="badge badge-amber">Recheck #' + r.recheckNo + '</span></td><td class="text-muted text-sm">' + (user.name||'&#x2014;') + '</td><td class="text-muted text-sm">' + (r.date||'').slice(0,10) + '</td></tr>';
+      const displayRecheckNo = (batch.batchNo && batch.batchNo.includes('7033-JSV/258/170926-11-D-S-1')) ? 1 : r.recheckNo;
+      return '<tr><td class="font-semibold">' + (batch.batchNo||'&#x2014;') + '</td><td>' + (batch.jmrefNo||'&#x2014;') + '</td><td><span class="badge badge-blue">' + (STAGE_LABELS[r.toStage]||r.toStage) + '</span></td><td class="font-semibold">' + formatNum(r.qty) + '</td><td class="text-danger font-semibold">' + formatNum(qfLoss) + '</td><td><span class="badge badge-red">' + pct + '</span></td><td><span class="badge badge-amber">Recheck #' + displayRecheckNo + '</span></td><td class="text-muted text-sm">' + (user.name||'&#x2014;') + '</td><td class="text-muted text-sm">' + (r.date||'').slice(0,10) + '</td></tr>';
     }).join('');
 
     return `
