@@ -55,15 +55,30 @@ const Scanner = (() => {
     }
   }
 
-  function start(inputId, callback) {
+  async function start(inputId, callback) {
     activeInputId = inputId;
     activeCallback = callback;
     lastScannedText = '';
     lastScanTime = 0;
 
     if (typeof Html5Qrcode === 'undefined') {
-      showToast('Scanner library not loaded. Please check your internet connection.', 'error');
-      return;
+      try {
+        if (typeof showToast === 'function') showToast('Loading camera scanner...', 'info');
+        if (typeof loadScriptAsync === 'function') {
+          await loadScriptAsync('https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js');
+        } else {
+          await new Promise((res, rej) => {
+            const s = document.createElement('script');
+            s.src = 'https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js';
+            s.onload = res;
+            s.onerror = rej;
+            document.head.appendChild(s);
+          });
+        }
+      } catch (err) {
+        showToast('Scanner library not loaded. Please check your internet connection.', 'error');
+        return;
+      }
     }
 
     let modal = document.getElementById('scanner-modal-overlay');

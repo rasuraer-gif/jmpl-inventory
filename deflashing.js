@@ -4,7 +4,7 @@
 const DeflashingModule = (() => {
   let _activeBatch = null;
   function getInputQty(batchId) {
-    const recs = DB.StageRecords.all().filter(r => r.batchId === batchId && r.movedTo === 'deflashing');
+    const recs = DB.StageRecords.byBatch(batchId).filter(r => r.movedTo === 'deflashing');
     if (!recs.length) return (DB.Batches.find(batchId)||{}).initialQty||0;
     const lastRec = recs[recs.length - 1];
     return lastRec.isRecheck ? lastRec.recheckQty : lastRec.outputQty;
@@ -583,20 +583,24 @@ const DeflashingModule = (() => {
     showToast('Batch rejected', 'success');
     render();
   }
+  let _filterTimer = null;
   function filterPending(val) {
     currentPage = 1;
     pendingSearch = val;
-    const content = document.getElementById('de-content');
-    if (content) {
-      const batches = DB.Batches.byStage('deflashing');
-      content.innerHTML = pendingTab(batches);
-      const inp = document.getElementById('de-pending-search');
-      if (inp) {
-        inp.value = val;
-        inp.focus();
-        inp.setSelectionRange(inp.value.length, inp.value.length);
+    if (_filterTimer) clearTimeout(_filterTimer);
+    _filterTimer = setTimeout(() => {
+      const content = document.getElementById('de-content');
+      if (content) {
+        const batches = DB.Batches.byStage('deflashing');
+        content.innerHTML = pendingTab(batches);
+        const inp = document.getElementById('de-pending-search');
+        if (inp) {
+          if (inp.value !== val) inp.value = val;
+          if (document.activeElement !== inp) inp.focus();
+          try { inp.setSelectionRange(inp.value.length, inp.value.length); } catch(e) {}
+        }
       }
-    }
+    }, 120);
   }
 
   function changePage(page) {

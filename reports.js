@@ -170,9 +170,19 @@ const ReportsModule = (() => {
     showToast('CSV exported successfully', 'success');
   }
 
-  function exportExcel(headers, rows, filename, sheetName='Report', filters) {
+  async function exportExcel(headers, rows, filename, sheetName='Report', filters) {
     if (typeof XLSX === 'undefined') {
-      showToast('Excel library not loaded', 'error'); return;
+      try {
+        if (typeof showToast === 'function') showToast('Loading Excel engine...', 'info');
+        if (typeof ensureXLSX === 'function') {
+          await ensureXLSX();
+        } else if (typeof loadScriptAsync === 'function') {
+          await loadScriptAsync('./xlsx.full.min.js');
+        }
+      } catch (err) {
+        showToast('Excel library not loaded', 'error');
+        return;
+      }
     }
     
     const filterText = formatFilters(filters);
@@ -212,9 +222,25 @@ const ReportsModule = (() => {
     showToast('Excel exported successfully', 'success');
   }
 
-  function exportPDF(headers, rows, filename, title, filters) {
+  async function exportPDF(headers, rows, filename, title, filters) {
     if (typeof html2pdf === 'undefined') {
-      showToast('PDF library not loaded', 'error'); return;
+      try {
+        if (typeof showToast === 'function') showToast('Loading PDF engine...', 'info');
+        if (typeof loadScriptAsync === 'function') {
+          await loadScriptAsync('https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js');
+        } else {
+          await new Promise((res, rej) => {
+            const s = document.createElement('script');
+            s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
+            s.onload = res;
+            s.onerror = rej;
+            document.head.appendChild(s);
+          });
+        }
+      } catch (err) {
+        showToast('PDF library not loaded', 'error');
+        return;
+      }
     }
     
     const tempDiv = document.createElement('div');
@@ -4097,7 +4123,25 @@ const ReportsModule = (() => {
       ['WIP Counts', JSON.stringify(wipCounts)]
     ];
 
-    const onRender = () => {
+    const onRender = async () => {
+      if (typeof Chart === 'undefined') {
+        try {
+          if (typeof loadScriptAsync === 'function') {
+            await loadScriptAsync('https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js');
+          } else {
+            await new Promise((res, rej) => {
+              const s = document.createElement('script');
+              s.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js';
+              s.onload = res;
+              s.onerror = rej;
+              document.head.appendChild(s);
+            });
+          }
+        } catch (e) {
+          console.warn('Failed to load Chart.js', e);
+          return;
+        }
+      }
       const ctxBottleneck = document.getElementById('chart-bottleneck')?.getContext('2d');
       if (ctxBottleneck) {
         new Chart(ctxBottleneck, {

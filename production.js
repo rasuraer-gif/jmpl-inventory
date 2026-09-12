@@ -1254,25 +1254,29 @@ const ProductionModule = (() => {
     window.printBarcode(batchId);
   }
 
+  let _filterTimer = null;
   function filterPending(val, isRemoteUpdate = false) {
     currentPage = 1;
     pendingSearch = val;
-    if (!isRemoteUpdate && val && window.triggerBackgroundSearch) {
-      window.triggerBackgroundSearch(val, () => {
-        const inp = document.getElementById('prod-pending-search');
-        if (inp && inp.value === val) filterPending(val, true);
-      });
-    }
-    const content = document.getElementById('prod-tab-content');
-    if (content && activeTab === 'active') {
-      content.innerHTML = activeBatchesTab();
-      const inp = document.getElementById('prod-pending-search');
-      if (inp) {
-        if (inp.value !== val) inp.value = val;
-        if (document.activeElement !== inp) inp.focus();
-        try { inp.setSelectionRange(inp.value.length, inp.value.length); } catch(e) {}
+    if (_filterTimer) clearTimeout(_filterTimer);
+    _filterTimer = setTimeout(() => {
+      if (!isRemoteUpdate && val && window.triggerBackgroundSearch) {
+        window.triggerBackgroundSearch(val, () => {
+          const inp = document.getElementById('prod-pending-search');
+          if (inp && inp.value === val) filterPending(val, true);
+        });
       }
-    }
+      const content = document.getElementById('prod-tab-content');
+      if (content && activeTab === 'active') {
+        content.innerHTML = activeBatchesTab();
+        const inp = document.getElementById('prod-pending-search');
+        if (inp) {
+          if (inp.value !== val) inp.value = val;
+          if (document.activeElement !== inp) inp.focus();
+          try { inp.setSelectionRange(inp.value.length, inp.value.length); } catch(e) {}
+        }
+      }
+    }, isRemoteUpdate ? 0 : 120);
   }
 
   function editBatchModal() {

@@ -40,8 +40,12 @@ const filesToCopy = [
   'ai-agent.js',
   'stock-audit.js',
   'delivery-challan.js',
-  'xlsx.full.min.js'
+  'xlsx.full.min.js',
+  'jmpl_industrial_banner.jpg'
 ];
+
+const androidDestDir = path.join(__dirname, 'android', 'app', 'src', 'main', 'assets', 'public');
+const hasAndroidDir = fs.existsSync(androidDestDir);
 
 filesToCopy.forEach(file => {
   const srcPath = path.join(srcDir, file);
@@ -49,8 +53,14 @@ filesToCopy.forEach(file => {
   if (fs.existsSync(srcPath)) {
     fs.copyFileSync(srcPath, destPath);
     console.log(`Copied ${file} to www/`);
+    if (hasAndroidDir) {
+      const androidPath = path.join(androidDestDir, file);
+      fs.copyFileSync(srcPath, androidPath);
+      console.log(`Copied ${file} to android assets`);
+    }
   } else {
     console.log(`Skipped ${file} (not found)`);
   }
 });
 console.log('Build completed successfully.');
+

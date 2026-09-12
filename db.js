@@ -77,6 +77,94 @@ const DB = (() => {
   let isLocalLoaded = false;
   let isCloudInitStarted = false;
 
+  // High-performance $O(1)$ in-memory index maps
+  const idIndex = {};
+  for (const key of Object.keys(cache)) {
+    idIndex[key] = new Map();
+  }
+  const batchesByNoIndex = new Map();
+  const batchesByStageIndex = new Map();
+  const masterByJmrefIndex = new Map();
+  const stageRecordsByBatchIndex = new Map();
+  const stageRecordsByStageIndex = new Map();
+  let _memoStoreInventory = null;
+
+  function rebuildIndexesForTable(table) {
+    const list = cache[table] || [];
+    if (!idIndex[table]) idIndex[table] = new Map();
+    const tableIdMap = idIndex[table];
+    tableIdMap.clear();
+    for (let i = 0; i < list.length; i++) {
+      const item = list[i];
+      if (item && item.id) tableIdMap.set(item.id, item);
+    }
+
+    if (table === 'batches') {
+      batchesByNoIndex.clear();
+      batchesByStageIndex.clear();
+      for (let i = 0; i < list.length; i++) {
+        const b = list[i];
+        if (!b) continue;
+        if (b.batchNo) {
+          const bNo = String(b.batchNo).trim();
+          batchesByNoIndex.set(bNo, b);
+          batchesByNoIndex.set(bNo.toUpperCase(), b);
+          const firstPart = bNo.split(' ')[0];
+          if (firstPart && !batchesByNoIndex.has(firstPart)) {
+            batchesByNoIndex.set(firstPart, b);
+          }
+        }
+        if (b.internalBatchNo != null) {
+          batchesByNoIndex.set(String(b.internalBatchNo).trim(), b);
+        }
+        if (b.currentStage && b.status === 'active' && !(b.batchNo && (b.batchNo.includes('-REC-') || b.batchNo.includes('REC')))) {
+          let stageList = batchesByStageIndex.get(b.currentStage);
+          if (!stageList) {
+            stageList = [];
+            batchesByStageIndex.set(b.currentStage, stageList);
+          }
+          stageList.push(b);
+        }
+      }
+    } else if (table === 'master') {
+      masterByJmrefIndex.clear();
+      for (let i = 0; i < list.length; i++) {
+        const m = list[i];
+        if (!m || !m.jmrefNo) continue;
+        const norm = String(m.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+        masterByJmrefIndex.set(norm, m);
+        masterByJmrefIndex.set(String(m.jmrefNo).trim(), m);
+      }
+    } else if (table === 'stageRecords') {
+      stageRecordsByBatchIndex.clear();
+      stageRecordsByStageIndex.clear();
+      for (let i = 0; i < list.length; i++) {
+        const r = list[i];
+        if (!r) continue;
+        if (r.batchId) {
+          let bList = stageRecordsByBatchIndex.get(r.batchId);
+          if (!bList) {
+            bList = [];
+            stageRecordsByBatchIndex.set(r.batchId, bList);
+          }
+          bList.push(r);
+        }
+        if (r.stage) {
+          let sList = stageRecordsByStageIndex.get(r.stage);
+          if (!sList) {
+            sList = [];
+            stageRecordsByStageIndex.set(r.stage, sList);
+          }
+          sList.push(r);
+        }
+      }
+    }
+
+    if (table === 'batches' || table === 'stageRecords' || table === 'master' || table === 'sales') {
+      _memoStoreInventory = null;
+    }
+  }
+
   // Helper to load localStorage cache into memory on startup
   function loadLocalCache() {
     for (const key of Object.keys(cache)) {
@@ -100,6 +188,7 @@ const DB = (() => {
         console.error(`Error reading local cache for ${key}:`, e);
         localBackupData[key] = [];
       }
+      rebuildIndexesForTable(key);
     }
     runRecheckPatch();
   }
@@ -219,6 +308,7 @@ const DB = (() => {
 
           if (hasChanges) {
             cache[table] = list;
+            rebuildIndexesForTable(table);
             saveLocal(table);
             if (['batches', 'recheckTracker', 'stageRecords', 'lossTracker'].includes(table)) {
               runRecheckPatch();
@@ -763,6 +853,7 @@ const DB = (() => {
 
   function setAll(table, data) {
     cache[table] = data;
+    rebuildIndexesForTable(table);
     saveLocal(table);
     if (db) {
       // Overwrite collection docs in Firestore
@@ -802,11 +893,12 @@ const DB = (() => {
       ...record, 
       id, 
       createdAt: record.createdAt || new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date().toISOString() 
     };
 
     // Update local cache & store
     cache[table].push(row);
+    rebuildIndexesForTable(table);
     saveLocal(table);
 
     // Notify local data change listeners immediately
@@ -840,6 +932,7 @@ const DB = (() => {
 
     // Update local cache & store
     cache[table][index] = updatedRow;
+    rebuildIndexesForTable(table);
     saveLocal(table);
 
     // Notify local data change listeners immediately
@@ -864,6 +957,7 @@ const DB = (() => {
   function remove(table, id) {
     // Update local cache & store
     cache[table] = cache[table].filter(r => r.id !== id);
+    rebuildIndexesForTable(table);
     saveLocal(table);
 
     // Notify local data change listeners immediately
@@ -883,6 +977,7 @@ const DB = (() => {
 
   function clearTable(table) {
     cache[table] = [];
+    rebuildIndexesForTable(table);
     saveLocal(table);
     if (db) {
       db.collection(table).get().then(snapshot => {
@@ -896,6 +991,11 @@ const DB = (() => {
   }
 
   function findById(table, id) { 
+    if (!id) return null;
+    const tableIdMap = idIndex[table];
+    if (tableIdMap && tableIdMap.has(id)) {
+      return tableIdMap.get(id);
+    }
     return getAll(table).find(r => r.id === id) || null; 
   }
   
@@ -1000,7 +1100,14 @@ const DB = (() => {
   const Master = {
     all: () => getAll('master'),
     find: (id) => findById('master', id),
-    findByJmref: (jmref) => getAll('master').find(r => r.jmrefNo === jmref) || null,
+    findByJmref: (jmref) => {
+      if (!jmref) return null;
+      const str = String(jmref).trim();
+      const norm = str.replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+      if (masterByJmrefIndex.has(norm)) return masterByJmrefIndex.get(norm);
+      if (masterByJmrefIndex.has(str)) return masterByJmrefIndex.get(str);
+      return getAll('master').find(r => r.jmrefNo === jmref) || null;
+    },
     insert: (r) => {
       const res = insert('master', r);
       syncMouldsForPart(res);
@@ -1093,11 +1200,12 @@ const DB = (() => {
     find: (idOrNo) => {
       if (!idOrNo) return null;
       let b = findById('batches', idOrNo);
-      if (!b) {
-        const allRecs = getAll('batches');
-        b = allRecs.find(x => x.id === idOrNo || x.batchNo === idOrNo || (x.batchNo && x.batchNo.split(' ')[0] === idOrNo));
-      }
-      return b;
+      if (b) return b;
+      const str = String(idOrNo).trim();
+      if (batchesByNoIndex.has(str)) return batchesByNoIndex.get(str);
+      if (batchesByNoIndex.has(str.toUpperCase())) return batchesByNoIndex.get(str.toUpperCase());
+      const allRecs = getAll('batches');
+      return allRecs.find(x => x.id === idOrNo || x.batchNo === idOrNo || (x.batchNo && x.batchNo.split(' ')[0] === idOrNo)) || null;
     },
     fetchRemoteByNo: async (batchNoStr) => {
       if (!db || !batchNoStr) return null;
@@ -1224,7 +1332,11 @@ const DB = (() => {
         return [];
       }
     },
-    byStage: (stage) => getAll('batches').filter(r => r.currentStage === stage && r.status === 'active' && !(r.batchNo && (r.batchNo.includes('-REC-') || r.batchNo.includes('REC')))),
+    byStage: (stage) => {
+      const list = batchesByStageIndex.get(stage);
+      if (list) return [...list];
+      return getAll('batches').filter(r => r.currentStage === stage && r.status === 'active' && !(r.batchNo && (r.batchNo.includes('-REC-') || r.batchNo.includes('REC'))));
+    },
     byStatus: (status) => getAll('batches').filter(r => r.status === status && !(r.batchNo && (r.batchNo.includes('-REC-') || r.batchNo.includes('REC')))),
 
     insert: (r) => {
@@ -1304,6 +1416,7 @@ const DB = (() => {
           }
         });
         if (changed) {
+          rebuildIndexesForTable('batches');
           saveLocal('batches');
         }
       } catch (err) {
@@ -1340,6 +1453,7 @@ const DB = (() => {
           });
         }
         if (changed) {
+          rebuildIndexesForTable('batches');
           saveLocal('batches');
           if (typeof window !== 'undefined') {
             const current = window.App?.current;
@@ -1400,16 +1514,29 @@ const DB = (() => {
   const StageRecords = {
     all: () => getAll('stageRecords'),
     find: (id) => findById('stageRecords', id),
-    byBatch: (batchId) => getAll('stageRecords').filter(r => r.batchId === batchId),
+    byBatch: (batchId) => {
+      if (!batchId) return [];
+      const list = stageRecordsByBatchIndex.get(batchId);
+      if (list) return [...list];
+      return getAll('stageRecords').filter(r => r.batchId === batchId);
+    },
     byStage: (stage) => {
-      const recs = getAll('stageRecords').filter(r => r.stage === stage);
+      let recs = stageRecordsByStageIndex.get(stage);
+      if (recs) {
+        recs = [...recs];
+      } else {
+        recs = getAll('stageRecords').filter(r => r.stage === stage);
+      }
       const missingBatchIds = [...new Set(recs.map(r => r.batchId).filter(id => id && !cache.batches.some(b => b.id === id)))];
       if (missingBatchIds.length > 0 && typeof Batches.fetchByIds === 'function') {
         Batches.fetchByIds(missingBatchIds);
       }
       return recs;
     },
-    byBatchAndStage: (batchId, stage) => getAll('stageRecords').filter(r => r.batchId === batchId && r.stage === stage),
+    byBatchAndStage: (batchId, stage) => {
+      const bList = StageRecords.byBatch(batchId);
+      return bList.filter(r => r.stage === stage);
+    },
     insert: (r) => insert('stageRecords', r),
     update: (id, c) => update('stageRecords', id, c),
   };
@@ -1617,6 +1744,7 @@ const DB = (() => {
       });
 
       cache['sales'].push(...salesRows);
+      rebuildIndexesForTable('sales');
       saveLocal('sales');
 
       const batchIdsToUpdate = Object.keys(batchesToUpdate);
@@ -1631,6 +1759,7 @@ const DB = (() => {
         }
       });
       if (batchIdsToUpdate.length > 0) {
+        rebuildIndexesForTable('batches');
         saveLocal('batches');
       }
 
@@ -1697,6 +1826,7 @@ const DB = (() => {
   // ── STORE INVENTORY ───────────────────────────────────────
   const StoreInventory = {
     allParts: () => {
+      if (_memoStoreInventory) return _memoStoreInventory;
       const master = getAll('master');
       const stageRecords = getAll('stageRecords');
       const batches = getAll('batches');
@@ -1767,7 +1897,7 @@ const DB = (() => {
         }
       }
 
-      return master.map(m => {
+      _memoStoreInventory = master.map(m => {
         const totalReceived = recByMasterId.get(m.id) || 0;
         const totalSold = soldByMasterId.get(m.id) || 0;
         const available = Math.max(0, totalReceived - totalSold);
@@ -1778,6 +1908,7 @@ const DB = (() => {
           available
         };
       });
+      return _memoStoreInventory;
     },
 
     availableByJmref: (jmrefNo, partId) => {
@@ -2097,16 +2228,19 @@ const DB = (() => {
 
     if (batchesToAdd.length > 0) {
       cache['batches'].push(...batchesToAdd);
+      rebuildIndexesForTable('batches');
       saveLocal('batches');
       triggerSyncStateChange('batches', true);
     }
     if (stageRecordsToAdd.length > 0) {
       cache['stageRecords'].push(...stageRecordsToAdd);
+      rebuildIndexesForTable('stageRecords');
       saveLocal('stageRecords');
       triggerSyncStateChange('stageRecords', true);
     }
     if (salesToAdd.length > 0) {
       cache['sales'].push(...salesToAdd);
+      rebuildIndexesForTable('sales');
       saveLocal('sales');
       triggerSyncStateChange('sales', true);
     }

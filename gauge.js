@@ -9,7 +9,7 @@ const GaugeModule = (() => {
   const itemsPerPage = 50;
 
   function getInputQty(batchId) {
-    const recs = DB.StageRecords.all().filter(r => r.batchId === batchId && r.movedTo === 'gauge');
+    const recs = DB.StageRecords.byBatch(batchId).filter(r => r.movedTo === 'gauge');
     const batch = DB.Batches.find(batchId) || {};
     if (!recs.length) return batch.initialQty || 0;
     const lastRec = recs[recs.length - 1];
@@ -474,20 +474,24 @@ const GaugeModule = (() => {
     showToast('Batch rejected', 'success');
     render();
   }
+  let _filterTimer = null;
   function filterPending(val) {
     currentPage = 1;
     pendingSearch = val;
-    const content = document.getElementById('gauge-content');
-    if (content) {
-      const batches = DB.Batches.byStage('gauge');
-      content.innerHTML = pendingTab(batches);
-      const inp = document.getElementById('gauge-pending-search');
-      if (inp) {
-        inp.value = val;
-        inp.focus();
-        inp.setSelectionRange(inp.value.length, inp.value.length);
+    if (_filterTimer) clearTimeout(_filterTimer);
+    _filterTimer = setTimeout(() => {
+      const content = document.getElementById('gauge-content');
+      if (content) {
+        const batches = DB.Batches.byStage('gauge');
+        content.innerHTML = pendingTab(batches);
+        const inp = document.getElementById('gauge-pending-search');
+        if (inp) {
+          if (inp.value !== val) inp.value = val;
+          if (document.activeElement !== inp) inp.focus();
+          try { inp.setSelectionRange(inp.value.length, inp.value.length); } catch(e) {}
+        }
       }
-    }
+    }, 120);
   }
 
   function changePage(page) {

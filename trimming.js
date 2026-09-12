@@ -10,7 +10,7 @@ const TrimmingModule = (() => {
   const itemsPerPage = 50;
 
   function getInputQty(batchId) {
-    const recs = DB.StageRecords.all().filter(r => r.batchId === batchId && r.movedTo === 'trimming');
+    const recs = DB.StageRecords.byBatch(batchId).filter(r => r.movedTo === 'trimming');
     if (!recs.length) return (DB.Batches.find(batchId)||{}).initialQty||0;
     const lastRec = recs[recs.length - 1];
     return lastRec.isRecheck ? lastRec.recheckQty : lastRec.outputQty;
@@ -631,20 +631,24 @@ const TrimmingModule = (() => {
     showToast('Batch rejected', 'success');
     render();
   }
+  let _filterTimer = null;
   function filterPending(val) {
     currentPage = 1;
     pendingSearch = val;
-    const content = document.getElementById('trim-content');
-    if (content) {
-      const batches = DB.Batches.byStage('trimming');
-      content.innerHTML = pendingTab(batches);
-      const inp = document.getElementById('trim-pending-search');
-      if (inp) {
-        inp.value = val;
-        inp.focus();
-        inp.setSelectionRange(inp.value.length, inp.value.length);
+    if (_filterTimer) clearTimeout(_filterTimer);
+    _filterTimer = setTimeout(() => {
+      const content = document.getElementById('trim-content');
+      if (content) {
+        const batches = DB.Batches.byStage('trimming');
+        content.innerHTML = pendingTab(batches);
+        const inp = document.getElementById('trim-pending-search');
+        if (inp) {
+          if (inp.value !== val) inp.value = val;
+          if (document.activeElement !== inp) inp.focus();
+          try { inp.setSelectionRange(inp.value.length, inp.value.length); } catch(e) {}
+        }
       }
-    }
+    }, 120);
   }
 
   function changePage(page) {

@@ -13,6 +13,16 @@ function escHtml(str) {
     .replace(/'/g, '&#39;');
 }
 
+function debounce(fn, delay = 120) {
+  let timer = null;
+  return function(...args) {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      fn.apply(this, args);
+    }, delay);
+  };
+}
+
 function showToast(message, type = 'success') {
   const container = document.getElementById('toast-container');
   if (!container) return;
@@ -30,6 +40,35 @@ function showToast(message, type = 'success') {
   container.appendChild(toast);
   setTimeout(() => { toast.classList.add('out'); setTimeout(() => toast.remove(), 300); }, 3500);
 }
+
+// Dynamic asynchronous script loader with caching
+function loadScriptAsync(src) {
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector(`script[src="${src}"]`);
+    if (existing) {
+      if (existing.dataset.loaded === 'true' || window.XLSX || window.Chart || window.Html5Qrcode || window.html2pdf) return resolve();
+      existing.addEventListener('load', () => resolve());
+      existing.addEventListener('error', (e) => reject(e));
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = src;
+    script.async = true;
+    script.onload = () => {
+      script.dataset.loaded = 'true';
+      resolve();
+    };
+    script.onerror = (e) => reject(e);
+    document.head.appendChild(script);
+  });
+}
+window.loadScriptAsync = loadScriptAsync;
+
+function ensureXLSX() {
+  if (typeof XLSX !== 'undefined') return Promise.resolve(window.XLSX);
+  return loadScriptAsync('./xlsx.full.min.js').then(() => window.XLSX);
+}
+window.ensureXLSX = ensureXLSX;
 
 // Global Loss Warning Dialog — shown when loss qty > 10% and no notes provided
 function showLossWarning(onOk) {
@@ -840,6 +879,18 @@ const App = (() => {
     if (typeof DB !== 'undefined' && typeof DB.init === 'function') {
       DB.init().catch(e => console.error("Database initialization failed:", e));
     }
+
+    // Preload heavy XLSX library in idle background without blocking UI render
+    const idlePreloadLibs = () => {
+      if (typeof XLSX === 'undefined') {
+        ensureXLSX().catch(() => {});
+      }
+    };
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(idlePreloadLibs, { timeout: 3000 });
+    } else {
+      setTimeout(idlePreloadLibs, 1500);
+    }
   }
 
   function toggleReportsMenu() {
@@ -1373,7 +1424,7 @@ const App = (() => {
   function getBatchCurrentQty(batchId) {
     const batch = DB.Batches.find(batchId);
     if (!batch) return 0;
-    const recs = DB.StageRecords.all().filter(r => r.batchId === batchId);
+    const recs = DB.StageRecords.byBatch(batchId);
     if (!recs.length) return batch.initialQty || 0;
     
     recs.sort((a,b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
@@ -1550,7 +1601,7 @@ const App = (() => {
                 </thead>
                 <tbody>
                   ${(() => {
-                    const rawRecs = DB.StageRecords.all().filter(r => r.batchId === b.id).sort((x,y) => (x.createdAt||'').localeCompare(y.createdAt||''));
+                    const rawRecs = DB.StageRecords.byBatch(b.id).slice().sort((x,y) => (x.createdAt||'').localeCompare(y.createdAt||''));
                     const filteredRecs = [];
                     rawRecs.forEach(r => {
                       if (filteredRecs.length > 0) {
@@ -1687,7 +1738,7 @@ const App = (() => {
     }
   });
 
-  return { navigate, init, toggleReportsMenu, openChangePasswordModal, changePassword, runQuickScan, showBatchGenealogy, formatBatchCell, applyBatchTagsToContainer, get current() { return currentModule; }, changeDashboardMonth: (val) => { dashboardMonth = val; renderDashboard(); }, toggleAllStageChecks, bulkPrintStageSelected, onGlobalSearchFocus, onGlobalSearchInput, selectBatchFromSearch, closeGlobalSearch };
+  return { navigate, init, toggleReportsMenu, openChangePasswordModal, changePassword, runQuickScan, showBatchGenealogy, formatBatchCell, applyBatchTagsToContainer, get current() { return currentModule; }, changeDashboardMonth: (val) => { dashboardMonth = val; renderDashboard(); }, toggleAllStageChecks, bulkPrintStageSelected, onGlobalSearchFocus, onGlobalSearchInput, selectBatchFromSearch, closeGlobalSearch, debounce };
 })();
 window.App = App;
 

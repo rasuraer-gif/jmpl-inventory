@@ -21,7 +21,7 @@ const QualityModule = (() => {
   }
 
   function getInputQty(batchId) {
-    const recs = DB.StageRecords.all().filter(r => r.batchId === batchId && r.movedTo === 'quality');
+    const recs = DB.StageRecords.byBatch(batchId).filter(r => r.movedTo === 'quality');
     const batch = DB.Batches.find(batchId) || {};
     if (!recs.length) return batch.initialQty || 0;
     const lastRec = recs[recs.length - 1];
@@ -318,7 +318,7 @@ const QualityModule = (() => {
       const completedBatch = DB.Batches.all().find(b => b.batchNo === batch.batchNo && b.status === 'completed');
       let qfLoss = r.lossQty;
       if (completedBatch) {
-        const storeRecs = DB.StageRecords.all().filter(sr => sr.batchId === completedBatch.id && sr.stage === 'store');
+        const storeRecs = DB.StageRecords.byBatch(completedBatch.id).filter(sr => sr.stage === 'store');
         const passedQty = storeRecs.length ? (storeRecs[0].inputQty || 0) : (completedBatch.initialQty || 0);
         qfLoss = Math.max(0, r.qty - passedQty);
       }
@@ -600,26 +600,30 @@ const QualityModule = (() => {
     App.navigate(App.current);
   }
 
+  let _filterTimer = null;
   function filterPending(val, isRemoteUpdate = false) {
     currentPage = 1;
     pendingSearch = val;
-    if (!isRemoteUpdate && val && window.triggerBackgroundSearch) {
-      window.triggerBackgroundSearch(val, () => {
-        const inp = document.getElementById('qf-pending-search');
-        if (inp && inp.value === val) filterPending(val, true);
-      });
-    }
-    const content = document.getElementById('qf-content');
-    if (content) {
-      const batches = DB.Batches.byStage('quality');
-      content.innerHTML = pendingTab(batches);
-      const inp = document.getElementById('qf-pending-search');
-      if (inp) {
-        if (inp.value !== val) inp.value = val;
-        if (document.activeElement !== inp) inp.focus();
-        try { inp.setSelectionRange(inp.value.length, inp.value.length); } catch(e) {}
+    if (_filterTimer) clearTimeout(_filterTimer);
+    _filterTimer = setTimeout(() => {
+      if (!isRemoteUpdate && val && window.triggerBackgroundSearch) {
+        window.triggerBackgroundSearch(val, () => {
+          const inp = document.getElementById('qf-pending-search');
+          if (inp && inp.value === val) filterPending(val, true);
+        });
       }
-    }
+      const content = document.getElementById('qf-content');
+      if (content) {
+        const batches = DB.Batches.byStage('quality');
+        content.innerHTML = pendingTab(batches);
+        const inp = document.getElementById('qf-pending-search');
+        if (inp) {
+          if (inp.value !== val) inp.value = val;
+          if (document.activeElement !== inp) inp.focus();
+          try { inp.setSelectionRange(inp.value.length, inp.value.length); } catch(e) {}
+        }
+      }
+    }, isRemoteUpdate ? 0 : 120);
   }
 
   function changePage(page) {

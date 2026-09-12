@@ -43,7 +43,7 @@ const DailyAnalysisModule = (() => {
   }
 
   function getBatchWipQty(batchId, batch) {
-    const recs = (typeof DB !== 'undefined' && DB.StageRecords) ? DB.StageRecords.all().filter(r => r.batchId === batchId) : [];
+    const recs = (typeof DB !== 'undefined' && DB.StageRecords) ? (DB.StageRecords.byBatch ? DB.StageRecords.byBatch(batchId) : DB.StageRecords.all().filter(r => r.batchId === batchId)) : [];
     if (!recs.length) return (batch && batch.initialQty) ? Number(batch.initialQty) : 0;
     const lastRec = recs[recs.length - 1];
     const qtyVal = Number(lastRec.isRecheck ? lastRec.recheckQty : (lastRec.outputQty != null ? lastRec.outputQty : lastRec.inputQty));

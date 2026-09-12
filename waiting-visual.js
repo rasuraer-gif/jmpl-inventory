@@ -20,7 +20,7 @@ const WaitingVisualModule = (() => {
       return !isNaN(qtyVal) ? qtyVal : (batch.initialQty || 0);
     }
     
-    const recs = DB.StageRecords.all().filter(r => r.batchId === batch.id && r.movedTo === 'waiting-visual');
+    const recs = DB.StageRecords.byBatch(batch.id).filter(r => r.movedTo === 'waiting-visual');
     if (!recs.length) return batch.initialQty || 0;
     const lastRec = recs[recs.length - 1];
     const qtyVal = Number(lastRec.isRecheck ? lastRec.recheckQty : lastRec.outputQty);
@@ -245,20 +245,24 @@ const WaitingVisualModule = (() => {
       </div>`;
   }
 
+  let _filterTimer = null;
   function filterPending(val) {
     pendingSearch = val;
     currentPage = 1;
-    const content = document.getElementById('wv-content');
-    const batches = DB.Batches.byStage('waiting-visual');
-    if (content) {
-      content.innerHTML = pendingTab(batches);
-      const inp = document.getElementById('wv-pending-search');
-      if (inp) {
-        inp.value = val;
-        inp.focus();
-        inp.setSelectionRange(inp.value.length, inp.value.length);
+    if (_filterTimer) clearTimeout(_filterTimer);
+    _filterTimer = setTimeout(() => {
+      const content = document.getElementById('wv-content');
+      const batches = DB.Batches.byStage('waiting-visual');
+      if (content) {
+        content.innerHTML = pendingTab(batches);
+        const inp = document.getElementById('wv-pending-search');
+        if (inp) {
+          if (inp.value !== val) inp.value = val;
+          if (document.activeElement !== inp) inp.focus();
+          try { inp.setSelectionRange(inp.value.length, inp.value.length); } catch(e) {}
+        }
       }
-    }
+    }, 120);
   }
 
   function filterHistory(val) {

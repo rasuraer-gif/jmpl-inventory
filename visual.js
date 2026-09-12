@@ -4,7 +4,7 @@
 const VisualModule = (() => {
   let _activeBatch = null;
   function getInputQty(batchId) {
-    const recs = DB.StageRecords.all().filter(r => r.batchId === batchId && r.movedTo === 'visual');
+    const recs = DB.StageRecords.byBatch(batchId).filter(r => r.movedTo === 'visual');
     const batch = DB.Batches.find(batchId) || {};
     if (!recs.length) return batch.initialQty || 0;
     const lastRec = recs[recs.length - 1];
@@ -916,26 +916,30 @@ const VisualModule = (() => {
     }
   });
 
+  let _filterTimer = null;
   function filterPending(val, isRemoteUpdate = false) {
     currentPage = 1;
     pendingSearch = val;
-    if (!isRemoteUpdate && val && window.triggerBackgroundSearch) {
-      window.triggerBackgroundSearch(val, () => {
-        const inp = document.getElementById('vis-pending-search');
-        if (inp && inp.value === val) filterPending(val, true);
-      });
-    }
-    const content = document.getElementById('vis-content');
-    if (content) {
-      const batches = DB.Batches.byStage('visual');
-      content.innerHTML = pendingTab(batches);
-      const inp = document.getElementById('vis-pending-search');
-      if (inp) {
-        if (inp.value !== val) inp.value = val;
-        if (document.activeElement !== inp) inp.focus();
-        try { inp.setSelectionRange(inp.value.length, inp.value.length); } catch(e) {}
+    if (_filterTimer) clearTimeout(_filterTimer);
+    _filterTimer = setTimeout(() => {
+      if (!isRemoteUpdate && val && window.triggerBackgroundSearch) {
+        window.triggerBackgroundSearch(val, () => {
+          const inp = document.getElementById('vis-pending-search');
+          if (inp && inp.value === val) filterPending(val, true);
+        });
       }
-    }
+      const content = document.getElementById('vis-content');
+      if (content) {
+        const batches = DB.Batches.byStage('visual');
+        content.innerHTML = pendingTab(batches);
+        const inp = document.getElementById('vis-pending-search');
+        if (inp) {
+          if (inp.value !== val) inp.value = val;
+          if (document.activeElement !== inp) inp.focus();
+          try { inp.setSelectionRange(inp.value.length, inp.value.length); } catch(e) {}
+        }
+      }
+    }, isRemoteUpdate ? 0 : 120);
   }
 
   function changePage(page) {

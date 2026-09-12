@@ -1329,7 +1329,7 @@ const AdminModule = (() => {
     try {
       if (oldStage !== newStage) {
         // Find historical quantity for newStage
-        const recs = DB.StageRecords.all().filter(r => r.batchId === batchId);
+        const recs = DB.StageRecords.byBatch(batchId);
         const sorted = [...recs].sort((x, y) => (x.createdAt || x.date || '').localeCompare(y.createdAt || y.date || ''));
         
         let targetQty = null;
