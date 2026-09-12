@@ -632,125 +632,130 @@ const ProductionModule = (() => {
   }
 
   function moveBatch() {
-    const batchId = document.getElementById('move-batch-id').value;
-    const checkBatch = DB.Batches.find(batchId);
-    if (!checkBatch || checkBatch.currentStage !== 'production' || checkBatch.status !== 'active') {
-      showToast('Error: This batch is no longer in the Production stage or is inactive.', 'error');
-      document.getElementById('prod-move-modal').classList.add('hidden');
-      render();
-      return;
-    }
-    const outputQty = parseInt(document.getElementById('move-output-qty').value);
-    const destination = document.getElementById('move-destination').value;
-    const vendorId = document.getElementById('move-vendor')?.value || '';
-    const notes = document.getElementById('move-notes').value.trim();
-    const session = Auth.getSession();
-    if (!outputQty && outputQty !== 0) { showToast('Output quantity is required', 'error'); return; }
-    
-    if ((destination === 'trimming' || destination === 'deflashing') && !vendorId) {
-      showToast('Please select a vendor for the selected destination', 'error');
-      return;
-    }
-    const inputQty = _moveInputQty || outputQty;
-    const lossQty = Math.max(0, inputQty - outputQty);
-    const batch = DB.Batches.find(batchId);
-    const dateStr = new Date().toISOString().slice(0,10);
+    try {
+      const batchId = document.getElementById('move-batch-id').value;
+      const checkBatch = DB.Batches.find(batchId);
+      if (!checkBatch || checkBatch.currentStage !== 'production' || checkBatch.status !== 'active') {
+        showToast('Error: This batch is no longer in the Production stage or is inactive.', 'error');
+        document.getElementById('prod-move-modal').classList.add('hidden');
+        render();
+        return;
+      }
+      const outputQty = parseInt(document.getElementById('move-output-qty').value);
+      const destination = document.getElementById('move-destination').value;
+      const vendorId = document.getElementById('move-vendor')?.value || '';
+      const notes = document.getElementById('move-notes').value.trim();
+      const session = Auth.getSession();
+      if (!outputQty && outputQty !== 0) { showToast('Output quantity is required', 'error'); return; }
+      
+      if ((destination === 'trimming' || destination === 'deflashing') && !vendorId) {
+        showToast('Please select a vendor for the selected destination', 'error');
+        return;
+      }
+      const inputQty = _moveInputQty || outputQty;
+      const lossQty = Math.max(0, inputQty - outputQty);
+      const batch = DB.Batches.find(batchId);
+      const dateStr = new Date().toISOString().slice(0,10);
 
-    const isStock = _activeBatch && _activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-');
-    if (isStock) {
-      const trNo = (document.getElementById('move-trno')?.value || '').trim();
-      const shift = document.getElementById('move-shift-move')?.value || 'day';
-      const dateVal = document.getElementById('move-date-move')?.value || '';
-      const pressNo = (document.getElementById('move-press-move')?.value || '').trim();
-      const typeVal = document.querySelector('[name=move-type-move]:checked')?.value || 'inhouse';
-      const subBatchNo = (document.getElementById('move-sub-batch-no')?.value || '').trim();
-      const lossQty = parseInt(document.getElementById('move-loss-qty').value) || 0;
-      
-      if (!trNo) { showToast('Please enter a TR No', 'error'); return; }
-      if (!dateVal) { showToast('Please select a production date', 'error'); return; }
-      if (!pressNo) { showToast('Please enter a Press No', 'error'); return; }
-      if (!subBatchNo) { showToast('Please fill all sub-batch fields', 'error'); return; }
-      if (lossQty < 0) { showToast('Loss quantity cannot be negative', 'error'); return; }
-      
-      if (DB.Batches.all().some(b => b.batchNo === subBatchNo)) {
-        showToast('Sub-batch number already exists: ' + subBatchNo, 'error');
+      const isStock = _activeBatch && _activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-');
+      if (isStock) {
+        const trNo = (document.getElementById('move-trno')?.value || '').trim();
+        const shift = document.getElementById('move-shift-move')?.value || 'day';
+        const dateVal = document.getElementById('move-date-move')?.value || '';
+        const pressNo = (document.getElementById('move-press-move')?.value || '').trim();
+        const typeVal = document.querySelector('[name=move-type-move]:checked')?.value || 'inhouse';
+        const subBatchNo = (document.getElementById('move-sub-batch-no')?.value || '').trim();
+        const lossQty = parseInt(document.getElementById('move-loss-qty').value) || 0;
+        
+        if (!trNo) { showToast('Please enter a TR No', 'error'); return; }
+        if (!dateVal) { showToast('Please select a production date', 'error'); return; }
+        if (!pressNo) { showToast('Please enter a Press No', 'error'); return; }
+        if (!subBatchNo) { showToast('Please fill all sub-batch fields', 'error'); return; }
+        if (lossQty < 0) { showToast('Loss quantity cannot be negative', 'error'); return; }
+        
+        if (DB.Batches.all().some(b => b.batchNo === subBatchNo)) {
+          showToast('Sub-batch number already exists: ' + subBatchNo, 'error');
+          return;
+        }
+
+        const totalDeducted = outputQty + lossQty;
+        
+        const remainingQty = Math.max(0, (_activeBatch.initialQty || 0) - totalDeducted);
+        
+        DB.Batches.update(_activeBatch.id, {
+          initialQty: remainingQty,
+          status: remainingQty === 0 ? 'completed' : 'active',
+          completedAt: remainingQty === 0 ? new Date().toISOString() : null
+        });
+
+        const subBatch = DB.Batches.insert({
+          batchNo: subBatchNo,
+          partId: _activeBatch.partId,
+          partNo: _activeBatch.partNo,
+          jmrefNo: _activeBatch.jmrefNo,
+          description: _activeBatch.description,
+          currentStage: destination,
+          status: 'active',
+          initialQty: outputQty,
+          trNo,
+          shift,
+          productionType: typeVal,
+          pressNo,
+          productionDate: dateVal,
+          vendorId: vendorId || '',
+          createdAt: new Date().toISOString(),
+          notes: 'Sub-batch created from Stock Upload pool batch: ' + _activeBatch.batchNo
+        });
+
+        // Trigger barcode print label for the sub-batch
+        setTimeout(() => {
+          const confirmPrint = confirm(`Would you like to print the label for the new sub-batch: ${subBatchNo}?`);
+          if (confirmPrint) {
+            window.printBarcode(subBatch.id);
+          }
+        }, 500);
+
+        DB.StageRecords.insert({
+          batchId: subBatch.id,
+          stage: 'production',
+          inputQty: totalDeducted,
+          outputQty: outputQty,
+          lossQty: lossQty,
+          vendorId: vendorId || '',
+          movedTo: destination,
+          movedFrom: 'production',
+          date: dateStr,
+          recordedBy: session?.userId,
+          notes: notes
+        });
+
+        if (lossQty > 0) {
+          DB.LossTracker.insert({
+            batchId: subBatch.id,
+            stage: 'production',
+            lossQty,
+            date: dateStr,
+            jmrefNo: _activeBatch.jmrefNo,
+            partNo: _activeBatch.partNo
+          });
+        }
+
+        document.getElementById('prod-move-modal').classList.add('hidden');
+        showToast('Sub-batch created and moved to ' + destination, 'success');
+        App.navigate(App.current);
         return;
       }
 
-      const totalDeducted = outputQty + lossQty;
-      
-      const remainingQty = Math.max(0, (_activeBatch.initialQty || 0) - totalDeducted);
-      
-      DB.Batches.update(_activeBatch.id, {
-        initialQty: remainingQty,
-        status: remainingQty === 0 ? 'completed' : 'active',
-        completedAt: remainingQty === 0 ? new Date().toISOString() : null
-      });
-
-      const subBatch = DB.Batches.insert({
-        batchNo: subBatchNo,
-        partId: _activeBatch.partId,
-        partNo: _activeBatch.partNo,
-        jmrefNo: _activeBatch.jmrefNo,
-        description: _activeBatch.description,
-        currentStage: destination,
-        status: 'active',
-        initialQty: outputQty,
-        trNo,
-        shift,
-        productionType: typeVal,
-        pressNo,
-        productionDate: dateVal,
-        vendorId: vendorId || '',
-        createdAt: new Date().toISOString(),
-        notes: 'Sub-batch created from Stock Upload pool batch: ' + _activeBatch.batchNo
-      });
-
-      // Trigger barcode print label for the sub-batch
-      setTimeout(() => {
-        const confirmPrint = confirm(`Would you like to print the label for the new sub-batch: ${subBatchNo}?`);
-        if (confirmPrint) {
-          window.printBarcode(subBatch.id);
-        }
-      }, 500);
-
-      DB.StageRecords.insert({
-        batchId: subBatch.id,
-        stage: 'production',
-        inputQty: totalDeducted,
-        outputQty: outputQty,
-        lossQty: lossQty,
-        vendorId: vendorId || '',
-        movedTo: destination,
-        movedFrom: 'production',
-        date: dateStr,
-        recordedBy: session?.userId,
-        notes: notes
-      });
-
-      if (lossQty > 0) {
-        DB.LossTracker.insert({
-          batchId: subBatch.id,
-          stage: 'production',
-          lossQty,
-          date: dateStr,
-          jmrefNo: _activeBatch.jmrefNo,
-          partNo: _activeBatch.partNo
-        });
-      }
-
+      DB.StageRecords.insert({ batchId, stage:'production', inputQty, outputQty, lossQty, vendorId: vendorId || '', movedTo:destination, movedFrom:'production', date:dateStr, recordedBy:session?.userId, notes });
+      if (lossQty > 0) DB.LossTracker.insert({ batchId, stage:'production', lossQty, date:dateStr, jmrefNo:batch.jmrefNo, partNo:batch.partNo });
+      DB.Batches.update(batchId, { currentStage: destination, initialQty: outputQty, vendorId: vendorId || '' });
       document.getElementById('prod-move-modal').classList.add('hidden');
-      showToast('Sub-batch created and moved to ' + destination, 'success');
+      showToast('Batch moved to ' + destination, 'success');
       App.navigate(App.current);
-      return;
+    } catch (err) {
+      console.error("Move batch error:", err);
+      showToast("Could not move batch: " + (err.message || err), "error");
     }
-
-    DB.StageRecords.insert({ batchId, stage:'production', inputQty, outputQty, lossQty, vendorId: vendorId || '', movedTo:destination, movedFrom:'production', date:dateStr, recordedBy:session?.userId, notes });
-    if (lossQty > 0) DB.LossTracker.insert({ batchId, stage:'production', lossQty, date:dateStr, jmrefNo:batch.jmrefNo, partNo:batch.partNo });
-    DB.Batches.update(batchId, { currentStage: destination, initialQty: outputQty, vendorId: vendorId || '' });
-    document.getElementById('prod-move-modal').classList.add('hidden');
-    showToast('Batch moved to ' + destination, 'success');
-    App.navigate(App.current);
   }
 
   function openReject(batchId) {
@@ -1081,7 +1086,8 @@ const ProductionModule = (() => {
   }
 
   function createBatch() {
-    const partId = document.getElementById('prod-part-id')?.value;
+    try {
+      const partId = document.getElementById('prod-part-id')?.value;
     const part = DB.Master.find(partId);
     if (!part) { showToast('Please select a part from search dropdown', 'error'); return; }
     
@@ -1214,7 +1220,11 @@ const ProductionModule = (() => {
     activeTab = 'active';
     document.querySelectorAll('#prod-tabs .tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === 'active'));
     renderTab('active');
+  } catch (err) {
+    console.error("Create batch error:", err);
+    showToast("Error creating batch: " + (err.message || err), "error");
   }
+}
 
   function resetForm() { renderTab('create'); }
 

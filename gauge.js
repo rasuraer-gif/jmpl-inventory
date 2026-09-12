@@ -335,7 +335,8 @@ const GaugeModule = (() => {
     }
   }
   function process() {
-    const batchId = document.getElementById('gauge-batch-id').value;
+    try {
+      const batchId = document.getElementById('gauge-batch-id').value;
     const checkBatch = DB.Batches.find(batchId);
     if (!checkBatch || checkBatch.currentStage !== 'gauge' || checkBatch.status !== 'active') {
       showToast('Error: This batch is no longer in the Gauge Inspection stage or is inactive.', 'error');
@@ -455,7 +456,11 @@ const GaugeModule = (() => {
     document.getElementById('gauge-process-modal').classList.add('hidden');
     showToast('Batch moved to Quality Final', 'success');
     App.navigate(App.current);
+  } catch (err) {
+    console.error("Gauge process error:", err);
+    showToast("Could not process batch: " + (err.message || err), "error");
   }
+}
   function openReject(batchId) {
     const b = DB.Batches.find(batchId)||{};
     document.getElementById('gauge-reject-id').value = batchId;

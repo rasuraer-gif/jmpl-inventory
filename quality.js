@@ -488,35 +488,40 @@ const QualityModule = (() => {
   }
 
   function passBatch() {
-    const batchId = document.getElementById('qf-pass-batch-id').value;
-    const checkBatch = DB.Batches.find(batchId);
-    if (!checkBatch || checkBatch.currentStage !== 'quality' || checkBatch.status !== 'active') {
-      showToast('Error: This batch is no longer in the QC Final stage or is inactive.', 'error');
-      document.getElementById('qf-pass-modal').classList.add('hidden');
-      render();
-      return;
-    }
-    const outputQty = parseInt(document.getElementById('qf-pass-output').value);
-    if (isNaN(outputQty) || outputQty < 0) { showToast('Enter a valid output quantity', 'error'); return; }
-    
-    const lossQty = Math.max(0, _passInputQty - outputQty);
-    if (lossQty > 0.10 * _passInputQty) {
-      const passNotes = document.getElementById('qf-pass-notes').value.trim();
-      if (!passNotes) {
-        showLossWarning(); return;
+    try {
+      const batchId = document.getElementById('qf-pass-batch-id').value;
+      const checkBatch = DB.Batches.find(batchId);
+      if (!checkBatch || checkBatch.currentStage !== 'quality' || checkBatch.status !== 'active') {
+        showToast('Error: This batch is no longer in the QC Final stage or is inactive.', 'error');
+        document.getElementById('qf-pass-modal').classList.add('hidden');
+        render();
+        return;
       }
+      const outputQty = parseInt(document.getElementById('qf-pass-output').value);
+      if (isNaN(outputQty) || outputQty < 0) { showToast('Enter a valid output quantity', 'error'); return; }
+      
+      const lossQty = Math.max(0, _passInputQty - outputQty);
+      if (lossQty > 0.10 * _passInputQty) {
+        const passNotes = document.getElementById('qf-pass-notes').value.trim();
+        if (!passNotes) {
+          showLossWarning(); return;
+        }
+      }
+      const session = Auth.getSession();
+      const batch = DB.Batches.find(batchId);
+      const dateStr = new Date().toISOString().slice(0,10);
+      const nowStr = new Date().toISOString();
+      DB.StageRecords.insert({ batchId, stage:'quality', inputQty:_passInputQty, outputQty, lossQty, movedTo:'store', movedFrom:'quality', date:dateStr, recordedBy:session&&session.userId, notes:document.getElementById('qf-pass-notes').value });
+      if (lossQty > 0) DB.LossTracker.insert({ batchId, stage:'quality', lossQty, date:dateStr, jmrefNo:batch&&batch.jmrefNo, partNo:batch&&batch.partNo });
+      DB.StageRecords.insert({ batchId, stage:'store', inputQty:outputQty, outputQty:0, lossQty:0, movedFrom:'quality', date:dateStr, recordedBy:session&&session.userId });
+      DB.Batches.update(batchId, { status:'completed', currentStage:'store', completedAt:nowStr, initialQty: outputQty });
+      document.getElementById('qf-pass-modal').classList.add('hidden');
+      showToast('Batch passed to Store! Batch completed.', 'success');
+      App.navigate(App.current);
+    } catch (err) {
+      console.error("QC Final pass error:", err);
+      showToast("Could not pass batch: " + (err.message || err), "error");
     }
-    const session = Auth.getSession();
-    const batch = DB.Batches.find(batchId);
-    const dateStr = new Date().toISOString().slice(0,10);
-    const nowStr = new Date().toISOString();
-    DB.StageRecords.insert({ batchId, stage:'quality', inputQty:_passInputQty, outputQty, lossQty, movedTo:'store', movedFrom:'quality', date:dateStr, recordedBy:session&&session.userId, notes:document.getElementById('qf-pass-notes').value });
-    if (lossQty > 0) DB.LossTracker.insert({ batchId, stage:'quality', lossQty, date:dateStr, jmrefNo:batch&&batch.jmrefNo, partNo:batch&&batch.partNo });
-    DB.StageRecords.insert({ batchId, stage:'store', inputQty:outputQty, outputQty:0, lossQty:0, movedFrom:'quality', date:dateStr, recordedBy:session&&session.userId });
-    DB.Batches.update(batchId, { status:'completed', currentStage:'store', completedAt:nowStr, initialQty: outputQty });
-    document.getElementById('qf-pass-modal').classList.add('hidden');
-    showToast('Batch passed to Store! Batch completed.', 'success');
-    App.navigate(App.current);
   }
 
   function openReject(batchId, inputQty) {
@@ -568,36 +573,41 @@ const QualityModule = (() => {
   }
 
   function sendRecheck() {
-    const batchId = document.getElementById('qf-rc-batch-id').value;
-    const checkBatch = DB.Batches.find(batchId);
-    if (!checkBatch || checkBatch.currentStage !== 'quality' || checkBatch.status !== 'active') {
-      showToast('Error: This batch is no longer in the QC Final stage or is inactive.', 'error');
-      document.getElementById('qf-recheck-modal').classList.add('hidden');
-      render();
-      return;
-    }
-    const toStage = document.getElementById('qf-rc-stage').value;
-    const recheckQty = parseInt(document.getElementById('qf-rc-qty').value);
-    if (!recheckQty || recheckQty < 1) { showToast('Enter a valid recheck quantity', 'error'); return; }
-    
-    const lossQty = Math.max(0, _rcInputQty - recheckQty);
-    if (lossQty > 0.10 * _rcInputQty) {
-      const rcNotes = document.getElementById('qf-rc-notes').value.trim();
-      if (!rcNotes) {
-        showLossWarning(); return;
+    try {
+      const batchId = document.getElementById('qf-rc-batch-id').value;
+      const checkBatch = DB.Batches.find(batchId);
+      if (!checkBatch || checkBatch.currentStage !== 'quality' || checkBatch.status !== 'active') {
+        showToast('Error: This batch is no longer in the QC Final stage or is inactive.', 'error');
+        document.getElementById('qf-recheck-modal').classList.add('hidden');
+        render();
+        return;
       }
+      const toStage = document.getElementById('qf-rc-stage').value;
+      const recheckQty = parseInt(document.getElementById('qf-rc-qty').value);
+      if (!recheckQty || recheckQty < 1) { showToast('Enter a valid recheck quantity', 'error'); return; }
+      
+      const lossQty = Math.max(0, _rcInputQty - recheckQty);
+      if (lossQty > 0.10 * _rcInputQty) {
+        const rcNotes = document.getElementById('qf-rc-notes').value.trim();
+        if (!rcNotes) {
+          showLossWarning(); return;
+        }
+      }
+      const iterNo = DB.RecheckTracker.nextIterationNo(batchId);
+      const session = Auth.getSession();
+      const batch = DB.Batches.find(batchId);
+      const dateStr = new Date().toISOString().slice(0,10);
+      DB.RecheckTracker.insert({ batchId, fromStage:'quality', toStage, qty:recheckQty, recheckNo:iterNo, date:dateStr, lossQty, recordedBy:session&&session.userId, notes:document.getElementById('qf-rc-notes').value });
+      if (lossQty > 0) DB.LossTracker.insert({ batchId, stage:'quality', lossQty, date:dateStr, jmrefNo:batch&&batch.jmrefNo, partNo:batch&&batch.partNo, iterationNo:iterNo });
+      DB.StageRecords.insert({ batchId, stage:'quality', inputQty:_rcInputQty, outputQty:0, recheckQty, lossQty, movedTo:toStage, movedFrom:'quality', date:dateStr, isRecheck:true, recheckNo:iterNo, recordedBy:session&&session.userId });
+      DB.Batches.update(batchId, { currentStage:toStage, recheckCount:(batch&&batch.recheckCount||0)+1, recheckIteration:iterNo });
+      document.getElementById('qf-recheck-modal').classList.add('hidden');
+      showToast('Batch sent for recheck #' + iterNo + ' to ' + (STAGE_LABELS[toStage]||toStage), 'success');
+      App.navigate(App.current);
+    } catch (err) {
+      console.error("QC Final recheck error:", err);
+      showToast("Could not send for recheck: " + (err.message || err), "error");
     }
-    const iterNo = DB.RecheckTracker.nextIterationNo(batchId);
-    const session = Auth.getSession();
-    const batch = DB.Batches.find(batchId);
-    const dateStr = new Date().toISOString().slice(0,10);
-    DB.RecheckTracker.insert({ batchId, fromStage:'quality', toStage, qty:recheckQty, recheckNo:iterNo, date:dateStr, lossQty, recordedBy:session&&session.userId, notes:document.getElementById('qf-rc-notes').value });
-    if (lossQty > 0) DB.LossTracker.insert({ batchId, stage:'quality', lossQty, date:dateStr, jmrefNo:batch&&batch.jmrefNo, partNo:batch&&batch.partNo, iterationNo:iterNo });
-    DB.StageRecords.insert({ batchId, stage:'quality', inputQty:_rcInputQty, outputQty:0, recheckQty, lossQty, movedTo:toStage, movedFrom:'quality', date:dateStr, isRecheck:true, recheckNo:iterNo, recordedBy:session&&session.userId });
-    DB.Batches.update(batchId, { currentStage:toStage, recheckCount:(batch&&batch.recheckCount||0)+1, recheckIteration:iterNo });
-    document.getElementById('qf-recheck-modal').classList.add('hidden');
-    showToast('Batch sent for recheck #' + iterNo + ' to ' + (STAGE_LABELS[toStage]||toStage), 'success');
-    App.navigate(App.current);
   }
 
   let _filterTimer = null;

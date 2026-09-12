@@ -485,7 +485,8 @@ const TrimmingModule = (() => {
     }
   }
   function process() {
-    const batchId = document.getElementById('trim-batch-id').value;
+    try {
+      const batchId = document.getElementById('trim-batch-id').value;
     const checkBatch = DB.Batches.find(batchId);
     if (!checkBatch || checkBatch.currentStage !== 'trimming' || checkBatch.status !== 'active') {
       showToast('Error: This batch is no longer in the Trimming stage or is inactive.', 'error');
@@ -612,7 +613,11 @@ const TrimmingModule = (() => {
     document.getElementById('trim-process-modal').classList.add('hidden');
     showToast('Batch moved to ' + (STAGE_LABELS[destination] || destination), 'success');
     App.navigate(App.current);
+  } catch (err) {
+    console.error("Trimming process error:", err);
+    showToast("Could not process batch: " + (err.message || err), "error");
   }
+}
   function openReject(batchId) {
     const b = DB.Batches.find(batchId)||{};
     document.getElementById('trim-reject-id').value = batchId;

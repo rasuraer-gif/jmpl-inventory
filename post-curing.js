@@ -378,7 +378,8 @@ const PostCuringModule = (() => {
   }
 
   function process() {
-    const batchId = document.getElementById('pc-batch-id').value;
+    try {
+      const batchId = document.getElementById('pc-batch-id').value;
     const checkBatch = DB.Batches.find(batchId);
     if (!checkBatch || checkBatch.currentStage !== 'post-curing' || checkBatch.status !== 'active') {
       showToast('Error: This batch is no longer in the Post Curing stage or is inactive.', 'error');
@@ -498,7 +499,11 @@ const PostCuringModule = (() => {
     document.getElementById('pc-process-modal').classList.add('hidden');
     showToast('Batch moved to Waiting for Visual inspection', 'success');
     App.navigate(App.current);
+  } catch (err) {
+    console.error("Post curing process error:", err);
+    showToast("Could not process batch: " + (err.message || err), "error");
   }
+}
 
   function openReject(batchId) {
     const b = DB.Batches.find(batchId)||{};

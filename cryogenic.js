@@ -392,7 +392,8 @@ const CryogenicModule = (() => {
     }
   }
   function process() {
-    const batchId = document.getElementById('cryo-batch-id').value;
+    try {
+      const batchId = document.getElementById('cryo-batch-id').value;
     const checkBatch = DB.Batches.find(batchId);
     if (!checkBatch || checkBatch.currentStage !== 'cryogenic' || checkBatch.status !== 'active') {
       showToast('Error: This batch is no longer in the Cryogenic stage or is inactive.', 'error');
@@ -524,7 +525,11 @@ const CryogenicModule = (() => {
     document.getElementById('cryo-process-modal').classList.add('hidden');
     showToast('Batch moved to ' + (STAGE_LABELS[destination] || destination), 'success');
     App.navigate(App.current);
+  } catch (err) {
+    console.error("Cryogenic process error:", err);
+    showToast("Could not process batch: " + (err.message || err), "error");
   }
+}
   function openReject(batchId) {
     const b = DB.Batches.find(batchId)||{};
     document.getElementById('cryo-reject-id').value = batchId;

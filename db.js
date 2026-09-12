@@ -28,6 +28,11 @@ const DB = (() => {
   let syncStateListener = null;
   let dataChangeListener = null;
   let refreshTimeout = null;
+  let _connectionHealthy = true;
+  let _isReconnecting = false;
+  let _lastActiveTime = Date.now();
+  let _reconnectDebounce = null;
+
   function onSyncStateChange(callback) {
     syncStateListener = callback;
   }
@@ -43,6 +48,86 @@ const DB = (() => {
     if (dataChangeListener) {
       try { dataChangeListener(table); } catch(e) {}
     }
+  }
+
+  // Auto-Reconnection & Health Management
+  async function reconnect(silent = false) {
+    if (!db || _isReconnecting) return;
+    _isReconnecting = true;
+    _connectionHealthy = false;
+    triggerSyncStateChange('connection', true);
+    if (!silent && typeof showToast === 'function') {
+      showToast('Refreshing cloud connection...', 'info');
+    }
+    try {
+      await db.disableNetwork();
+      await new Promise(r => setTimeout(r, 200));
+      await db.enableNetwork();
+      _connectionHealthy = true;
+      triggerSyncStateChange('connection', false);
+      if (!silent && typeof showToast === 'function') {
+        showToast('Database connection active ✅', 'success');
+      }
+      console.log("[DB] Cloud Firestore connection refreshed successfully.");
+    } catch (err) {
+      console.warn("[DB] Reconnect error:", err);
+      _connectionHealthy = false;
+      triggerSyncStateChange('connection', true);
+    } finally {
+      _isReconnecting = false;
+    }
+  }
+
+  function scheduleReconnect(silent = true) {
+    if (_reconnectDebounce) return;
+    _reconnectDebounce = setTimeout(() => {
+      _reconnectDebounce = null;
+      reconnect(silent);
+    }, 1500);
+  }
+
+  function handleUserResumed() {
+    const idleMs = Date.now() - _lastActiveTime;
+    _lastActiveTime = Date.now();
+    if (idleMs > 2 * 60 * 1000) { // More than 2 minutes of inactivity
+      console.log(`[DB] Resumed after ${(idleMs / 1000).toFixed(0)}s idle. Refreshing network connection...`);
+      scheduleReconnect(true);
+    }
+  }
+
+  if (typeof window !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') handleUserResumed();
+    });
+    window.addEventListener('focus', handleUserResumed);
+    window.addEventListener('online', () => reconnect(false));
+    ['click', 'keydown', 'touchstart'].forEach(evt => {
+      window.addEventListener(evt, () => {
+        const now = Date.now();
+        if (now - _lastActiveTime > 2 * 60 * 1000) {
+          handleUserResumed();
+        } else {
+          _lastActiveTime = now;
+        }
+      }, { passive: true });
+    });
+
+    // Background Keep-Alive Heartbeat: Ping Firestore every 2.5 minutes to prevent NAT router TCP timeouts
+    setInterval(() => {
+      if (db && navigator.onLine) {
+        db.collection('users').doc('user-admin-default').get({ source: 'server' })
+          .then(() => {
+            if (!_connectionHealthy) {
+              _connectionHealthy = true;
+              triggerSyncStateChange('connection', false);
+            }
+          })
+          .catch(err => {
+            console.warn("[DB] Heartbeat ping detected stale connection, refreshing...", err.message);
+            scheduleReconnect(true);
+          });
+      }
+    }, 2.5 * 60 * 1000);
   }
 
   // In-memory cache for all collections
@@ -258,28 +343,30 @@ const DB = (() => {
       return;
     }
 
+    // Proactively clear any legacy stalled Firestore IndexedDB to eliminate multi-tab deadlocks
+    try {
+      if (typeof indexedDB !== 'undefined' && typeof indexedDB.databases === 'function') {
+        indexedDB.databases().then(dbs => {
+          (dbs || []).forEach(d => {
+            if (d && d.name && d.name.includes('firestore')) {
+              console.log("[DB] Clearing legacy Firestore IndexedDB to eliminate locks:", d.name);
+              try { indexedDB.deleteDatabase(d.name); } catch(e) {}
+            }
+          });
+        }).catch(() => {});
+      }
+    } catch (e) {}
+
     try {
       // Initialize Firebase App
-      firebase.initializeApp(JMPL_CONFIG.firebaseConfig);
+      if (!firebase.apps.length) {
+        firebase.initializeApp(JMPL_CONFIG.firebaseConfig);
+      }
       
       const firestoreInstance = firebase.firestore();
       
-      // Enable Firestore offline disk persistence with timeout guard so low-spec devices boot instantly
-      try {
-        const persistPromise = firestoreInstance.enablePersistence({ synchronizeTabs: true });
-        const persistTimeout = new Promise((_, reject) => setTimeout(() => reject(new Error('Persistence timeout')), 1500));
-        await Promise.race([persistPromise, persistTimeout]);
-        console.log("Firestore offline disk persistence enabled successfully.");
-      } catch (err) {
-        if (err.code === 'failed-precondition') {
-          console.warn("Multiple tabs open; persistence active in primary tab.");
-        } else if (err.code === 'unimplemented') {
-          console.warn("Current browser does not support Firestore persistence.");
-        } else {
-          console.warn("Firestore persistence notice (non-blocking):", err.message || err);
-        }
-      }
-      
+      // In-Memory Mode: JMPL uses localStorage for fast caching; running Firestore in-memory
+      // guarantees zero IndexedDB transaction deadlocks, zero multi-tab conflicts, and instant startup.
       db = firestoreInstance;
 
       // 3. Set up listeners for all collections in background
@@ -317,6 +404,9 @@ const DB = (() => {
           }
         }, err => {
           console.warn(`Firestore listener error on table "${table}":`, err.message);
+          _connectionHealthy = false;
+          triggerSyncStateChange('connection', true);
+          scheduleReconnect(true);
         });
       });
 
@@ -887,6 +977,53 @@ const DB = (() => {
     return clean;
   }
 
+  // Resilient Cloud Writer with Timeout & Auto-Recovery
+  function syncDocToCloud(table, id, docData, operation = 'set') {
+    if (!db) return Promise.resolve();
+    triggerSyncStateChange(table, true);
+
+    const executeOp = () => {
+      if (operation === 'delete') {
+        return db.collection(table).doc(id).delete();
+      }
+      return db.collection(table).doc(id).set(docData);
+    };
+
+    let opFinished = false;
+    const opPromise = executeOp().then(() => {
+      opFinished = true;
+      _connectionHealthy = true;
+      triggerSyncStateChange(table, false);
+    });
+
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => {
+        if (!opFinished) reject(new Error('Cloud sync timeout'));
+      }, 7000);
+    });
+
+    return Promise.race([opPromise, timeoutPromise]).catch(err => {
+      console.warn(`[DB] Sync delayed on ${table}/${id} (${err.message}). Auto-reconnecting...`);
+      _connectionHealthy = false;
+      triggerSyncStateChange(table, true);
+
+      // Reconnect and retry write once
+      return reconnect(true).then(() => {
+        return executeOp();
+      }).then(() => {
+        _connectionHealthy = true;
+        triggerSyncStateChange(table, false);
+      }).catch(retryErr => {
+        console.error(`[DB] Cloud sync failed after reconnect on ${table}/${id}:`, retryErr);
+        _connectionHealthy = false;
+        triggerSyncStateChange(table, false);
+        if (typeof showToast === 'function') {
+          showToast(`Cloud sync delayed for ${table}. Check connection.`, 'warning');
+        }
+      });
+    });
+  }
+
   function insert(table, record) {
     const id = record.id || genId();
     const row = { 
@@ -904,17 +1041,11 @@ const DB = (() => {
     // Notify local data change listeners immediately
     triggerDataChange(table);
 
-    // Save to Firestore asynchronously and signal sync status
+    // Save to Firestore asynchronously with timeout & retry guard
     if (db) {
-      triggerSyncStateChange(table, true);
       const docData = sanitizeFirestoreDoc({ ...row });
       delete docData.id;
-      db.collection(table).doc(id).set(docData).then(() => {
-        triggerSyncStateChange(table, false);
-      }).catch(err => {
-        console.error(`Firebase insert error on ${table}/${id}:`, err);
-        triggerSyncStateChange(table, false);
-      });
+      syncDocToCloud(table, id, docData, 'set');
     }
 
     return row;
@@ -938,17 +1069,11 @@ const DB = (() => {
     // Notify local data change listeners immediately
     triggerDataChange(table);
 
-    // Save to Firestore asynchronously and signal sync status
+    // Save to Firestore asynchronously with timeout & retry guard
     if (db) {
-      triggerSyncStateChange(table, true);
       const docData = sanitizeFirestoreDoc({ ...updatedRow });
       delete docData.id;
-      db.collection(table).doc(id).set(docData).then(() => {
-        triggerSyncStateChange(table, false);
-      }).catch(err => {
-        console.error(`Firebase update error on ${table}/${id}:`, err);
-        triggerSyncStateChange(table, false);
-      });
+      syncDocToCloud(table, id, docData, 'set');
     }
 
     return updatedRow;
@@ -963,15 +1088,9 @@ const DB = (() => {
     // Notify local data change listeners immediately
     triggerDataChange(table);
 
-    // Remove from Firestore asynchronously and signal sync status
+    // Remove from Firestore asynchronously with timeout & retry guard
     if (db) {
-      triggerSyncStateChange(table, true);
-      db.collection(table).doc(id).delete().then(() => {
-        triggerSyncStateChange(table, false);
-      }).catch(err => {
-        console.error(`Firebase delete error on ${table}/${id}:`, err);
-        triggerSyncStateChange(table, false);
-      });
+      syncDocToCloud(table, id, null, 'delete');
     }
   }
 
@@ -2289,7 +2408,7 @@ const DB = (() => {
   }
 
   return {
-    initLocal, init, onSyncStateChange, onDataChange, genId, seedDefaults, clearTable,
+    initLocal, init, reconnect, isConnected: () => _connectionHealthy, onSyncStateChange, onDataChange, genId, seedDefaults, clearTable,
     Users, Master, Subcontractors, Vendors, Operators, Inspectors,
     Batches, StageRecords, LossTracker, RejectionTracker,
     RecheckTracker, StockUploads, Sales, StoreInventory,

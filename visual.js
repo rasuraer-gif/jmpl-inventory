@@ -577,7 +577,8 @@ const VisualModule = (() => {
     }
   }
   function process() {
-    const batchId = document.getElementById('vis-batch-id').value;
+    try {
+      const batchId = document.getElementById('vis-batch-id').value;
     const checkBatch = DB.Batches.find(batchId);
     if (!checkBatch || checkBatch.currentStage !== 'visual' || checkBatch.status !== 'active') {
       showToast('Error: This batch is no longer in the Visual Inspection stage or is inactive.', 'error');
@@ -889,7 +890,11 @@ const VisualModule = (() => {
       showToast('Batch moved to ' + (STAGE_LABELS[destination] || destination), 'success');
     }
     App.navigate(App.current);
+  } catch (err) {
+    console.error("Visual process error:", err);
+    showToast("Could not process batch: " + (err.message || err), "error");
   }
+}
 
   function openReject(batchId) {
     const b = DB.Batches.find(batchId)||{};

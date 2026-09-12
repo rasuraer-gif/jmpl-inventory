@@ -341,7 +341,8 @@ const WaitingTrimmingModule = (() => {
   }
 
   function process() {
-    const batchId = document.getElementById('wt-process-batch-id').value;
+    try {
+      const batchId = document.getElementById('wt-process-batch-id').value;
     const checkBatch = DB.Batches.find(batchId);
     if (!checkBatch || checkBatch.currentStage !== 'waiting-trimming' || checkBatch.status !== 'active') {
       showToast('Error: This batch is no longer in the Waiting for Trimming stage or is inactive.', 'error');
@@ -384,7 +385,11 @@ const WaitingTrimmingModule = (() => {
     document.getElementById('wt-process-modal').classList.add('hidden');
     showToast('Batch moved to Trimming stage successfully', 'success');
     App.navigate(App.current);
+  } catch (err) {
+    console.error("Waiting trimming process error:", err);
+    showToast("Could not process batch: " + (err.message || err), "error");
   }
+}
 
   function changePage(page) {
     currentPage = page;

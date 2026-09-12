@@ -1032,9 +1032,11 @@ const App = (() => {
 
     dot.classList.remove('pulse-green', 'pulse-amber');
 
-    if (!navigator.onLine) {
+    const isConnected = typeof DB !== 'undefined' && typeof DB.isConnected === 'function' ? DB.isConnected() : true;
+
+    if (!navigator.onLine || !isConnected) {
       dot.style.background = '#ef4444'; // Red
-      text.innerText = 'DISCONNECTED';
+      text.innerText = !navigator.onLine ? 'OFFLINE' : 'RECONNECTING...';
       text.style.color = '#ef4444';
     } else if (pendingSyncCollections.size > 0) {
       dot.style.background = '#f59e0b'; // Amber
@@ -2172,7 +2174,7 @@ function showAppShell(session) {
               <h2 style="font-size:10.5px; font-weight:800; margin:0; line-height:1.2; white-space:nowrap; text-align:center; letter-spacing:-0.2px;">
                 <span style="color:var(--jmpl-green, #1b7a43);">Janani Mouldings</span> <span style="color:#f97316; font-weight:700;">Private Limited</span>
               </h2>
-              <div style="display:flex; align-items:center; justify-content:center; gap:4px; margin-top:6px;">
+              <div style="display:flex; align-items:center; justify-content:center; gap:5px; margin-top:6px; cursor:pointer; padding:2px 8px; border-radius:12px; background:rgba(0,0,0,0.04);" onclick="if(typeof DB !== 'undefined' && DB.reconnect) DB.reconnect();" title="Click to refresh database connection">
                 <span id="sync-status-dot" style="width:8px; height:8px; border-radius:50%; background:#10b981; display:inline-block; transition:background 0.3s ease;"></span>
                 <span id="sync-status-text" style="font-size:10px; color:#10b981; font-weight:700; letter-spacing:0.3px; transition:color 0.3s ease;">SYNCED</span>
               </div>
