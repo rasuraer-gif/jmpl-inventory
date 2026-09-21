@@ -169,6 +169,8 @@ const DB = (() => {
   }
   const batchesByNoIndex = new Map();
   const batchesByStageIndex = new Map();
+  const activeWipBatches = [];
+  const activeBatchesMap = new Map();
   const masterByJmrefIndex = new Map();
   const stageRecordsByBatchIndex = new Map();
   const stageRecordsByStageIndex = new Map();
@@ -187,11 +189,15 @@ const DB = (() => {
     if (table === 'batches') {
       batchesByNoIndex.clear();
       batchesByStageIndex.clear();
+      activeWipBatches.length = 0;
+      activeBatchesMap.clear();
+      const wipStageSet = new Set(['production','cryogenic','deflashing','waiting-trimming','trimming','post-curing','waiting-visual','visual','gauge','quality']);
       for (let i = 0; i < list.length; i++) {
         const b = list[i];
         if (!b) continue;
-        if (b.batchNo) {
-          const bNo = String(b.batchNo).trim();
+        const bNo = b.batchNo ? String(b.batchNo).trim() : '';
+        const isRec = bNo && (bNo.includes('-REC-') || bNo.includes('REC'));
+        if (bNo) {
           batchesByNoIndex.set(bNo, b);
           batchesByNoIndex.set(bNo.toUpperCase(), b);
           const firstPart = bNo.split(' ')[0];
@@ -202,13 +208,19 @@ const DB = (() => {
         if (b.internalBatchNo != null) {
           batchesByNoIndex.set(String(b.internalBatchNo).trim(), b);
         }
-        if (b.currentStage && b.status === 'active' && !(b.batchNo && (b.batchNo.includes('-REC-') || b.batchNo.includes('REC')))) {
-          let stageList = batchesByStageIndex.get(b.currentStage);
-          if (!stageList) {
-            stageList = [];
-            batchesByStageIndex.set(b.currentStage, stageList);
+        if (b.status === 'active' && !isRec) {
+          activeBatchesMap.set(b.id, b);
+          if (b.currentStage) {
+            let stageList = batchesByStageIndex.get(b.currentStage);
+            if (!stageList) {
+              stageList = [];
+              batchesByStageIndex.set(b.currentStage, stageList);
+            }
+            stageList.push(b);
+            if (wipStageSet.has(b.currentStage)) {
+              activeWipBatches.push(b);
+            }
           }
-          stageList.push(b);
         }
       }
     } else if (table === 'master') {
@@ -276,6 +288,7 @@ const DB = (() => {
       rebuildIndexesForTable(key);
     }
     runRecheckPatch();
+    runStoreSyncPatch();
   }
 
   // Debounced storage saver to prevent UI freezes on low-spec hardware
@@ -628,6 +641,35 @@ const DB = (() => {
           }
         });
       }).catch(err => console.warn('Cloud batch query notice:', err.message));
+    }
+  }
+
+  function runStoreSyncPatch() {
+    const TARGET = '7091-030826-24-D-S-1-REP';
+    const batches = (cache.batches || []).filter(b => b && b.batchNo && b.batchNo.trim() === TARGET.trim());
+    let changed = false;
+    batches.forEach(b => {
+      if (b.currentStage !== 'store' || b.status !== 'completed') {
+        b.currentStage = 'store';
+        b.status = 'completed';
+        b.completedAt = b.completedAt || '2026-09-16T12:40:10.101Z';
+        b.remainingQty = b.remainingQty || 6100;
+        b.updatedAt = new Date().toISOString();
+        changed = true;
+        if (db) {
+          db.collection('batches').doc(b.id).set({
+            currentStage: 'store',
+            status: 'completed',
+            completedAt: b.completedAt,
+            remainingQty: b.remainingQty,
+            updatedAt: b.updatedAt
+          }, { merge: true }).catch(console.error);
+        }
+      }
+    });
+    if (changed) {
+      rebuildIndexesForTable('batches');
+      saveLocal('batches');
     }
   }
 
@@ -986,7 +1028,15 @@ const DB = (() => {
       if (operation === 'delete') {
         return db.collection(table).doc(id).delete();
       }
-      return db.collection(table).doc(id).set(docData);
+      let payload = docData;
+      if (operation === 'set' && cache[table]) {
+        const latest = cache[table].find(r => r && r.id === id);
+        if (latest) {
+          payload = sanitizeFirestoreDoc({ ...latest });
+          delete payload.id;
+        }
+      }
+      return db.collection(table).doc(id).set(payload, { merge: true });
     };
 
     let opFinished = false;
@@ -1316,6 +1366,9 @@ const DB = (() => {
   const Batches = {
     all: () => getAll('batches').filter(b => !(b.batchNo && (b.batchNo.includes('-REC-') || b.batchNo.includes('REC')))),
     allIncludeArchived: () => getAll('batches').filter(b => !(b.batchNo && (b.batchNo.includes('-REC-') || b.batchNo.includes('REC')))),
+    wip: () => [...activeWipBatches],
+    active: () => Array.from(activeBatchesMap.values()),
+    getBatchesMap: () => batchesByNoIndex,
     find: (idOrNo) => {
       if (!idOrNo) return null;
       let b = findById('batches', idOrNo);

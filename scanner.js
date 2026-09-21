@@ -7,10 +7,72 @@ const Scanner = (() => {
   let activeCallback = null;
   let lastScannedText = '';
   let lastScanTime = 0;
+  let _audioCtx = null;
+  let _inactivityTimer = null;
+  let _isSleeping = false;
+
+  function resetInactivityTimer() {
+    if (_inactivityTimer) clearTimeout(_inactivityTimer);
+    if (_isSleeping) {
+      resumeFromSleep();
+    }
+    _inactivityTimer = setTimeout(() => {
+      enterSleepMode();
+    }, 60000); // Auto-sleep after 60 seconds of inactivity
+  }
+
+  function enterSleepMode() {
+    if (!html5QrcodeScanner || _isSleeping) return;
+    _isSleeping = true;
+    try {
+      if (html5QrcodeScanner.isScanning) {
+        html5QrcodeScanner.pause(true);
+      }
+    } catch(e) {}
+
+    const readerEl = document.getElementById('scanner-qr-reader');
+    if (readerEl) {
+      let sleepOverlay = document.getElementById('scanner-sleep-overlay');
+      if (!sleepOverlay) {
+        sleepOverlay = document.createElement('div');
+        sleepOverlay.id = 'scanner-sleep-overlay';
+        sleepOverlay.style.cssText = 'position:absolute; inset:0; background:rgba(15,23,42,0.85); display:flex; flex-direction:column; align-items:center; justify-content:center; color:#fff; z-index:10; cursor:pointer; text-align:center; padding:16px; border-radius:12px; backdrop-filter:blur(2px);';
+        sleepOverlay.innerHTML = `
+          <div style="font-size:32px; margin-bottom:8px;">💤</div>
+          <div style="font-weight:700; font-size:14px; margin-bottom:4px;">Scanner Paused (Battery Saver)</div>
+          <div style="font-size:12px; color:#94a3b8; margin-bottom:12px;">Tap anywhere to resume scanning</div>
+          <button class="btn btn-primary btn-sm" style="pointer-events:none; padding:4px 16px;">▶ Resume Camera</button>
+        `;
+        sleepOverlay.onclick = (e) => {
+          e.stopPropagation();
+          resetInactivityTimer();
+        };
+        readerEl.style.position = 'relative';
+        readerEl.appendChild(sleepOverlay);
+      }
+    }
+  }
+
+  function resumeFromSleep() {
+    _isSleeping = false;
+    const sleepOverlay = document.getElementById('scanner-sleep-overlay');
+    if (sleepOverlay) sleepOverlay.remove();
+    try {
+      if (html5QrcodeScanner) {
+        html5QrcodeScanner.resume();
+      }
+    } catch(e) {}
+  }
 
   function playBeep() {
     try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      if (!_audioCtx || _audioCtx.state === 'closed') {
+        _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      if (_audioCtx.state === 'suspended') {
+        _audioCtx.resume();
+      }
+      const ctx = _audioCtx;
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = 'sine';
@@ -24,6 +86,7 @@ const Scanner = (() => {
   }
 
   function handleDecoded(decodedText) {
+    resetInactivityTimer();
     const now = Date.now();
     if (decodedText === lastScannedText && (now - lastScanTime) < 1500) {
       return; // Debounce rapid duplicate reads of the exact same code
@@ -142,18 +205,32 @@ const Scanner = (() => {
       try { html5QrcodeScanner.clear(); } catch(e) {}
     }
 
+    resetInactivityTimer();
+    modal.onclick = () => resetInactivityTimer();
+    modal.ontouchstart = () => resetInactivityTimer();
+
     html5QrcodeScanner = new Html5Qrcode("scanner-qr-reader");
-    const config = { fps: 10, qrbox: { width: 220, height: 220 } };
+    const config = { 
+      fps: 15, 
+      qrbox: { width: 240, height: 240 },
+      aspectRatio: 1.0,
+      experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+    };
+    const cameraConstraints = {
+      facingMode: "environment",
+      width: { ideal: 1280 },
+      height: { ideal: 720 }
+    };
 
     html5QrcodeScanner.start(
-      { facingMode: "environment" },
+      cameraConstraints,
       config,
       (decodedText) => handleDecoded(decodedText),
       (errorMessage) => {}
     ).catch(err => {
       console.warn("Back camera access failed, trying default camera...", err);
       html5QrcodeScanner.start(
-        { facingMode: "user" },
+        { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
         config,
         (decodedText) => handleDecoded(decodedText),
         (error) => {}
@@ -166,6 +243,14 @@ const Scanner = (() => {
   }
 
   function stop() {
+    if (_inactivityTimer) {
+      clearTimeout(_inactivityTimer);
+      _inactivityTimer = null;
+    }
+    _isSleeping = false;
+    const sleepOverlay = document.getElementById('scanner-sleep-overlay');
+    if (sleepOverlay) sleepOverlay.remove();
+
     const modal = document.getElementById('scanner-modal-overlay');
     if (modal) modal.classList.add('hidden');
 

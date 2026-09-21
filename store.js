@@ -1635,6 +1635,7 @@ const StoreModule = (() => {
     filterCompletedBatches,
     fifoBatches,
     fifoAvailable,
+    buildFifoPrecomputed,
     switchTab,
     changePage,
     changePageInventory,

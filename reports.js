@@ -39,28 +39,44 @@ const ReportsModule = (() => {
     return /^[a-z0-9]{10,}$/.test(val) && !val.includes('-') && !val.includes(' ');
   }
 
+  const _batchFastCache = new Map();
+  function findBatchFast(idOrNo) {
+    if (!idOrNo) return null;
+    const str = String(idOrNo).trim();
+    if (_batchFastCache.has(str)) return _batchFastCache.get(str);
+    const b = (typeof DB !== 'undefined' && DB.Batches) ? DB.Batches.find(str) : null;
+    if (b) {
+      _batchFastCache.set(str, b);
+      if (b.id) _batchFastCache.set(b.id, b);
+      if (b.batchNo) _batchFastCache.set(String(b.batchNo).trim(), b);
+      return b;
+    }
+    _batchFastCache.set(str, null);
+    return null;
+  }
+
   function resolveBatchDetails(r) {
     if (!r) return { batchNo: '—', jmrefNo: '—', partNo: '—' };
 
-    let batch = DB.Batches.find(r.batchId) || DB.Batches.allIncludeArchived().find(b => b.id === r.batchId || b.batchNo === r.batchId);
+    let batch = findBatchFast(r.batchId);
     
     if (!batch && r.batchId) {
-      const stageRec = DB.StageRecords.all().find(sr => sr.id === r.batchId);
+      const stageRec = (typeof DB !== 'undefined' && DB.StageRecords && DB.StageRecords.find) ? DB.StageRecords.find(r.batchId) : null;
       if (stageRec && stageRec.batchId) {
-        batch = DB.Batches.find(stageRec.batchId) || DB.Batches.allIncludeArchived().find(b => b.id === stageRec.batchId || b.batchNo === stageRec.batchId);
+        batch = findBatchFast(stageRec.batchId);
       }
     }
 
     let parentBatch = null;
     if (batch) {
       if (batch.parentBatchId) {
-        parentBatch = DB.Batches.find(batch.parentBatchId) || DB.Batches.allIncludeArchived().find(b => b.id === batch.parentBatchId || b.batchNo === batch.parentBatchId);
+        parentBatch = findBatchFast(batch.parentBatchId);
       } else if (batch.parentBatchNo) {
-        parentBatch = DB.Batches.allIncludeArchived().find(b => b.batchNo === batch.parentBatchNo);
+        parentBatch = findBatchFast(batch.parentBatchNo);
       }
     }
     if (!parentBatch && r.parentBatchNo) {
-      parentBatch = DB.Batches.allIncludeArchived().find(b => b.batchNo === r.parentBatchNo);
+      parentBatch = findBatchFast(r.parentBatchNo);
     }
 
     let batchNoText = '';
@@ -84,7 +100,7 @@ const ReportsModule = (() => {
     } else if (parentNoText) {
       displayBatchNo = parentNoText;
     } else {
-      const anyBatch = DB.Batches.allIncludeArchived().find(b => b.id === r.batchId || b.id === r.batchNo || b.parentBatchId === r.batchId);
+      const anyBatch = findBatchFast(r.batchId) || (r.batchNo ? findBatchFast(r.batchNo) : null);
       if (anyBatch && anyBatch.batchNo && !isRawId(anyBatch.batchNo)) {
         displayBatchNo = anyBatch.batchNo;
       } else {
@@ -238,64 +254,171 @@ const ReportsModule = (() => {
           });
         }
       } catch (err) {
-        showToast('PDF library not loaded', 'error');
+        if (typeof showToast === 'function') showToast('PDF library not loaded', 'error');
         return;
       }
     }
     
+    // Clean title (remove emojis)
+    const cleanTitle = (title || 'Report').replace(/[\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD00-\uDFFF]/g, '').trim();
+    const filterText = formatFilters(filters);
+    const filterHeader = filterText ? `<p style="color: #475569; margin: 4px 0 0 0; font-size: 10px; font-style: italic;">Filters: ${filterText}</p>` : '';
+    const generatedDateStr = new Date().toLocaleString();
+
+    // Paginate rows into bounded page chunks so no row is sliced horizontally across pages
+    const page1Capacity = 17; // safe capacity for first page with main corporate header
+    const otherCapacity = 22; // safe capacity for subsequent pages
+
+    // Separate total / summary row if present at the end
+    let totalRow = null;
+    let dataRows = (rows || []).slice();
+    if (dataRows.length > 0) {
+      const lastRow = dataRows[dataRows.length - 1];
+      const isTotal = Array.isArray(lastRow) && lastRow.some(cell => String(cell).includes('TOTAL'));
+      if (isTotal) {
+        totalRow = dataRows.pop();
+      }
+    }
+
+    const pages = [];
+    let currentRows = [];
+    let currentCapacity = page1Capacity;
+
+    for (let i = 0; i < dataRows.length; i++) {
+      const row = dataRows[i];
+      const isTall = Array.isArray(row) && row.some(cell => String(cell).length > 32);
+      const weight = isTall ? 1.4 : 1.0;
+
+      if (currentRows.reduce((sum, r) => sum + r.weight, 0) + weight > currentCapacity) {
+        pages.push(currentRows.map(r => r.data));
+        currentRows = [];
+        currentCapacity = otherCapacity;
+      }
+      currentRows.push({ data: row, weight });
+    }
+
+    if (currentRows.length > 0) {
+      pages.push(currentRows.map(r => r.data));
+    }
+
+    // Attach total row to the last page (or roll back rows if last page is packed full)
+    if (totalRow) {
+      if (pages.length === 0) {
+        pages.push([totalRow]);
+      } else {
+        const lastPage = pages[pages.length - 1];
+        if (lastPage.length >= otherCapacity) {
+          const moved = lastPage.splice(Math.max(1, lastPage.length - 2), 2);
+          pages.push([...moved, totalRow]);
+        } else {
+          lastPage.push(totalRow);
+        }
+      }
+    }
+
+    if (pages.length === 0) {
+      pages.push([]);
+    }
+
+    const totalPages = pages.length;
+
+    // Helper to render each page table block cleanly
+    const renderPageHtml = (pageRows, pageIndex) => {
+      const isFirstPage = pageIndex === 0;
+      const pageNum = pageIndex + 1;
+
+      const pageHeaderHtml = isFirstPage ? `
+        <div style="margin-bottom: 14px; border-bottom: 2px solid #004976; padding-bottom: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+            <div>
+              <h2 style="color: #004976; margin: 0 0 4px 0; font-size: 20px; font-weight: 800; letter-spacing: -0.2px;">Janani Mouldings Private Limited</h2>
+              <p style="color: #0f172a; margin: 0; font-size: 13px; font-weight: 700;">${cleanTitle}</p>
+              ${filterHeader}
+            </div>
+            <div style="text-align: right;">
+              <p style="color: #64748b; margin: 0; font-size: 9px;">Generated: ${generatedDateStr}</p>
+              <span style="display: inline-block; margin-top: 4px; padding: 2px 8px; background: #e2e8f0; color: #334155; border-radius: 4px; font-size: 9px; font-weight: 700;">Page ${pageNum} of ${totalPages}</span>
+            </div>
+          </div>
+        </div>
+      ` : `
+        <div style="margin-bottom: 10px; border-bottom: 1.5px solid #004976; padding-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
+          <span style="font-weight: 700; color: #004976; font-size: 11px;">Janani Mouldings Private Limited — ${cleanTitle}</span>
+          <span style="padding: 2px 8px; background: #e2e8f0; color: #334155; border-radius: 4px; font-size: 9px; font-weight: 700;">Page ${pageNum} of ${totalPages}</span>
+        </div>
+      `;
+
+      const tableRowsHtml = pageRows.map((r, i) => {
+        const isTotalRow = Array.isArray(r) && (r.includes('TOTAL:') || r.includes('TOTAL') || (r[6] === 'TOTAL:') || (r[6] === 'TOTAL') || r.some(c => String(c).startsWith('TOTAL')));
+        const rowBg = isTotalRow 
+          ? 'background-color: #fef2f2; font-weight: 800; color: #b91c1c;' 
+          : (i % 2 === 0 ? 'background-color: #f8fafc;' : 'background-color: #ffffff;');
+        return `
+          <tr style="${rowBg}; page-break-inside: avoid !important; break-inside: avoid !important;">
+            ${(r || []).map(v => `<td style="border: 1px solid #cbd5e1; padding: 5.5px 7px; text-align: left; page-break-inside: avoid !important; break-inside: avoid !important; vertical-align: middle;">${v ?? ''}</td>`).join('')}
+          </tr>
+        `;
+      }).join('');
+
+      return `
+        <div class="pdf-page-block" style="box-sizing: border-box; width: 100%;">
+          ${pageHeaderHtml}
+          <table style="width: 100%; border-collapse: collapse; font-size: 9px; line-height: 1.35; table-layout: auto;">
+            <thead>
+              <tr style="background-color: #004976; color: #ffffff; page-break-inside: avoid !important; break-inside: avoid !important;">
+                ${(headers || []).map(h => `<th style="border: 1px solid #003657; padding: 6px 7px; text-align: left; font-weight: 700; font-size: 9px;">${h}</th>`).join('')}
+              </tr>
+            </thead>
+            <tbody>
+              ${tableRowsHtml}
+            </tbody>
+          </table>
+        </div>
+      `;
+    };
+
     const tempDiv = document.createElement('div');
-    tempDiv.style.padding = '24px';
+    tempDiv.style.padding = '0';
+    tempDiv.style.margin = '0';
     tempDiv.style.fontFamily = 'system-ui, -apple-system, sans-serif';
     tempDiv.style.color = '#1e293b';
-    
-    // Clean title (remove emojis)
-    const cleanTitle = title.replace(/[\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD00-\uDFFF]/g, '').trim();
-    const filterText = formatFilters(filters);
-    const filterHeader = filterText ? `<p style="color: #475569; margin: 4px 0 0 0; font-size: 11px; font-style: italic;">Filters: ${filterText}</p>` : '';
 
-    tempDiv.innerHTML = `
-      <div style="margin-bottom: 24px; border-bottom: 2px solid #004976; padding-bottom: 12px;">
-        <h2 style="color: #004976; margin: 0 0 6px 0; font-size: 22px; font-weight: 800;">Janani Mouldings Private Limited</h2>
-        <p style="color: #0f172a; margin: 0; font-size: 14px; font-weight: 600;">${cleanTitle}</p>
-        ${filterHeader}
-        <p style="color: #64748b; margin: 4px 0 0 0; font-size: 10px;">Generated Date: ${new Date().toLocaleString()}</p>
-      </div>
-      <table style="width: 100%; border-collapse: collapse; font-size: 9.5px; line-height: 1.4;">
-        <thead>
-          <tr style="background-color: #004976; color: white;">
-            ${headers.map(h => `<th style="border: 1px solid #cbd5e1; padding: 7px 8px; text-align: left; font-weight: 700;">${h}</th>`).join('')}
-          </tr>
-        </thead>
-        <tbody>
-          ${rows.map((r, i) => {
-            const isTotalRow = r.includes('TOTAL:') || r.includes('TOTAL') || (r[6] === 'TOTAL:') || (r[6] === 'TOTAL');
-            const rowStyle = isTotalRow 
-              ? 'background-color: #f1f5f9; font-weight: bold; color: #dc2626;' 
-              : (i % 2 === 0 ? 'background-color: #f8fafc;' : '');
-            return `
-              <tr style="${rowStyle}">
-                ${r.map(v => `<td style="border: 1px solid #cbd5e1; padding: 7px 8px;">${v ?? ''}</td>`).join('')}
-              </tr>
-            `;
-          }).join('')}
-        </tbody>
-      </table>
-    `;
-    
+    // Build pages with explicit page-break dividers between blocks
+    const pagesHtml = pages.map((pageRows, pageIdx) => {
+      const pageHtml = renderPageHtml(pageRows, pageIdx);
+      const isLastPage = pageIdx === pages.length - 1;
+      return `
+        ${pageHtml}
+        ${!isLastPage ? '<div class="html2pdf__page-break" style="height: 0; page-break-after: always; break-after: page;"></div>' : ''}
+      `;
+    }).join('');
+
+    tempDiv.innerHTML = pagesHtml;
+
     const opt = {
-      margin: [10, 10, 12, 10], // top, left, bottom, right
+      margin: [10, 10, 10, 10], // top, left, bottom, right in mm
       filename: filename + '.pdf',
       image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true, logging: false },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' }
+      html2canvas: { 
+        scale: 2, 
+        useCORS: true, 
+        logging: false,
+        scrollY: 0
+      },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' },
+      pagebreak: { 
+        mode: ['css', 'legacy'],
+        after: '.html2pdf__page-break',
+        avoid: ['tr', 'td', 'th', '.pdf-page-block']
+      }
     };
-    
+
     // Execute export
     html2pdf().from(tempDiv).set(opt).save().then(() => {
-      showToast('PDF exported successfully', 'success');
+      if (typeof showToast === 'function') showToast('PDF exported successfully', 'success');
     }).catch(err => {
       console.error(err);
-      showToast('Failed to export PDF: ' + err.message, 'error');
+      if (typeof showToast === 'function') showToast('Failed to export PDF: ' + (err.message || err), 'error');
     });
   }
 
@@ -322,22 +445,44 @@ const ReportsModule = (() => {
     const wipHeaders = wipStages.map(s => STAGE_LABELS[s]);
     const headers = ['Part No', 'JMREF No', 'Description', ...wipHeaders, 'Total WIP', 'Store (Available)'];
 
+    // Pre-index active batches by partId and currentStage for O(1) retrieval
+    const batchesByPartAndStage = new Map();
+    for (let i = 0; i < batches.length; i++) {
+      const b = batches[i];
+      if (b.status !== 'active' || !b.partId || !b.currentStage) continue;
+      const key = b.partId + '___' + b.currentStage;
+      let list = batchesByPartAndStage.get(key);
+      if (!list) {
+        list = [];
+        batchesByPartAndStage.set(key, list);
+      }
+      list.push(b);
+    }
+
+    // Pre-index latest incoming stage movement records by batchId and movedTo
+    const latestIncomingByBatchAndStage = new Map();
+    for (let i = 0; i < stageRecords.length; i++) {
+      const r = stageRecords[i];
+      if (!r.batchId || !r.movedTo) continue;
+      const key = r.batchId + '___' + r.movedTo;
+      latestIncomingByBatchAndStage.set(key, r);
+    }
+
     const dataRows = parts.map(p => {
       const stageCounts = wipStages.map(stage => {
-        // Active batches for this part currently sitting at this stage
-        const activeBatches = batches.filter(b =>
-          b.partId === p.id && b.currentStage === stage && b.status === 'active'
-        );
-        return activeBatches.reduce((sum, b) => {
-          // Find the most recent record that moved INTO this stage
-          const incoming = stageRecords.filter(r => r.batchId === b.id && r.movedTo === stage);
-          if (incoming.length) {
-            // Last incoming record's outputQty = qty that arrived at this stage
-            return sum + (incoming[incoming.length - 1].outputQty || 0);
+        const activeBatches = batchesByPartAndStage.get(p.id + '___' + stage);
+        if (!activeBatches || !activeBatches.length) return 0;
+        let sum = 0;
+        for (let j = 0; j < activeBatches.length; j++) {
+          const b = activeBatches[j];
+          const incoming = latestIncomingByBatchAndStage.get(b.id + '___' + stage);
+          if (incoming) {
+            sum += (incoming.outputQty || 0);
+          } else {
+            sum += (b.initialQty || 0);
           }
-          // No incoming record = freshly created production batch, use initialQty
-          return sum + (b.initialQty || 0);
-        }, 0);
+        }
+        return sum;
       });
 
       // Total WIP = sum of all WIP stages
@@ -443,10 +588,15 @@ const ReportsModule = (() => {
     const lowStockCount = filtered.filter(p => (p.available || 0) < 10 && (p.available || 0) > 0).length;
     const outOfStockCount = filtered.filter(p => (p.available || 0) === 0).length;
 
-    // Helper to get FIFO batches for a part
+    // Helper to get FIFO batches for a part (leveraging single-pass precomputation)
+    let fifoPrecomputed = null;
+    if (typeof StoreModule !== 'undefined' && typeof StoreModule.buildFifoPrecomputed === 'function') {
+      try { fifoPrecomputed = StoreModule.buildFifoPrecomputed(); } catch(e) {}
+    }
+
     function getPartStoreBatches(p) {
       if (typeof StoreModule !== 'undefined' && typeof StoreModule.fifoBatches === 'function') {
-        return StoreModule.fifoBatches(p.jmrefNo, p.id);
+        return StoreModule.fifoBatches(p.jmrefNo, p.id, fifoPrecomputed);
       }
       const normTarget = String(p.jmrefNo || '').trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
       return batches.filter(b => {
@@ -898,7 +1048,37 @@ const ReportsModule = (() => {
     records = filterByDateRange(records, 'date', from, to);
     if (!records.length) return emptyState('No records found for the selected rejection and date filters.');
 
-    // Sort chronologically (oldest to newest) so that cumulative data reads naturally
+    // Deduplicate by batch: if a batch has duplicate stage movement records, show the latest movement alone
+    records.sort((a, b) => {
+      const timeA = a.createdAt ? new Date(a.createdAt).getTime() : (a.date ? new Date(a.date).getTime() : 0);
+      const timeB = b.createdAt ? new Date(b.createdAt).getTime() : (b.date ? new Date(b.date).getTime() : 0);
+      if (timeA !== timeB && !isNaN(timeA) && !isNaN(timeB)) return timeA - timeB;
+      const strA = a.createdAt || a.date || '';
+      const strB = b.createdAt || b.date || '';
+      return strA.localeCompare(strB) || (a.id || '').localeCompare(b.id || '');
+    });
+
+    const latestByBatch = new Map();
+    const nonBatchRecords = [];
+    records.forEach(r => {
+      let key = r.batchId || (r.batchNo && !isRawId(r.batchNo) ? String(r.batchNo).trim() : null);
+      if (!key) {
+        const details = resolveBatchDetails(r);
+        if (details && details.batch && details.batch.id) {
+          key = details.batch.id;
+        } else if (details && details.batchNo && details.batchNo !== '—') {
+          key = details.batchNo;
+        }
+      }
+      if (key) {
+        latestByBatch.set(key, r);
+      } else {
+        nonBatchRecords.push(r);
+      }
+    });
+    records = [...latestByBatch.values(), ...nonBatchRecords];
+
+    // Re-sort chronologically (oldest to newest) so that cumulative data reads naturally
     records.sort((a, b) => {
       const dateA = a.createdAt || a.date || '';
       const dateB = b.createdAt || b.date || '';
@@ -3080,6 +3260,40 @@ const ReportsModule = (() => {
         </select>
       </div>`;
 
+    const batchLossStatusFilter = `
+      <div class="form-group mb-0">
+        <label class="form-label">Batch Status</label>
+        <select class="form-control" id="rpt-status">
+          <option value="">All Statuses</option>
+          <option value="completed">Completed Batches (Store)</option>
+          <option value="active">Active WIP Batches</option>
+          <option value="rejected">Rejected Batches</option>
+        </select>
+      </div>`;
+
+    const wholeBatchLossFilter = `
+      <div class="form-group mb-0">
+        <label class="form-label">Whole Batch Loss %</label>
+        <select class="form-control" id="rpt-rejection-rate">
+          <option value="">All Loss Rates</option>
+          <option value="50">Above 50% Loss (&ge; 50%)</option>
+          <option value="30">Above 30% Loss (&ge; 30%)</option>
+          <option value="20">Above 20% Loss (&ge; 20%)</option>
+          <option value="10">Above 10% Loss (&ge; 10%)</option>
+          <option value="zero">0% Loss (Zero Defect)</option>
+        </select>
+      </div>`;
+
+    const adminChangesFilter = `
+      <div class="form-group mb-0">
+        <label class="form-label">Admin Adjustments</label>
+        <select class="form-control" id="rpt-exclude-admin">
+          <option value="">Include All Batches</option>
+          <option value="exclude">Exclude Batches Changed by Admin</option>
+          <option value="only">Only Batches Changed by Admin</option>
+        </select>
+      </div>`;
+
     const filterMap = {
       reprocess: [jmrefFilter, reprocessDestFilter, reprocessChildStatusFilter, dateRange].join(''),
       inventory: jmrefFilter,
@@ -3102,7 +3316,7 @@ const ReportsModule = (() => {
       'sub-performance': prodDateRange,
       'sub-vs-inhouse': prodDateRange,
       'qty-gain': [jmrefFilter, dateRange].join(''),
-      'qty-loss': [jmrefFilter, dateRange].join(''),
+      'qty-loss': [jmrefFilter, batchLossStatusFilter, wholeBatchLossFilter, adminChangesFilter, dateRange].join(''),
       'op-efficiency': dateRange,
       'mould-lifecycle': jmrefFilter,
       'cycle-time': dateRange,
@@ -3239,106 +3453,246 @@ const ReportsModule = (() => {
   }
 
   function renderQtyLossReport(filters) {
-    const { from, to, jmref } = filters;
-    let recs = DB.StageRecords.all().filter(r => r.lossQty > 0 || (r.reprocessQty || 0) > 0);
+    const { from, to, jmref, status, rejectionRate, excludeAdmin } = filters;
+    const allBatches = (typeof DB !== 'undefined' && DB.Batches ? DB.Batches.all() : []);
+    const stageRecs = (typeof DB !== 'undefined' && DB.StageRecords ? DB.StageRecords.all() : []);
+    const users = (typeof DB !== 'undefined' && DB.Users ? DB.Users.all() : []);
 
-    recs = filterByDateRange(recs, 'date', from, to);
-
-    if (jmref) {
-      const q = jmref.toLowerCase();
-      recs = recs.filter(r => {
-        const b = DB.Batches.find(r.batchId) || {};
-        return (b.batchNo || '').toLowerCase().includes(q) ||
-               (b.jmrefNo || '').toLowerCase().includes(q) ||
-               (b.partNo || '').toLowerCase().includes(q);
+    // Index stage records by batch ID and batch No
+    const recsByBatch = new Map();
+    stageRecs.forEach(r => {
+      const keys = [];
+      if (r.batchId) keys.push(r.batchId);
+      if (r.batchNo && !isRawId(r.batchNo)) keys.push(r.batchNo);
+      keys.forEach(k => {
+        if (!recsByBatch.has(k)) recsByBatch.set(k, []);
+        recsByBatch.get(k).push(r);
       });
-    }
+    });
 
-    if (!recs.length) return emptyState('No quantity loss transactions found matching the selected filters.');
+    const batchCards = [];
 
-    const headers = ['Batch No', 'Part No', 'JMREF No', 'Stage Name', 'Input Qty', 'Output Qty', 'Qty Lost', 'Reprocess Qty', '% Loss', 'Date', 'Recorded By'];
-    const users = DB.Users.all();
+    allBatches.forEach(b => {
+      if (b.isArchived) return;
 
-    // Map to normalized transactions objects
-    const transactions = recs.map(r => {
-      const b = DB.Batches.find(r.batchId) || {};
-      const u = users.find(usr => usr.id === r.recordedBy);
-      const input = r.inputQty || 0;
-      const loss = r.lossQty || 0;
-      const reprocess = r.reprocessQty || 0;
-      const totalDefects = Math.max(loss + reprocess, Math.max(0, input - (r.outputQty || 0)));
-      const pct = input ? ((totalDefects / input) * 100).toFixed(1) + '%' : '0.0%';
-      return {
+      // Filter by Batch Status
+      const isComp = b.status === 'completed' || b.currentStage === 'store';
+      if (status === 'completed' && !isComp) return;
+      if (status === 'active' && (b.status !== 'active' || b.currentStage === 'store')) return;
+      if (status === 'rejected' && b.status !== 'rejected') return;
+
+      // Filter by JMREF / Part / Batch
+      if (jmref) {
+        const q = jmref.toLowerCase();
+        const match = (b.batchNo || '').toLowerCase().includes(q) ||
+                      (b.jmrefNo || '').toLowerCase().includes(q) ||
+                      (b.partNo || '').toLowerCase().includes(q) ||
+                      (b.description || '').toLowerCase().includes(q);
+        if (!match) return;
+      }
+
+      // Collect unique stage records for this batch
+      const bRecsRaw = (recsByBatch.get(b.id) || []).concat(b.batchNo ? (recsByBatch.get(b.batchNo) || []) : []);
+      const seenIds = new Set();
+      const bRecs = [];
+      bRecsRaw.forEach(r => {
+        if (!seenIds.has(r.id)) {
+          seenIds.add(r.id);
+          bRecs.push(r);
+        }
+      });
+
+      // Filter by Admin Changed option
+      const isChangedByAdmin = (b.notes && b.notes.toLowerCase().includes('changed via batch by admin')) ||
+        bRecs.some(r => r.notes && r.notes.toLowerCase().includes('changed via batch by admin'));
+
+      if (excludeAdmin === 'exclude' && isChangedByAdmin) return;
+      if (excludeAdmin === 'only' && !isChangedByAdmin) return;
+
+      // Filter by Date Range (using batch completion/production date or any stage record in range)
+      const bDate = (b.completedAt || b.productionDate || b.createdAt || '').slice(0, 10);
+      if (from || to) {
+        let inDateRange = false;
+        if (bDate) {
+          if ((!from || bDate >= from) && (!to || bDate <= to)) inDateRange = true;
+        }
+        if (!inDateRange) {
+          inDateRange = bRecs.some(r => {
+            const d = (r.date || r.createdAt || '').slice(0, 10);
+            return (!from || d >= from) && (!to || d <= to);
+          });
+        }
+        if (!inDateRange) return;
+      }
+
+      // Chronological sort
+      bRecs.sort((r1, r2) => (r1.createdAt || r1.date || '').localeCompare(r2.createdAt || r2.date || ''));
+
+      // Find true initial molded quantity from production stage record or earliest lifecycle record
+      const prodRec = bRecs.find(r => r.stage === 'production');
+      let initialQty = prodRec && (Number(prodRec.inputQty) || Number(prodRec.outputQty)) 
+        ? (Number(prodRec.inputQty) || Number(prodRec.outputQty)) 
+        : (bRecs.length ? (Number(bRecs[0].inputQty) || Number(bRecs[0].outputQty) || 0) : 0);
+      
+      if (!initialQty || initialQty < Number(b.initialQty || 0)) {
+        initialQty = Math.max(initialQty, Number(b.initialQty || 0));
+      }
+
+      // Passed store quantity: check store stage record or quality stage record outputQty or b.remainingQty
+      const storeRec = bRecs.find(r => r.stage === 'store' || r.movedTo === 'store');
+      let completedQty = 0;
+      if (isComp) {
+        if (storeRec && (storeRec.inputQty || storeRec.outputQty)) {
+          completedQty = Number(storeRec.inputQty || storeRec.outputQty);
+        } else if (b.remainingQty !== undefined && b.remainingQty !== null) {
+          completedQty = Number(b.remainingQty);
+        } else {
+          completedQty = Math.max(0, initialQty - stageLoss);
+        }
+      } else {
+        completedQty = Number(b.remainingQty !== undefined ? b.remainingQty : (b.remaining !== undefined ? b.remaining : 0));
+      }
+
+      // Cumulative stage loss & reprocess
+      const stageLoss = bRecs.reduce((sum, r) => sum + (Number(r.lossQty) || 0), 0);
+      const stageReprocess = bRecs.reduce((sum, r) => sum + (Number(r.reprocessQty) || 0), 0);
+
+      // Whole batch effective loss
+      let effectiveLoss = stageLoss;
+      if (initialQty > 0 && isComp) {
+        effectiveLoss = Math.max(stageLoss, initialQty - completedQty);
+      }
+      const lossPct = initialQty > 0 ? ((effectiveLoss / initialQty) * 100) : 0;
+
+      // Filter by Rejection / Loss Rate
+      if (rejectionRate === '50') {
+        if (lossPct < 50) return;
+      } else if (rejectionRate === '30') {
+        if (lossPct < 30) return;
+      } else if (rejectionRate === '20') {
+        if (lossPct < 20) return;
+      } else if (rejectionRate === '10') {
+        if (lossPct < 10) return;
+      } else if (rejectionRate === 'zero') {
+        if (effectiveLoss > 0 || stageReprocess > 0) return;
+      } else {
+        // Default: show batches with some loss or reprocess
+        if (effectiveLoss <= 0 && stageReprocess <= 0 && !status) return;
+      }
+
+      batchCards.push({
+        batch: b,
         batchNo: b.batchNo || '—',
         partNo: b.partNo || '—',
         jmrefNo: b.jmrefNo || '—',
-        stage: r.stage || '—',
-        stageLabel: STAGE_LABELS[r.stage] || r.stage || '—',
-        inputQty: r.inputQty,
-        outputQty: r.isRecheck ? r.recheckQty : r.outputQty,
-        loss: r.lossQty,
-        reprocess: r.reprocessQty || 0,
-        pct: pct,
-        date: (r.date || '').slice(0, 10),
-        recordedBy: u ? u.name : '—'
-      };
+        description: b.description || '—',
+        status: b.status,
+        currentStage: b.currentStage,
+        isCompleted: isComp,
+        isChangedByAdmin,
+        initialQty,
+        completedQty,
+        effectiveLoss,
+        stageReprocess,
+        lossPct,
+        records: bRecs,
+        date: bDate
+      });
     });
 
-    // Group transactions by batch number
-    const groups = {};
-    transactions.forEach(t => {
-      if (!groups[t.batchNo]) {
-        groups[t.batchNo] = {
-          batchNo: t.batchNo,
-          partNo: t.partNo,
-          jmrefNo: t.jmrefNo,
-          totalLoss: 0,
-          totalReprocess: 0,
-          entries: []
-        };
-      }
-      groups[t.batchNo].totalLoss += t.loss;
-      groups[t.batchNo].totalReprocess += t.reprocess;
-      groups[t.batchNo].entries.push(t);
-    });
+    if (!batchCards.length) return emptyState('No batches found matching the selected status, loss rate, and date filters.');
 
-    const groupList = Object.values(groups);
+    // Sort batches by highest loss % first
+    batchCards.sort((a, b) => b.lossPct - a.lossPct || b.effectiveLoss - a.effectiveLoss);
 
-    // Build grouped rows HTML representation
-    const rowsHtml = groupList.map(g => {
-      const reprocessInfo = g.totalReprocess > 0 ? ` | Reprocessed: ${formatNum(g.totalReprocess)}` : '';
+    // Compute Overall Totals
+    const totalInitial = batchCards.reduce((s, b) => s + b.initialQty, 0);
+    const totalCompleted = batchCards.reduce((s, b) => s + b.completedQty, 0);
+    const totalLoss = batchCards.reduce((s, b) => s + b.effectiveLoss, 0);
+    const totalReprocess = batchCards.reduce((s, b) => s + b.stageReprocess, 0);
+    const overallLossPct = totalInitial > 0 ? ((totalLoss / totalInitial) * 100).toFixed(1) + '%' : '0.0%';
+
+    const headers = ['Batch No', 'Part No', 'JMREF No', 'Batch Status', 'Admin Mod', 'Initial Qty', 'Completed Qty', 'Total Batch Loss', 'Reprocess Qty', '% Loss', 'Date'];
+    const dataRows = [];
+
+    // Build HTML representation
+    const rowsHtml = batchCards.map((g, idx) => {
+      const statusBadge = g.isCompleted 
+        ? '<span class="badge badge-green">🟢 Completed (Store)</span>' 
+        : (g.status === 'rejected' ? '<span class="badge badge-red">🚫 Rejected</span>' : '<span class="badge badge-blue">⏳ Active WIP</span>');
+
+      const adminBadge = g.isChangedByAdmin 
+        ? '<span class="badge badge-amber" style="margin-left: 8px;" title="Stage changed manually by admin">⚙️ Admin Adjusted</span>' 
+        : '';
+
+      let lossBadgeClass = 'badge-green';
+      if (g.lossPct >= 50) lossBadgeClass = 'badge-red font-bold';
+      else if (g.lossPct >= 30) lossBadgeClass = 'badge-red';
+      else if (g.lossPct >= 20) lossBadgeClass = 'badge-amber';
+      else if (g.lossPct > 0) lossBadgeClass = 'badge-blue';
+
+      const repInfo = g.stageReprocess > 0 ? ` | Reprocessed: ${formatNum(g.stageReprocess)}` : '';
+
       const groupHeader = `
-        <tr style="background: rgba(255, 71, 87, 0.04); font-weight: bold; border-left: 4px solid var(--accent-red);">
+        <tr style="background: rgba(239, 68, 68, 0.06); font-weight: bold; border-left: 4px solid var(--accent-red); border-top: 2px solid var(--border);">
           <td colspan="4" class="font-bold text-blue" style="padding: 12px 14px; font-size: 13px;">
-            📦 Batch: ${g.batchNo} 
+            📦 #${idx + 1} Batch: <strong>${g.batchNo}</strong>
             <span class="badge badge-gray" style="margin-left: 8px;">Part: ${g.partNo}</span>
             <span class="badge badge-teal" style="margin-left: 8px;">JMREF: ${g.jmrefNo}</span>
+            <span style="margin-left: 8px;">${statusBadge}</span>
+            ${adminBadge}
           </td>
           <td colspan="5" class="font-bold text-danger" style="padding: 12px 14px; font-size: 13px; text-align: right;">
-            Total Lost: -${formatNum(g.totalLoss)}${reprocessInfo}
+            Initial: <strong>${formatNum(g.initialQty)}</strong> | Final: <strong>${formatNum(g.completedQty)}</strong> | Total Lost: <strong>-${formatNum(g.effectiveLoss)}</strong> (<span class="badge ${lossBadgeClass}">${g.lossPct.toFixed(1)}%</span>)${repInfo}
           </td>
         </tr>`;
 
-      const entriesHtml = g.entries.map(e => {
-        const lossVal = e.loss > 0 ? `-${formatNum(e.loss)}` : '—';
-        const repVal = e.reprocess > 0 ? formatNum(e.reprocess) : '—';
-        const pctNum = parseFloat(e.pct) || 0;
+      // Export row for this batch summary
+      dataRows.push([
+        g.batchNo,
+        g.partNo,
+        g.jmrefNo,
+        g.isCompleted ? 'Completed' : (g.status === 'rejected' ? 'Rejected' : 'Active WIP'),
+        g.isChangedByAdmin ? 'Yes' : 'No',
+        String(g.initialQty),
+        String(g.completedQty),
+        String(g.effectiveLoss),
+        String(g.stageReprocess),
+        g.lossPct.toFixed(1) + '%',
+        g.date
+      ]);
+
+      const entriesHtml = g.records.map(e => {
+        const u = users.find(usr => usr.id === e.recordedBy);
+        const recordedByName = u ? u.name : (e.recordedBy || '—');
+        const lossVal = (e.lossQty || 0) > 0 ? `-${formatNum(e.lossQty)}` : '—';
+        const repVal = (e.reprocessQty || 0) > 0 ? formatNum(e.reprocessQty) : '—';
+        const inQ = Number(e.inputQty || 0);
+        const outQ = Number(e.isRecheck ? e.recheckQty : (e.outputQty || 0));
+        const defects = Math.max((e.lossQty || 0) + (e.reprocessQty || 0), Math.max(0, inQ - outQ));
+        const stagePctNum = inQ > 0 ? ((defects / inQ) * 100) : 0;
+
         let badgeClass = 'badge-green';
-        if (pctNum >= 50) badgeClass = 'badge-red font-bold';
-        else if (pctNum >= 20) badgeClass = 'badge-amber';
-        else if (pctNum > 0) badgeClass = 'badge-blue';
+        if (stagePctNum >= 50) badgeClass = 'badge-red font-bold';
+        else if (stagePctNum >= 20) badgeClass = 'badge-amber';
+        else if (stagePctNum > 0) badgeClass = 'badge-blue';
+
+        const isEntryAdmin = e.notes && e.notes.toLowerCase().includes('changed via batch by admin');
+        const adminNoteTag = isEntryAdmin 
+          ? '<span class="badge badge-amber" style="font-size:10px; margin-left:6px;">⚙️ Admin Changed</span>' 
+          : '';
 
         return `
           <tr style="border-bottom: 1px solid var(--border);">
-            <td style="padding-left: 20px; color: var(--text-muted); font-size: 12px; font-style: italic;">↳ ${e.batchNo}</td>
-            <td><span class="stage-chip ${e.stage.toLowerCase().replace(/\s+/g, '')}">${e.stageLabel}</span></td>
-            <td>${formatNum(e.inputQty)}</td>
-            <td>${formatNum(e.outputQty)}</td>
-            <td class="font-bold text-danger">${lossVal}</td>
-            <td class="font-bold text-warning">${repVal}</td>
-            <td><span class="badge ${badgeClass}">${e.pct}</span></td>
-            <td class="text-muted text-sm">${e.date}</td>
-            <td>${e.recordedBy}</td>
+            <td style="padding-left: 24px; color: var(--text-muted); font-size: 12px;">↳ ${(e.notes ? e.notes : g.batchNo)} ${adminNoteTag}</td>
+            <td><span class="stage-chip ${(e.stage || '').toLowerCase().replace(/\s+/g, '')}">${STAGE_LABELS[e.stage] || e.stage || '—'}</span></td>
+            <td>${formatNum(inQ)}</td>
+            <td>${formatNum(outQ)}</td>
+            <td class="font-bold ${lossVal !== '—' ? 'text-danger' : 'text-muted'}">${lossVal}</td>
+            <td class="font-bold ${repVal !== '—' ? 'text-warning' : 'text-muted'}">${repVal}</td>
+            <td><span class="badge ${badgeClass}">${stagePctNum.toFixed(1)}%</span></td>
+            <td class="text-muted text-sm">${(e.date || e.createdAt || '').slice(0, 10)}</td>
+            <td class="text-sm">${recordedByName}</td>
           </tr>
         `;
       }).join('');
@@ -3346,12 +3700,38 @@ const ReportsModule = (() => {
       return groupHeader + entriesHtml;
     }).join('');
 
+    const statCards = `
+      <div style="display:flex; gap:16px; margin-bottom: 24px; flex-wrap:wrap;">
+        <div class="stat-card blue" style="flex:1; min-width: 140px;">
+          <div class="stat-label">Batches Found</div>
+          <div class="stat-value blue">${formatNum(batchCards.length)}</div>
+        </div>
+        <div class="stat-card green" style="flex:1; min-width: 140px;">
+          <div class="stat-label">Total Molded (Initial Qty)</div>
+          <div class="stat-value green">${formatNum(totalInitial)}</div>
+        </div>
+        <div class="stat-card teal" style="flex:1; min-width: 140px;">
+          <div class="stat-label">Total Completed (Passed Qty)</div>
+          <div class="stat-value teal">${formatNum(totalCompleted)}</div>
+        </div>
+        <div class="stat-card red" style="flex:1; min-width: 140px;">
+          <div class="stat-label">Total Batch Loss (Scrap)</div>
+          <div class="stat-value red">-${formatNum(totalLoss)}</div>
+        </div>
+        <div class="stat-card ${parseFloat(overallLossPct) >= 50 ? 'red' : 'amber'}" style="flex:1; min-width: 140px;">
+          <div class="stat-label">Overall Cumulative Loss %</div>
+          <div class="stat-value ${parseFloat(overallLossPct) >= 50 ? 'red' : 'amber'}">${overallLossPct}</div>
+        </div>
+      </div>
+    `;
+
     const html = `
+      ${statCards}
       <div class="table-wrap">
         <table class="data-table">
           <thead>
             <tr>
-              <th>Batch No</th>
+              <th>Batch / Detail</th>
               <th>Stage Name</th>
               <th>Input Qty</th>
               <th>Output Qty</th>
@@ -3367,20 +3747,6 @@ const ReportsModule = (() => {
           </tbody>
         </table>
       </div>`;
-
-    const dataRows = transactions.map(t => [
-      t.batchNo,
-      t.partNo,
-      t.jmrefNo,
-      t.stageLabel,
-      String(t.inputQty),
-      String(t.outputQty),
-      String(t.loss),
-      String(t.reprocess),
-      t.pct,
-      t.date,
-      t.recordedBy
-    ]);
 
     return { html, headers, dataRows };
   }
@@ -3693,6 +4059,7 @@ const ReportsModule = (() => {
       vendorId: g('rpt-vendor'),
       auditSessionId: g('rpt-audit-session'),
       status: g('rpt-status'),
+      excludeAdmin: g('rpt-exclude-admin'),
     };
   }
 
@@ -3720,6 +4087,7 @@ const ReportsModule = (() => {
     setVal('rpt-vendor', saved.vendorId);
     setVal('rpt-audit-session', saved.auditSessionId);
     setVal('rpt-status', saved.status);
+    setVal('rpt-exclude-admin', saved.excludeAdmin);
   }
 
   function restoreSavedResult(reportKey) {
@@ -3852,7 +4220,7 @@ const ReportsModule = (() => {
     { key:'aging',      label:'⏳ Aging WIP Report (> 1 Week)', desc:'Active batches sitting in the same stage for more than 7 days' },
     { key:'pending-batches', label:'⏳ Pending Batch Report',  desc:'Pending batches filtered by stage and timeframe from date Received' },
     { key:'qty-gain',   label:'📈 Quantity Gain Report',       desc:'Stages where the batch output quantity was greater than the input quantity' },
-    { key:'qty-loss',   label:'📉 Quality Loss Report',        desc:'Stages where the batch quantity was lost, grouped by batch number' },
+    { key:'qty-loss',   label:'📉 Whole Batch Loss & Scrap Report', desc:'Cumulative quantity loss and scrap rate per batch from production to completion, filterable by 50% loss threshold' },
     { key:'op-efficiency',  label:'👷 Operator & Inspector Efficiency', desc:'Operator-wise and Inspector-wise output, yield, and defect rates' },
     { key:'mould-lifecycle',label:'⚙️ Mould Lifecycle & Performance',    desc:'Accumulative lift count, output yield, and maintenance alert status per mould' },
     { key:'cycle-time',     label:'⏳ Production Cycle Time & Bottlenecks', desc:'Average hours/days batches spend at each process stage' },
@@ -4702,10 +5070,22 @@ const ReportsModule = (() => {
       const rows = Array.from(tbody.querySelectorAll('tr'));
       if (rows.length <= 50) return; // Only paginate if > 50 entries
       
+      // Separate TOTAL row if present so it remains pinned at bottom on all pages
+      let totalRowHtml = '';
+      const lastRow = rows[rows.length - 1];
+      const isTotal = lastRow && (
+        lastRow.textContent.includes('TOTAL') || 
+        lastRow.classList.contains('total-row') || 
+        (lastRow.classList.contains('text-danger') && lastRow.querySelector('td[colspan]'))
+      );
+      if (isTotal) {
+        totalRowHtml = rows.pop().outerHTML;
+      }
+
       const totalItems = rows.length;
       const allRows = rows.map(r => r.outerHTML);
       let currentPage = 1;
-      const itemsPerPage = 50;
+      let itemsPerPage = 50;
       
       const tableWrap = table.closest('.table-wrap') || table.parentElement;
       
@@ -4720,34 +5100,61 @@ const ReportsModule = (() => {
       tableWrap.after(paginator);
       
       const updateTable = () => {
-        const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+        const isAll = itemsPerPage === 'ALL';
+        const totalPages = isAll ? 1 : Math.ceil(totalItems / itemsPerPage) || 1;
         if (currentPage > totalPages) currentPage = totalPages;
         if (currentPage < 1) currentPage = 1;
         
-        const startIdx = (currentPage - 1) * itemsPerPage;
-        const endIdx = currentPage * itemsPerPage;
+        const startIdx = isAll ? 0 : (currentPage - 1) * itemsPerPage;
+        const endIdx = isAll ? totalItems : currentPage * itemsPerPage;
         
-        tbody.innerHTML = allRows.slice(startIdx, endIdx).join('');
+        tbody.innerHTML = allRows.slice(startIdx, endIdx).join('') + (totalRowHtml || '');
         
         paginator.innerHTML = `
           <div class="text-sm text-muted">
-            Showing <strong>${startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
+            Showing <strong>${totalItems === 0 ? 0 : startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
           </div>
-          <div class="flex gap-2">
-            <button class="btn btn-secondary btn-xs prev-btn" ${currentPage === 1 ? 'disabled' : ''}>◀ Previous</button>
-            <span class="text-sm font-semibold flex items-center px-2">Page ${currentPage} of ${totalPages}</span>
-            <button class="btn btn-secondary btn-xs next-btn" ${currentPage === totalPages ? 'disabled' : ''}>Next ▶</button>
+          <div class="flex items-center gap-4">
+            <div class="flex items-center gap-1.5 text-xs text-muted">
+              <span>Per page:</span>
+              <div class="btn-group" style="display:inline-flex; border-radius:4px; overflow:hidden; border:1px solid var(--border);">
+                ${[50, 100, 250, 'ALL'].map(sz => `
+                  <button type="button" class="btn btn-xs ${itemsPerPage === sz ? 'btn-primary' : 'btn-ghost'} page-sz-btn" data-size="${sz}" style="padding:2px 8px; border:none; border-radius:0;">
+                    ${sz === 'ALL' ? 'All' : sz}
+                  </button>
+                `).join('')}
+              </div>
+            </div>
+            <div class="flex gap-2">
+              <button class="btn btn-secondary btn-xs prev-btn" ${currentPage === 1 ? 'disabled style="opacity:0.5; cursor:not-allowed;"' : ''}>◀ Previous</button>
+              <span class="text-sm font-semibold flex items-center px-2">Page ${currentPage} of ${totalPages}</span>
+              <button class="btn btn-secondary btn-xs next-btn" ${currentPage === totalPages ? 'disabled style="opacity:0.5; cursor:not-allowed;"' : ''}>Next ▶</button>
+            </div>
           </div>
         `;
         
-        paginator.querySelector('.prev-btn').onclick = () => {
-          currentPage--;
-          updateTable();
-        };
-        paginator.querySelector('.next-btn').onclick = () => {
-          currentPage++;
-          updateTable();
-        };
+        paginator.querySelector('.prev-btn')?.addEventListener('click', () => {
+          if (currentPage > 1) {
+            currentPage--;
+            updateTable();
+            table.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          }
+        });
+        paginator.querySelector('.next-btn')?.addEventListener('click', () => {
+          if (currentPage < totalPages) {
+            currentPage++;
+            updateTable();
+            table.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          }
+        });
+        paginator.querySelectorAll('.page-sz-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const sz = btn.getAttribute('data-size');
+            itemsPerPage = sz === 'ALL' ? 'ALL' : parseInt(sz, 10);
+            currentPage = 1;
+            updateTable();
+          });
+        });
       };
       
       updateTable();

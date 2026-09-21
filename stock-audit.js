@@ -19,6 +19,8 @@ const StockAuditModule = (() => {
 
   let rapidScanMode = false;
   let pinnedRackLocation = '';
+  let pinnedAuditingStage = 'auto'; // 'auto' | any stage key like 'store', 'visual', etc.
+  let cachedExpectedBatchesBySession = {}; // Cache expected batches per session to eliminate re-computation delay
 
   function toggleRapidScan(val) {
     rapidScanMode = Boolean(val);
@@ -28,6 +30,10 @@ const StockAuditModule = (() => {
 
   function updatePinnedRack(val) {
     pinnedRackLocation = String(val || '').trim();
+  }
+
+  function updateAuditingStage(val) {
+    pinnedAuditingStage = String(val || 'auto').trim();
   }
 
   // ── Audio Feedback Utility ─────────────────────────────────
@@ -155,22 +161,45 @@ const StockAuditModule = (() => {
   function getSessionMetrics(session) {
     if (!session) return { expectedBatches: 0, expectedQty: 0, verifiedBatches: 0, verifiedQty: 0, exactMatches: 0, varianceBatches: 0, stageMismatches: 0, missingBatches: 0, missingQty: 0, netVarianceQty: 0, netVarianceValue: 0, pctComplete: 0 };
 
-    // 1. Index StageRecords by batchId once to avoid millions of O(N*M) lookups
-    const allStageRecs = DB.StageRecords.all();
-    const stageRecsMap = {};
-    for (let i = 0; i < allStageRecs.length; i++) {
-      const r = allStageRecs[i];
-      if (r.batchId) {
-        if (!stageRecsMap[r.batchId]) stageRecsMap[r.batchId] = [];
-        stageRecsMap[r.batchId].push(r);
+    // Use cached expected batches & quantities for this session if available
+    let sessionCache = cachedExpectedBatchesBySession[session.id];
+    let stageRecsMap = null;
+
+    if (!sessionCache) {
+      // Index StageRecords by batchId once
+      const allStageRecs = DB.StageRecords.all();
+      stageRecsMap = {};
+      for (let i = 0; i < allStageRecs.length; i++) {
+        const r = allStageRecs[i];
+        if (r.batchId) {
+          if (!stageRecsMap[r.batchId]) stageRecsMap[r.batchId] = [];
+          stageRecsMap[r.batchId].push(r);
+        }
       }
+
+      const expectedBatches = getSessionExpectedBatches(session);
+      let expectedQty = 0;
+      const batchQtyMap = {};
+      for (let i = 0; i < expectedBatches.length; i++) {
+        const b = expectedBatches[i];
+        const qty = getBatchExpectedQty(b, stageRecsMap);
+        expectedQty += qty;
+        batchQtyMap[b.id] = qty;
+      }
+
+      sessionCache = {
+        expectedBatches,
+        expectedQty,
+        batchQtyMap,
+        stageRecsMap
+      };
+      cachedExpectedBatchesBySession[session.id] = sessionCache;
     }
 
-    const expectedBatches = getSessionExpectedBatches(session);
-    let expectedQty = 0;
-    for (let i = 0; i < expectedBatches.length; i++) {
-      expectedQty += getBatchExpectedQty(expectedBatches[i], stageRecsMap);
-    }
+    const expectedBatches = sessionCache.expectedBatches;
+    const expectedQty = sessionCache.expectedQty;
+    const batchQtyMap = sessionCache.batchQtyMap;
+    stageRecsMap = sessionCache.stageRecsMap;
 
     const records = DB.AuditRecords.bySession(session.id);
     const verifiedBatchIds = new Set(records.map(r => r.batchId).filter(Boolean));
@@ -204,7 +233,8 @@ const StockAuditModule = (() => {
     const missingBatches = missingList.length;
     let missingQty = 0;
     for (let i = 0; i < missingList.length; i++) {
-      missingQty += getBatchExpectedQty(missingList[i], stageRecsMap);
+      const mid = missingList[i].id;
+      missingQty += (batchQtyMap[mid] != null ? batchQtyMap[mid] : getBatchExpectedQty(missingList[i], stageRecsMap));
     }
 
     const totalTarget = expectedBatches.length || 1;
@@ -285,10 +315,10 @@ const StockAuditModule = (() => {
             <div style="margin-top:16px; padding-top:14px; border-top:1px solid var(--border);">
               <div class="flex items-center justify-between text-xs text-muted mb-1">
                 <span><strong>Scope:</strong> ${session.stageScope === 'all' ? '🏢 Full Factory & Store' : '🏭 ' + (STAGE_LABELS[session.stageScope] || session.stageScope)} | <strong>Auditor:</strong> ${session.auditorName || '—'} | <strong>Started:</strong> ${formatDate(session.startedAt)}</span>
-                <span class="font-bold text-blue">${metrics.verifiedBatches} of ${metrics.expectedBatches} Batches Verified (${metrics.pctComplete}%)</span>
+                <span class="font-bold text-blue" id="audit-progress-text">${metrics.verifiedBatches} of ${metrics.expectedBatches} Batches Verified (${metrics.pctComplete}%)</span>
               </div>
               <div style="width:100%; height:8px; background:var(--border); border-radius:4px; overflow:hidden;">
-                <div style="width:${metrics.pctComplete}%; height:100%; background:linear-gradient(90deg, var(--accent-blue), #10b981); border-radius:4px; transition:width 0.3s;"></div>
+                <div id="audit-progress-bar" style="width:${metrics.pctComplete}%; height:100%; background:linear-gradient(90deg, var(--accent-blue), #10b981); border-radius:4px; transition:width 0.3s;"></div>
               </div>
             </div>
           ` : ''}
@@ -306,34 +336,34 @@ const StockAuditModule = (() => {
           <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:14px;">
             <div class="card" style="padding:14px 18px; border-left:4px solid var(--accent-blue);">
               <div class="text-xs text-muted font-bold">TOTAL EXPECTED (BOOK)</div>
-              <div class="font-bold text-blue mt-1" style="font-size:22px;">${formatNum(metrics.expectedBatches)} <span class="text-xs text-muted font-normal">batches</span></div>
-              <div class="text-xs text-muted mt-1">${formatNum(metrics.expectedQty)} total pcs</div>
+              <div class="font-bold text-blue mt-1" style="font-size:22px;"><span id="audit-kpi-expected-batches">${formatNum(metrics.expectedBatches)}</span> <span class="text-xs text-muted font-normal">batches</span></div>
+              <div class="text-xs text-muted mt-1"><span id="audit-kpi-expected-qty">${formatNum(metrics.expectedQty)}</span> total pcs</div>
             </div>
 
             <div class="card" style="padding:14px 18px; border-left:4px solid #10b981;">
               <div class="text-xs text-muted font-bold">VERIFIED ON FLOOR</div>
-              <div class="font-bold text-success mt-1" style="font-size:22px;">${formatNum(metrics.verifiedBatches)} <span class="text-xs text-muted font-normal">batches</span></div>
-              <div class="text-xs text-muted mt-1">${formatNum(metrics.verifiedQty)} pcs counted (${metrics.pctComplete}%)</div>
+              <div class="font-bold text-success mt-1" style="font-size:22px;"><span id="audit-kpi-verified-batches">${formatNum(metrics.verifiedBatches)}</span> <span class="text-xs text-muted font-normal">batches</span></div>
+              <div class="text-xs text-muted mt-1" id="audit-kpi-verified-qty-sub">${formatNum(metrics.verifiedQty)} pcs counted (${metrics.pctComplete}%)</div>
             </div>
 
             <div class="card" style="padding:14px 18px; border-left:4px solid #f59e0b;">
               <div class="text-xs text-muted font-bold">COUNT VARIANCES</div>
-              <div class="font-bold text-amber mt-1" style="font-size:22px;">${formatNum(metrics.varianceBatches)} <span class="text-xs text-muted font-normal">batches</span></div>
-              <div class="text-xs ${metrics.netVarianceQty < 0 ? 'text-danger' : 'text-success'} mt-1 font-semibold">
+              <div class="font-bold text-amber mt-1" style="font-size:22px;"><span id="audit-kpi-variance-batches">${formatNum(metrics.varianceBatches)}</span> <span class="text-xs text-muted font-normal">batches</span></div>
+              <div class="text-xs ${metrics.netVarianceQty < 0 ? 'text-danger' : 'text-success'} mt-1 font-semibold" id="audit-kpi-variance-sub">
                 ${metrics.netVarianceQty >= 0 ? '+' : ''}${formatNum(metrics.netVarianceQty)} pcs (${metrics.netVarianceValue >= 0 ? '+' : ''}₹${formatNum(Math.round(metrics.netVarianceValue))})
               </div>
             </div>
 
             <div class="card" style="padding:14px 18px; border-left:4px solid #8b5cf6;">
               <div class="text-xs text-muted font-bold">STAGE MISMATCHES</div>
-              <div class="font-bold text-purple mt-1" style="font-size:22px;">${formatNum(metrics.stageMismatches)} <span class="text-xs text-muted font-normal">batches</span></div>
+              <div class="font-bold text-purple mt-1" style="font-size:22px;"><span id="audit-kpi-mismatch-batches">${formatNum(metrics.stageMismatches)}</span> <span class="text-xs text-muted font-normal">batches</span></div>
               <div class="text-xs text-muted mt-1">Found in different stage</div>
             </div>
 
             <div class="card" style="padding:14px 18px; border-left:4px solid #ef4444;">
               <div class="text-xs text-muted font-bold">MISSING / UNSCANNED</div>
-              <div class="font-bold text-danger mt-1" style="font-size:22px;">${formatNum(metrics.missingBatches)} <span class="text-xs text-muted font-normal">batches</span></div>
-              <div class="text-xs text-danger mt-1 font-semibold">${formatNum(metrics.missingQty)} pcs unverified</div>
+              <div class="font-bold text-danger mt-1" style="font-size:22px;"><span id="audit-kpi-missing-batches">${formatNum(metrics.missingBatches)}</span> <span class="text-xs text-muted font-normal">batches</span></div>
+              <div class="text-xs text-danger mt-1 font-semibold" id="audit-kpi-missing-qty-sub">${formatNum(metrics.missingQty)} pcs unverified</div>
             </div>
           </div>
 
@@ -344,10 +374,10 @@ const StockAuditModule = (() => {
                 📷 Barcode Scan &amp; Count
               </button>
               <button class="btn btn-ghost" style="border-radius:0; padding:12px 20px; font-weight:600; border-bottom:3px solid ${activeTab === 'verified' ? 'var(--accent-blue)' : 'transparent'}; color:${activeTab === 'verified' ? 'var(--accent-blue)' : 'var(--text-muted)'};" onclick="StockAuditModule.switchTab('verified')">
-                ✅ Verified Batches (${metrics.verifiedBatches})
+                ✅ Verified Batches (<span id="audit-tab-badge-verified">${metrics.verifiedBatches}</span>)
               </button>
               <button class="btn btn-ghost" style="border-radius:0; padding:12px 20px; font-weight:600; border-bottom:3px solid ${activeTab === 'missing' ? 'var(--accent-blue)' : 'transparent'}; color:${activeTab === 'missing' ? 'var(--accent-blue)' : 'var(--text-muted)'};" onclick="StockAuditModule.switchTab('missing')">
-                ❌ Missing / Unscanned (${metrics.missingBatches})
+                ❌ Missing / Unscanned (<span id="audit-tab-badge-missing">${metrics.missingBatches}</span>)
               </button>
               <button class="btn btn-ghost" style="border-radius:0; padding:12px 20px; font-weight:600; border-bottom:3px solid ${activeTab === 'sessions' ? 'var(--accent-blue)' : 'transparent'}; color:${activeTab === 'sessions' ? 'var(--accent-blue)' : 'var(--text-muted)'};" onclick="StockAuditModule.switchTab('sessions')">
                 📁 Session History (${allSessions.length})
@@ -434,18 +464,18 @@ const StockAuditModule = (() => {
 
           <div style="display:flex; gap:12px; flex-wrap:wrap; margin-top:12px; font-size:12px; color:var(--text-muted);">
             <div>💡 <strong>Auditing Stage:</strong> 
-              <select id="audit-floor-stage-lock" class="form-control form-control-sm" style="display:inline-block; width:auto; margin-left:4px;">
-                <option value="auto">⚡ Auto-detect registered stage</option>
-                <option value="store">Store</option>
-                <option value="waiting-visual">Waiting for Visual</option>
-                <option value="visual">Visual Inspection</option>
-                <option value="gauge">Gauge Inspection</option>
-                <option value="quality">Quality Final</option>
-                <option value="production">Production / Moulding</option>
-                <option value="cryogenic">Cryogenic</option>
-                <option value="deflashing">Flash Removal</option>
-                <option value="trimming">Trimming</option>
-                <option value="post-curing">Post Curing</option>
+              <select id="audit-floor-stage-lock" class="form-control form-control-sm" style="display:inline-block; width:auto; margin-left:4px;" onchange="StockAuditModule.updateAuditingStage(this.value)">
+                <option value="auto" ${pinnedAuditingStage === 'auto' ? 'selected' : ''}>⚡ Auto-detect registered stage</option>
+                <option value="store" ${pinnedAuditingStage === 'store' ? 'selected' : ''}>Store</option>
+                <option value="waiting-visual" ${pinnedAuditingStage === 'waiting-visual' ? 'selected' : ''}>Waiting for Visual</option>
+                <option value="visual" ${pinnedAuditingStage === 'visual' ? 'selected' : ''}>Visual Inspection</option>
+                <option value="gauge" ${pinnedAuditingStage === 'gauge' ? 'selected' : ''}>Gauge Inspection</option>
+                <option value="quality" ${pinnedAuditingStage === 'quality' ? 'selected' : ''}>Quality Final</option>
+                <option value="production" ${pinnedAuditingStage === 'production' ? 'selected' : ''}>Production / Moulding</option>
+                <option value="cryogenic" ${pinnedAuditingStage === 'cryogenic' ? 'selected' : ''}>Cryogenic</option>
+                <option value="deflashing" ${pinnedAuditingStage === 'deflashing' ? 'selected' : ''}>Flash Removal</option>
+                <option value="trimming" ${pinnedAuditingStage === 'trimming' ? 'selected' : ''}>Trimming</option>
+                <option value="post-curing" ${pinnedAuditingStage === 'post-curing' ? 'selected' : ''}>Post Curing</option>
               </select>
             </div>
           </div>
@@ -462,45 +492,122 @@ const StockAuditModule = (() => {
             <h4 class="font-bold" style="font-size:14px; color:var(--text-main); margin:0;">
               🕒 Recent Scans Stream (This Session)
             </h4>
-            <span class="text-xs text-muted">${records.length} Total Verified</span>
+            <span class="text-xs text-muted" id="audit-recent-scans-count">${records.length} Total Verified</span>
           </div>
 
-          ${recentScans.length === 0 ? `
-            <div class="empty-state" style="padding:28px; background:var(--card-bg); border:1px solid var(--border); border-radius:8px;">
-              <p class="text-sm text-muted">No batches scanned yet in this session. Scan a barcode above to begin verification.</p>
-            </div>
-          ` : `
-            <div style="display:flex; flex-direction:column; gap:8px;">
-              ${recentScans.map(r => {
-                let badgeCls = 'badge-green';
-                let statusText = 'Exact Match';
-                if (r.verificationStatus === 'verified_variance') {
-                  badgeCls = 'badge-amber';
-                  statusText = `${r.varianceQty >= 0 ? '+' : ''}${r.varianceQty} Variance`;
-                } else if (r.verificationStatus === 'stage_mismatch') {
-                  badgeCls = 'badge-purple';
-                  statusText = 'Stage Mismatch';
-                }
-
-                return `
-                  <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 14px; background:var(--card-bg); border:1px solid var(--border); border-radius:8px; font-size:13px;">
-                    <div>
-                      <div class="font-semibold text-blue">${r.batchNo}</div>
-                      <div class="text-xs text-muted">JMREF ${r.jmrefNo || '—'} | ${STAGE_LABELS[r.scannedStage] || r.scannedStage || '—'} ${r.rackLocation ? `(${r.rackLocation})` : ''}</div>
-                    </div>
-                    <div style="text-align:right;">
-                      <div><strong>${formatNum(r.countedQty)}</strong> pcs <span class="badge ${badgeCls}" style="font-size:10px;">${statusText}</span></div>
-                      <div class="text-xs text-muted">${formatDate(r.scannedAt)} by ${r.scannedBy || 'Auditor'}</div>
-                    </div>
-                  </div>
-                `;
-              }).join('')}
-            </div>
-          `}
+          <div id="audit-recent-scans-container">
+            ${recentScans.length === 0 ? `
+              <div class="empty-state" id="audit-recent-scans-empty" style="padding:28px; background:var(--card-bg); border:1px solid var(--border); border-radius:8px;">
+                <p class="text-sm text-muted">No batches scanned yet in this session. Scan a barcode above to begin verification.</p>
+              </div>
+            ` : `
+              <div id="audit-recent-scans-list" style="display:flex; flex-direction:column; gap:8px;">
+                ${recentScans.map(r => renderRecentScanItemHtml(r)).join('')}
+              </div>
+            `}
+          </div>
         </div>
 
       </div>
     `;
+  }
+
+  function renderRecentScanItemHtml(r) {
+    let badgeCls = 'badge-green';
+    let statusText = 'Exact Match';
+    if (r.verificationStatus === 'verified_variance') {
+      badgeCls = 'badge-amber';
+      statusText = `${r.varianceQty >= 0 ? '+' : ''}${r.varianceQty} Variance`;
+    } else if (r.verificationStatus === 'stage_mismatch') {
+      badgeCls = 'badge-purple';
+      statusText = 'Stage Mismatch';
+    }
+
+    return `
+      <div class="audit-scan-row animate-in" style="display:flex; justify-content:space-between; align-items:center; padding:10px 14px; background:var(--card-bg); border:1px solid var(--border); border-radius:8px; font-size:13px;">
+        <div>
+          <div class="font-semibold text-blue">${r.batchNo}</div>
+          <div class="text-xs text-muted">JMREF ${r.jmrefNo || '—'} | ${STAGE_LABELS[r.scannedStage] || r.scannedStage || '—'} ${r.rackLocation ? `(${r.rackLocation})` : ''}</div>
+        </div>
+        <div style="text-align:right;">
+          <div><strong>${formatNum(r.countedQty)}</strong> pcs <span class="badge ${badgeCls}" style="font-size:10px;">${statusText}</span></div>
+          <div class="text-xs text-muted">${formatDate(r.scannedAt)} by ${r.scannedBy || 'Auditor'}</div>
+        </div>
+      </div>
+    `;
+  }
+
+  function updateScannerDomFast(session, matchedBatch, recordObj) {
+    // 1. Update Last Scanned Preview Card immediately
+    const lastScanBox = document.getElementById('audit-last-scan-container');
+    if (lastScanBox) {
+      lastScanBox.innerHTML = renderLastScannedCard();
+    }
+
+    // 2. Prepend scan item to Recent Scans Stream immediately
+    const emptyState = document.getElementById('audit-recent-scans-empty');
+    if (emptyState) emptyState.remove();
+
+    const streamContainer = document.getElementById('audit-recent-scans-container');
+    let streamList = document.getElementById('audit-recent-scans-list');
+    if (!streamList && streamContainer) {
+      streamContainer.innerHTML = `<div id="audit-recent-scans-list" style="display:flex; flex-direction:column; gap:8px;"></div>`;
+      streamList = document.getElementById('audit-recent-scans-list');
+    }
+
+    if (streamList) {
+      const itemHtml = renderRecentScanItemHtml(recordObj);
+      streamList.insertAdjacentHTML('afterbegin', itemHtml);
+
+      // Keep stream at a reasonable max limit (e.g. 8 items)
+      while (streamList.children.length > 8) {
+        streamList.removeChild(streamList.lastElementChild);
+      }
+    }
+
+    // 3. Fast KPI & Badge update
+    const records = DB.AuditRecords.bySession(session.id);
+    const countBadge = document.getElementById('audit-recent-scans-count');
+    if (countBadge) countBadge.textContent = `${records.length} Total Verified`;
+
+    const tabBadgeVerified = document.getElementById('audit-tab-badge-verified');
+    if (tabBadgeVerified) tabBadgeVerified.textContent = records.length;
+
+    // Recalculate metrics using session cache (takes <1ms)
+    const metrics = getSessionMetrics(session);
+
+    const kpiVerifiedBatches = document.getElementById('audit-kpi-verified-batches');
+    if (kpiVerifiedBatches) kpiVerifiedBatches.textContent = formatNum(metrics.verifiedBatches);
+
+    const kpiVerifiedQtySub = document.getElementById('audit-kpi-verified-qty-sub');
+    if (kpiVerifiedQtySub) kpiVerifiedQtySub.textContent = `${formatNum(metrics.verifiedQty)} pcs counted (${metrics.pctComplete}%)`;
+
+    const kpiVarianceBatches = document.getElementById('audit-kpi-variance-batches');
+    if (kpiVarianceBatches) kpiVarianceBatches.textContent = formatNum(metrics.varianceBatches);
+
+    const kpiVarianceSub = document.getElementById('audit-kpi-variance-sub');
+    if (kpiVarianceSub) {
+      kpiVarianceSub.className = `text-xs ${metrics.netVarianceQty < 0 ? 'text-danger' : 'text-success'} mt-1 font-semibold`;
+      kpiVarianceSub.textContent = `${metrics.netVarianceQty >= 0 ? '+' : ''}${formatNum(metrics.netVarianceQty)} pcs (${metrics.netVarianceValue >= 0 ? '+' : ''}₹${formatNum(Math.round(metrics.netVarianceValue))})`;
+    }
+
+    const kpiMismatchBatches = document.getElementById('audit-kpi-mismatch-batches');
+    if (kpiMismatchBatches) kpiMismatchBatches.textContent = formatNum(metrics.stageMismatches);
+
+    const kpiMissingBatches = document.getElementById('audit-kpi-missing-batches');
+    if (kpiMissingBatches) kpiMissingBatches.textContent = formatNum(metrics.missingBatches);
+
+    const kpiMissingQtySub = document.getElementById('audit-kpi-missing-qty-sub');
+    if (kpiMissingQtySub) kpiMissingQtySub.textContent = `${formatNum(metrics.missingQty)} pcs unverified`;
+
+    const tabBadgeMissing = document.getElementById('audit-tab-badge-missing');
+    if (tabBadgeMissing) tabBadgeMissing.textContent = metrics.missingBatches;
+
+    const progressText = document.getElementById('audit-progress-text');
+    if (progressText) progressText.textContent = `${metrics.verifiedBatches} of ${metrics.expectedBatches} Batches Verified (${metrics.pctComplete}%)`;
+
+    const progressBar = document.getElementById('audit-progress-bar');
+    if (progressBar) progressBar.style.width = `${metrics.pctComplete}%`;
   }
 
   function renderLastScannedCard() {
@@ -1069,15 +1176,20 @@ const StockAuditModule = (() => {
       return;
     }
 
-    // Check if user locked floor stage
-    const floorStageLock = document.getElementById('audit-floor-stage-lock')?.value;
-    const defaultScannedStage = (floorStageLock && floorStageLock !== 'auto') ? floorStageLock : (matchedBatch.currentStage || 'store');
+    // Determine floor stage
+    const floorStageLock = document.getElementById('audit-floor-stage-lock')?.value || pinnedAuditingStage;
+    if (floorStageLock && floorStageLock !== 'auto') {
+      pinnedAuditingStage = floorStageLock;
+    }
+    const defaultScannedStage = (pinnedAuditingStage && pinnedAuditingStage !== 'auto') ? pinnedAuditingStage : (matchedBatch.currentStage || 'store');
     const expectedStage = matchedBatch.currentStage || 'store';
     const expectedQty = getBatchExpectedQty(matchedBatch);
     const rackLoc = (document.getElementById('audit-pinned-rack-input')?.value || pinnedRackLocation || matchedBatch.rackLocation || '').trim();
 
-    // ⚡ RAPID SCAN MODE: Auto-Verify Exact Matches without popup modal
-    if (rapidScanMode && defaultScannedStage === expectedStage) {
+    // ⚡ RAPID SCAN MODE: Auto-Verify without popup modal
+    if (rapidScanMode) {
+      const isExactStage = (defaultScannedStage === expectedStage);
+      const verificationStatus = isExactStage ? 'verified_match' : 'stage_mismatch';
       const existingRec = DB.AuditRecords.bySession(session.id).find(r => r.batchId === matchedBatch.id);
       const auditorName = (Auth.getSession() || {}).name || 'Auditor';
 
@@ -1090,7 +1202,7 @@ const StockAuditModule = (() => {
           expectedQty,
           countedQty: expectedQty,
           varianceQty: 0,
-          verificationStatus: 'verified_match',
+          verificationStatus,
           rackLocation: rackLoc,
           scannedBy: auditorName,
           scannedAt: new Date().toISOString()
@@ -1108,7 +1220,7 @@ const StockAuditModule = (() => {
           expectedQty,
           countedQty: expectedQty,
           varianceQty: 0,
-          verificationStatus: 'verified_match',
+          verificationStatus,
           rackLocation: rackLoc,
           scannedBy: auditorName,
           scannedAt: new Date().toISOString()
@@ -1116,15 +1228,21 @@ const StockAuditModule = (() => {
         DB.AuditRecords.insert(recordObj);
       }
 
-      playAudioTone('success');
-      showToast(`⚡ Rapid Verified: ${matchedBatch.batchNo} (Exact Match — ${formatNum(expectedQty)} pcs)`, 'success');
+      if (isExactStage) {
+        playAudioTone('success');
+        showToast(`⚡ Rapid Verified: ${matchedBatch.batchNo} (Exact Match — ${formatNum(expectedQty)} pcs in ${STAGE_LABELS[defaultScannedStage] || defaultScannedStage})`, 'success');
+      } else {
+        playAudioTone('warning');
+        showToast(`⚡ Rapid Recorded: ${matchedBatch.batchNo} (Stage Mismatch: found in ${STAGE_LABELS[defaultScannedStage] || defaultScannedStage}, registered in ${STAGE_LABELS[expectedStage] || expectedStage})`, 'warning');
+      }
 
       lastScannedBatch = {
         batch: matchedBatch,
         record: recordObj
       };
 
-      render();
+      // Instant sub-millisecond targeted DOM update (no delay, no page flickering)
+      updateScannerDomFast(session, matchedBatch, recordObj);
       return;
     }
 
@@ -1579,6 +1697,7 @@ const StockAuditModule = (() => {
     exportAuditExcel,
     toggleRapidScan,
     updatePinnedRack,
+    updateAuditingStage,
     changePageVerified: (page) => { verifiedCurrentPage = page; render(); },
     changePageMissing: (page) => { missingCurrentPage = page; render(); }
   };

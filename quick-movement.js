@@ -411,11 +411,31 @@ const QuickMovementModule = (() => {
       notes: notes || `Quick Movement to ${STAGE_LABELS[_nextStage] || _nextStage}`
     });
 
-    // Update Batch current stage
-    DB.Batches.update(b.id, {
-      currentStage: _nextStage,
-      vendorId: vendorId || b.vendorId || ''
-    });
+    // Update Batch current stage and handle Store completion
+    if (_nextStage === 'store') {
+      DB.StageRecords.insert({
+        batchId: b.id,
+        stage: 'store',
+        inputQty: outVal,
+        outputQty: 0,
+        lossQty: 0,
+        movedFrom: b.currentStage,
+        date: dateStr,
+        recordedBy: session?.userId || 'unknown'
+      });
+      DB.Batches.update(b.id, {
+        status: 'completed',
+        currentStage: 'store',
+        completedAt: new Date().toISOString(),
+        remainingQty: outVal,
+        vendorId: null
+      });
+    } else {
+      DB.Batches.update(b.id, {
+        currentStage: _nextStage,
+        vendorId: vendorId || b.vendorId || ''
+      });
+    }
 
     // Track loss in LossTracker if loss > 0
     if (lossQty > 0) {

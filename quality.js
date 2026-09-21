@@ -20,6 +20,26 @@ const QualityModule = (() => {
     return false;
   }
 
+  function isMovedToStore(b) {
+    if (!b) return false;
+    if (b.currentStage === 'store' || b.status === 'completed') return true;
+    const recs = DB.StageRecords.byBatch(b.id);
+    if (recs && recs.some(r => r.stage === 'store' || (r.stage === 'quality' && r.movedTo === 'store'))) {
+      try {
+        const storeRec = recs.find(r => r.stage === 'store') || recs.find(r => r.stage === 'quality' && r.movedTo === 'store');
+        const passedQty = storeRec ? (storeRec.outputQty || storeRec.inputQty || b.initialQty || 0) : (b.initialQty || 0);
+        DB.Batches.update(b.id, {
+          status: 'completed',
+          currentStage: 'store',
+          completedAt: storeRec && storeRec.date ? storeRec.date : (b.updatedAt || new Date().toISOString()),
+          remainingQty: passedQty
+        });
+      } catch(e) {}
+      return true;
+    }
+    return false;
+  }
+
   function getInputQty(batchId) {
     const recs = DB.StageRecords.byBatch(batchId).filter(r => r.movedTo === 'quality');
     const batch = DB.Batches.find(batchId) || {};
@@ -33,7 +53,7 @@ const QualityModule = (() => {
     currentPage = 1;
     pendingSearch = '';
     const el = document.getElementById('content');
-    const batches = DB.Batches.byStage('quality').filter(b => !isStkAdjBatch(b));
+    const batches = DB.Batches.byStage('quality').filter(b => !isStkAdjBatch(b) && !isMovedToStore(b));
     const thisMonth = new Date().toISOString().slice(0,7);
     const allBatchesList = (DB.Batches.allIncludeArchived ? DB.Batches.allIncludeArchived() : DB.Batches.all()).filter(b => !isStkAdjBatch(b));
 
@@ -514,7 +534,7 @@ const QualityModule = (() => {
       DB.StageRecords.insert({ batchId, stage:'quality', inputQty:_passInputQty, outputQty, lossQty, movedTo:'store', movedFrom:'quality', date:dateStr, recordedBy:session&&session.userId, notes:document.getElementById('qf-pass-notes').value });
       if (lossQty > 0) DB.LossTracker.insert({ batchId, stage:'quality', lossQty, date:dateStr, jmrefNo:batch&&batch.jmrefNo, partNo:batch&&batch.partNo });
       DB.StageRecords.insert({ batchId, stage:'store', inputQty:outputQty, outputQty:0, lossQty:0, movedFrom:'quality', date:dateStr, recordedBy:session&&session.userId });
-      DB.Batches.update(batchId, { status:'completed', currentStage:'store', completedAt:nowStr, initialQty: outputQty });
+      DB.Batches.update(batchId, { status:'completed', currentStage:'store', completedAt:nowStr, remainingQty: outputQty });
       document.getElementById('qf-pass-modal').classList.add('hidden');
       showToast('Batch passed to Store! Batch completed.', 'success');
       App.navigate(App.current);
