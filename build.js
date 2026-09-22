@@ -14,6 +14,7 @@ const filesToCopy = [
   'logo.png',
   'db.js',
   'auth.js',
+  'html5-qrcode.min.js',
   'scanner.js',
   'app.js',
   'admin.js',
