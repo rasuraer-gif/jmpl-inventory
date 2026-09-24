@@ -1462,10 +1462,12 @@ const StockModule = (() => {
         const typeCode = productionType === 'subcontractor' ? 'S' : 'I';
         batchNo = `${rowJmref}-${rowTrNo}-${dayStr}-${shiftCode}-${typeCode}-${pressNo}`;
 
-        // Check if Batch No exists
-        const exists = existingBatches.some(b => b.batchNo === batchNo) || parsedBatchUploads.some(b => b.batchNo === batchNo);
+        // Strict Thumb Rule: Check if Batch No already exists
+        const cleanNo = String(batchNo).trim().toUpperCase();
+        const exists = existingBatches.some(b => b && b.batchNo && b.batchNo.trim().toUpperCase() === cleanNo) || 
+                       parsedBatchUploads.some(b => b && b.batchNo && b.batchNo.trim().toUpperCase() === cleanNo);
         if (exists) {
-          errors.push(`Batch No "${batchNo}" already exists in Database or current upload list`);
+          errors.push(`Duplicate Batch Not Allowed: Batch No "${batchNo}" already exists in Database or current upload list`);
         }
       }
 

@@ -50,7 +50,33 @@ const DB = (() => {
     }
   }
 
-  // Auto-Reconnection & Health Management
+  function isOnline() {
+    if (localStorage.getItem('jmpl_db_is_local_backup') === 'true') {
+      return true; // Allow offline local backup mode
+    }
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      return false;
+    }
+    if (!_connectionHealthy) {
+      return false;
+    }
+    if (isInitialized && !db) {
+      return false;
+    }
+    return true;
+  }
+
+  function assertOnline(actionName = 'perform operation') {
+    if (!isOnline()) {
+      const msg = `Cloud Connection Required: Cannot ${actionName} while offline or reconnecting. All mutations require an active cloud connection.`;
+      if (typeof showToast === 'function') {
+        showToast(msg, 'error');
+      }
+      scheduleReconnect(false);
+      throw new Error(msg);
+    }
+  }
+
   async function reconnect(silent = false) {
     if (!db || _isReconnecting) return;
     _isReconnecting = true;
@@ -208,7 +234,7 @@ const DB = (() => {
         if (b.internalBatchNo != null) {
           batchesByNoIndex.set(String(b.internalBatchNo).trim(), b);
         }
-        if (b.status === 'active' && !isRec) {
+        if (b.status === 'active' && !isRec && !b.isArchived) {
           activeBatchesMap.set(b.id, b);
           if (b.currentStage) {
             let stageList = batchesByStageIndex.get(b.currentStage);
@@ -1036,6 +1062,10 @@ const DB = (() => {
           delete payload.id;
         }
       }
+      if (payload && payload.id) {
+        payload = sanitizeFirestoreDoc({ ...payload });
+        delete payload.id;
+      }
       return db.collection(table).doc(id).set(payload, { merge: true });
     };
 
@@ -1048,7 +1078,7 @@ const DB = (() => {
 
     const timeoutPromise = new Promise((_, reject) => {
       setTimeout(() => {
-        if (!opFinished) reject(new Error('Cloud sync timeout'));
+        if (!opFinished) reject(new Error('Cloud sync timeout (7s)'));
       }, 7000);
     });
 
@@ -1068,13 +1098,16 @@ const DB = (() => {
         _connectionHealthy = false;
         triggerSyncStateChange(table, false);
         if (typeof showToast === 'function') {
-          showToast(`Cloud sync delayed for ${table}. Check connection.`, 'warning');
+          showToast(`Cloud write failed for ${table}: ${retryErr.message || 'Connection lost'}`, 'error');
         }
+        throw retryErr;
       });
     });
   }
 
   function insert(table, record) {
+    assertOnline('insert into ' + table);
+
     const id = record.id || genId();
     const row = { 
       ...record, 
@@ -1091,20 +1124,36 @@ const DB = (() => {
     // Notify local data change listeners immediately
     triggerDataChange(table);
 
-    // Save to Firestore asynchronously with timeout & retry guard
+    // Save to Firestore asynchronously with rollback on failure
     if (db) {
       const docData = sanitizeFirestoreDoc({ ...row });
       delete docData.id;
-      syncDocToCloud(table, id, docData, 'set');
+      row._syncPromise = syncDocToCloud(table, id, docData, 'set').catch(err => {
+        console.error(`[DB] Cloud insert failed for ${table}/${id}. Rolling back local cache:`, err);
+        const idx = cache[table].findIndex(r => r.id === id);
+        if (idx !== -1) {
+          cache[table].splice(idx, 1);
+          rebuildIndexesForTable(table);
+          saveLocal(table);
+          triggerDataChange(table);
+        }
+        if (typeof showToast === 'function') {
+          showToast(`Cloud write failed. Reverted entry in ${table}.`, 'error');
+        }
+        throw err;
+      });
     }
 
     return row;
   }
 
   function update(table, id, changes) {
+    assertOnline('update ' + table);
+
     const index = cache[table].findIndex(r => r.id === id);
     if (index === -1) return null;
 
+    const previousRow = { ...cache[table][index] };
     const updatedRow = { 
       ...cache[table][index], 
       ...changes, 
@@ -1119,17 +1168,33 @@ const DB = (() => {
     // Notify local data change listeners immediately
     triggerDataChange(table);
 
-    // Save to Firestore asynchronously with timeout & retry guard
+    // Save to Firestore asynchronously with rollback on failure
     if (db) {
       const docData = sanitizeFirestoreDoc({ ...updatedRow });
       delete docData.id;
-      syncDocToCloud(table, id, docData, 'set');
+      updatedRow._syncPromise = syncDocToCloud(table, id, docData, 'set').catch(err => {
+        console.error(`[DB] Cloud update failed for ${table}/${id}. Rolling back local cache:`, err);
+        const curIdx = cache[table].findIndex(r => r.id === id);
+        if (curIdx !== -1) {
+          cache[table][curIdx] = previousRow;
+          rebuildIndexesForTable(table);
+          saveLocal(table);
+          triggerDataChange(table);
+        }
+        if (typeof showToast === 'function') {
+          showToast(`Cloud update failed. Reverted changes in ${table}.`, 'error');
+        }
+        throw err;
+      });
     }
 
     return updatedRow;
   }
 
   function remove(table, id) {
+    assertOnline('delete from ' + table);
+
+    const prevItem = cache[table].find(r => r.id === id);
     // Update local cache & store
     cache[table] = cache[table].filter(r => r.id !== id);
     rebuildIndexesForTable(table);
@@ -1138,10 +1203,93 @@ const DB = (() => {
     // Notify local data change listeners immediately
     triggerDataChange(table);
 
-    // Remove from Firestore asynchronously with timeout & retry guard
+    // Remove from Firestore asynchronously with rollback on failure
     if (db) {
-      syncDocToCloud(table, id, null, 'delete');
+      syncDocToCloud(table, id, null, 'delete').catch(err => {
+        console.error(`[DB] Cloud delete failed for ${table}/${id}. Restoring local record:`, err);
+        if (prevItem) {
+          cache[table].push(prevItem);
+          rebuildIndexesForTable(table);
+          saveLocal(table);
+          triggerDataChange(table);
+        }
+        if (typeof showToast === 'function') {
+          showToast(`Cloud delete failed. Restored record in ${table}.`, 'error');
+        }
+      });
     }
+  }
+
+  async function insertAsync(table, record) {
+    assertOnline('insert into ' + table);
+
+    const id = record.id || genId();
+    const row = { 
+      ...record, 
+      id, 
+      createdAt: record.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString() 
+    };
+
+    // Await cloud commit first!
+    if (db) {
+      const docData = sanitizeFirestoreDoc({ ...row });
+      delete docData.id;
+      await syncDocToCloud(table, id, docData, 'set');
+    }
+
+    // Now commit to local cache
+    const existingIdx = cache[table].findIndex(r => r.id === id);
+    if (existingIdx >= 0) {
+      cache[table][existingIdx] = row;
+    } else {
+      cache[table].push(row);
+    }
+    rebuildIndexesForTable(table);
+    saveLocal(table);
+    triggerDataChange(table);
+
+    return row;
+  }
+
+  async function updateAsync(table, id, changes) {
+    assertOnline('update ' + table);
+
+    const index = cache[table].findIndex(r => r.id === id);
+    if (index === -1) return null;
+
+    const updatedRow = { 
+      ...cache[table][index], 
+      ...changes, 
+      updatedAt: new Date().toISOString() 
+    };
+
+    // Await cloud commit first!
+    if (db) {
+      const docData = sanitizeFirestoreDoc({ ...updatedRow });
+      delete docData.id;
+      await syncDocToCloud(table, id, docData, 'set');
+    }
+
+    cache[table][index] = updatedRow;
+    rebuildIndexesForTable(table);
+    saveLocal(table);
+    triggerDataChange(table);
+
+    return updatedRow;
+  }
+
+  async function removeAsync(table, id) {
+    assertOnline('delete from ' + table);
+
+    if (db) {
+      await syncDocToCloud(table, id, null, 'delete');
+    }
+
+    cache[table] = cache[table].filter(r => r.id !== id);
+    rebuildIndexesForTable(table);
+    saveLocal(table);
+    triggerDataChange(table);
   }
 
   function clearTable(table) {
@@ -1507,15 +1655,46 @@ const DB = (() => {
     byStage: (stage) => {
       const list = batchesByStageIndex.get(stage);
       if (list) return [...list];
-      return getAll('batches').filter(r => r.currentStage === stage && r.status === 'active' && !(r.batchNo && (r.batchNo.includes('-REC-') || r.batchNo.includes('REC'))));
+      return getAll('batches').filter(r => r.currentStage === stage && r.status === 'active' && !r.isArchived && !(r.batchNo && (r.batchNo.includes('-REC-') || r.batchNo.includes('REC'))));
     },
     byStatus: (status) => getAll('batches').filter(r => r.status === status && !(r.batchNo && (r.batchNo.includes('-REC-') || r.batchNo.includes('REC')))),
+
+    exists: (batchNo) => {
+      if (!batchNo) return false;
+      const clean = String(batchNo).trim().toUpperCase();
+      return getAll('batches').some(b => b && b.batchNo && b.batchNo.trim().toUpperCase() === clean);
+    },
+    existsInCloud: async (batchNo) => {
+      if (!batchNo) return false;
+      const clean = String(batchNo).trim().toUpperCase();
+      if (Batches.exists(clean)) return true;
+      if (db) {
+        try {
+          const remote = await Batches.fetchRemoteByNo(clean);
+          if (remote) return true;
+        } catch(e) {}
+      }
+      return false;
+    },
 
     insert: (r) => {
       let batchNo = r.batchNo;
       if (!batchNo) {
         batchNo = Batches.nextBatchNo();
       }
+      batchNo = String(batchNo).trim();
+
+      // STRICT THUMB RULE: Duplicate Batch numbers are not allowed under any circumstances
+      const cleanUpper = batchNo.toUpperCase();
+      const existing = getAll('batches').find(b => b && b.batchNo && b.batchNo.trim().toUpperCase() === cleanUpper);
+      if (existing) {
+        const stageLabel = existing.currentStage || existing.stage || 'unknown';
+        const errMsg = `Duplicate Batch Not Allowed: Batch No "${batchNo}" already exists in the system (Stage: ${stageLabel}, Status: ${existing.status})!`;
+        if (typeof showToast === 'function') showToast(errMsg, 'error');
+        console.error('[DB] Blocked duplicate batch creation:', batchNo, existing);
+        throw new Error(errMsg);
+      }
+
       let internalBatchNo = r.internalBatchNo;
       if (internalBatchNo == null) {
         internalBatchNo = Batches.nextInternalBatchNo();
@@ -1561,6 +1740,80 @@ const DB = (() => {
       
       return update('batches', id, fields);
     },
+    insertAsync: async (r) => {
+      let batchNo = r.batchNo;
+      if (!batchNo) {
+        batchNo = Batches.nextBatchNo();
+      }
+      batchNo = String(batchNo).trim();
+
+      // STRICT THUMB RULE: Duplicate Batch numbers are not allowed under any circumstances
+      const cleanUpper = batchNo.toUpperCase();
+      const existing = getAll('batches').find(b => b && b.batchNo && b.batchNo.trim().toUpperCase() === cleanUpper);
+      if (existing) {
+        const stageLabel = existing.currentStage || existing.stage || 'unknown';
+        const errMsg = `Duplicate Batch Not Allowed: Batch No "${batchNo}" already exists in the system (Stage: ${stageLabel}, Status: ${existing.status})!`;
+        if (typeof showToast === 'function') showToast(errMsg, 'error');
+        throw new Error(errMsg);
+      }
+
+      // Check directly in cloud Firestore before committing
+      if (db) {
+        const cloudExists = await Batches.existsInCloud(batchNo);
+        if (cloudExists) {
+          const errMsg = `Duplicate Batch Not Allowed: Batch No "${batchNo}" already exists in cloud database!`;
+          if (typeof showToast === 'function') showToast(errMsg, 'error');
+          throw new Error(errMsg);
+        }
+      }
+
+      let internalBatchNo = r.internalBatchNo;
+      if (internalBatchNo == null) {
+        internalBatchNo = Batches.nextInternalBatchNo();
+      }
+      const initialQty = Number(r.initialQty) || 0;
+      const status = r.status || 'active';
+      const isArchived = status === 'rejected' || (status === 'completed' && initialQty === 0);
+      return await insertAsync('batches', { 
+        ...r, 
+        batchNo, 
+        internalBatchNo, 
+        isArchived, 
+        remainingQty: initialQty 
+      });
+    },
+    updateAsync: async (id, c) => {
+      const fields = { ...c };
+      const currentBatch = findById('batches', id) || {};
+      
+      // If updating initialQty, keep remainingQty in sync
+      if (fields.initialQty !== undefined) {
+        fields.remainingQty = Number(fields.initialQty) || 0;
+      }
+      
+      const checkStage = fields.currentStage !== undefined ? fields.currentStage : currentBatch.currentStage;
+      const INTERNAL_STAGES = ['post-curing', 'waiting-visual', 'visual', 'gauge', 'quality', 'store'];
+      if (INTERNAL_STAGES.includes(checkStage)) {
+        fields.vendorId = null;
+      }
+
+      const checkStatus = fields.status !== undefined ? fields.status : currentBatch.status;
+      const checkRemaining = fields.remainingQty !== undefined ? fields.remainingQty : (currentBatch.remainingQty !== undefined ? currentBatch.remainingQty : currentBatch.initialQty || 0);
+      
+      if (checkStatus === 'rejected') {
+        fields.isArchived = true;
+      } else if (checkStatus === 'completed' && checkRemaining === 0) {
+        fields.isArchived = true;
+      } else if (checkStatus === 'completed' && checkRemaining > 0) {
+        fields.isArchived = false;
+      } else if (checkStatus === 'active') {
+        fields.isArchived = false;
+      }
+      
+      return await updateAsync('batches', id, fields);
+    },
+    remove: (id) => remove('batches', id),
+    removeAsync: (id) => removeAsync('batches', id),
     fetchByDateRange: async (from, to) => {
       if (!db) return;
       // If no date range, default to last 30 days
@@ -1710,7 +1963,11 @@ const DB = (() => {
       return bList.filter(r => r.stage === stage);
     },
     insert: (r) => insert('stageRecords', r),
+    insertAsync: (r) => insertAsync('stageRecords', r),
     update: (id, c) => update('stageRecords', id, c),
+    updateAsync: (id, c) => updateAsync('stageRecords', id, c),
+    remove: (id) => remove('stageRecords', id),
+    removeAsync: (id) => removeAsync('stageRecords', id),
   };
 
   // ── LOSS TRACKER ──────────────────────────────────────────
@@ -1719,7 +1976,11 @@ const DB = (() => {
     byStage: (stage) => getAll('lossTracker').filter(r => r.stage === stage),
     byBatch: (batchId) => getAll('lossTracker').filter(r => r.batchId === batchId),
     insert: (r) => insert('lossTracker', r),
+    insertAsync: (r) => insertAsync('lossTracker', r),
     update: (id, c) => update('lossTracker', id, c),
+    updateAsync: (id, c) => updateAsync('lossTracker', id, c),
+    remove: (id) => remove('lossTracker', id),
+    removeAsync: (id) => removeAsync('lossTracker', id),
     sumByStageAndDate: (stage, from, to) => {
       return getAll('lossTracker')
         .filter(r => r.stage === stage && (!from || r.date >= from) && (!to || r.date <= to));
@@ -1731,6 +1992,9 @@ const DB = (() => {
     all: () => getAll('rejectionTracker'),
     byBatch: (batchId) => getAll('rejectionTracker').filter(r => r.batchId === batchId),
     insert: (r) => insert('rejectionTracker', r),
+    insertAsync: (r) => insertAsync('rejectionTracker', r),
+    remove: (id) => remove('rejectionTracker', id),
+    removeAsync: (id) => removeAsync('rejectionTracker', id),
   };
 
   // ── RECHECK TRACKER ───────────────────────────────────────
@@ -1738,7 +2002,11 @@ const DB = (() => {
     all: () => getAll('recheckTracker'),
     byBatch: (batchId) => getAll('recheckTracker').filter(r => r.batchId === batchId),
     insert: (r) => insert('recheckTracker', r),
+    insertAsync: (r) => insertAsync('recheckTracker', r),
     update: (id, c) => update('recheckTracker', id, c),
+    updateAsync: (id, c) => updateAsync('recheckTracker', id, c),
+    remove: (id) => remove('recheckTracker', id),
+    removeAsync: (id) => removeAsync('recheckTracker', id),
     nextIterationNo: (batchId) => {
       const rechecks = getAll('recheckTracker').filter(r => r.batchId === batchId);
       return rechecks.length + 1;
@@ -2129,7 +2397,11 @@ const DB = (() => {
     byBatch: (batchId) => getAll('productionRecords').filter(r => r.batchId === batchId),
     byOperator: (operatorId) => getAll('productionRecords').filter(r => r.operatorId === operatorId),
     insert: (r) => insert('productionRecords', r),
+    insertAsync: (r) => insertAsync('productionRecords', r),
     update: (id, c) => update('productionRecords', id, c),
+    updateAsync: (id, c) => updateAsync('productionRecords', id, c),
+    remove: (id) => remove('productionRecords', id),
+    removeAsync: (id) => removeAsync('productionRecords', id),
   };
 
   // ── MOULDS ────────────────────────────────────────────────
@@ -2193,8 +2465,11 @@ const DB = (() => {
     all: () => getAll('deliveryChallans'),
     find: (id) => findById('deliveryChallans', id),
     insert: (r) => insert('deliveryChallans', r),
+    insertAsync: (r) => insertAsync('deliveryChallans', r),
     update: (id, c) => update('deliveryChallans', id, c),
-    remove: (id) => remove('deliveryChallans', id)
+    updateAsync: (id, c) => updateAsync('deliveryChallans', id, c),
+    remove: (id) => remove('deliveryChallans', id),
+    removeAsync: (id) => removeAsync('deliveryChallans', id)
   };
 
   const AuditLogs = {
@@ -2461,12 +2736,13 @@ const DB = (() => {
   }
 
   return {
-    initLocal, init, reconnect, isConnected: () => _connectionHealthy, onSyncStateChange, onDataChange, genId, seedDefaults, clearTable,
+    initLocal, init, reconnect, isConnected: () => _connectionHealthy, isOnline, assertOnline, onSyncStateChange, onDataChange, genId, seedDefaults, clearTable,
+    insertAsync, updateAsync, removeAsync,
     Users, Master, Subcontractors, Vendors, Operators, Inspectors,
     Batches, StageRecords, LossTracker, RejectionTracker,
     RecheckTracker, StockUploads, Sales, StoreInventory,
     ProductionRecords, MonthlyPlans, ProductionSchedules,
     Moulds, MouldMovements, MouldMaintenance, Tasks, AuditSessions, AuditRecords, DeliveryChallans, PrintHistory, AuditLogs, exportBackupJSON, importBackupJSON, restoreToOnlineDB, reconcileStockBulk,
-    raw: { getAll, setAll, insert, update, remove, findById, findWhere }
+    raw: { getAll, setAll, insert, update, remove, insertAsync, updateAsync, removeAsync, findById, findWhere }
   };
 })();

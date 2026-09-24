@@ -41,6 +41,7 @@ const filesToCopy = [
   'ai-agent.js',
   'stock-audit.js',
   'delivery-challan.js',
+  'quick-movement.js',
   'xlsx.full.min.js',
   'jmpl_industrial_banner.jpg'
 ];

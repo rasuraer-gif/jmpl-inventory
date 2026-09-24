@@ -1,5 +1,7 @@
 // ============================================================
-// scanner.js — Reusable QR Code Camera Scanner Module
+// scanner.js — High-Performance QR Code Camera Scanner Module
+// Features: Hardware BarcodeDetector Turbo Engine, QR-Only Filtering,
+// Continuous Autofocus, 720p Stream, and Instant Startup
 // ============================================================
 const Scanner = (() => {
   let html5QrcodeScanner = null;
@@ -14,6 +16,48 @@ const Scanner = (() => {
   let _availableCameras = [];
   let _currentCameraIndex = 0;
   let _torchActive = false;
+  let _turboActive = false;
+  let _turboDetector = null;
+
+  // Inject sleek laser & reticle styles once
+  function ensureScannerStyles() {
+    if (document.getElementById('scanner-fast-styles')) return;
+    const style = document.createElement('style');
+    style.id = 'scanner-fast-styles';
+    style.textContent = `
+      @keyframes scannerLaser {
+        0% { top: 8%; opacity: 0.9; }
+        50% { top: 90%; opacity: 1; }
+        100% { top: 8%; opacity: 0.9; }
+      }
+      .scanner-laser-line {
+        position: absolute;
+        left: 6%;
+        right: 6%;
+        height: 2px;
+        background: linear-gradient(90deg, transparent, #10b981, #3b82f6, #10b981, transparent);
+        box-shadow: 0 0 12px #10b981, 0 0 24px #3b82f6;
+        border-radius: 50%;
+        animation: scannerLaser 1.6s ease-in-out infinite;
+        pointer-events: none;
+        z-index: 6;
+      }
+      .scanner-reticle-corner {
+        position: absolute;
+        width: 24px;
+        height: 24px;
+        border-color: #3b82f6;
+        border-style: solid;
+        pointer-events: none;
+        z-index: 5;
+      }
+      .scanner-reticle-tl { top: 10px; left: 10px; border-width: 3px 0 0 3px; border-top-left-radius: 6px; }
+      .scanner-reticle-tr { top: 10px; right: 10px; border-width: 3px 3px 0 0; border-top-right-radius: 6px; }
+      .scanner-reticle-bl { bottom: 10px; left: 10px; border-width: 0 0 3px 3px; border-bottom-left-radius: 6px; }
+      .scanner-reticle-br { bottom: 10px; right: 10px; border-width: 0 3px 3px 0; border-bottom-right-radius: 6px; }
+    `;
+    document.head.appendChild(style);
+  }
 
   function resetInactivityTimer() {
     if (_inactivityTimer) clearTimeout(_inactivityTimer);
@@ -28,6 +72,7 @@ const Scanner = (() => {
   function enterSleepMode() {
     if (!html5QrcodeScanner || _isSleeping) return;
     _isSleeping = true;
+    stopTurboEngine();
     try {
       if (html5QrcodeScanner.isScanning) {
         html5QrcodeScanner.pause(true);
@@ -64,11 +109,12 @@ const Scanner = (() => {
     try {
       if (html5QrcodeScanner) {
         html5QrcodeScanner.resume();
+        startTurboEngine();
       }
     } catch(e) {}
   }
 
-  function playBeep() {
+  function prewarmAudio() {
     try {
       if (!_audioCtx || _audioCtx.state === 'closed') {
         _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -76,24 +122,32 @@ const Scanner = (() => {
       if (_audioCtx.state === 'suspended') {
         _audioCtx.resume();
       }
+    } catch(e) {}
+  }
+
+  function playBeep() {
+    try {
+      prewarmAudio();
+      if (!_audioCtx) return;
       const ctx = _audioCtx;
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = 'sine';
-      osc.frequency.value = 880;
-      gain.gain.value = 0.15;
+      osc.frequency.value = 950;
+      gain.gain.value = 0.2;
       osc.connect(gain);
       gain.connect(ctx.destination);
       osc.start();
-      osc.stop(ctx.currentTime + 0.15);
+      osc.stop(ctx.currentTime + 0.12);
     } catch(e) {}
   }
 
   function handleDecoded(decodedText) {
+    if (!decodedText) return;
     resetInactivityTimer();
     const now = Date.now();
-    if (decodedText === lastScannedText && (now - lastScanTime) < 1500) {
-      return; // Debounce rapid duplicate reads of the exact same code
+    if (decodedText === lastScannedText && (now - lastScanTime) < 1200) {
+      return; // Debounce rapid duplicate reads
     }
     lastScannedText = decodedText;
     lastScanTime = now;
@@ -111,17 +165,86 @@ const Scanner = (() => {
     }
 
     const isContinuous = document.getElementById('scanner-continuous-toggle')?.checked;
+    const readerEl = document.getElementById('scanner-qr-reader');
+    if (readerEl) {
+      readerEl.style.boxShadow = '0 0 20px #10b981';
+      readerEl.style.borderColor = '#10b981';
+      setTimeout(() => {
+        if (readerEl) {
+          readerEl.style.boxShadow = '';
+          readerEl.style.borderColor = 'var(--border)';
+        }
+      }, 400);
+    }
+
     if (isContinuous) {
       if (typeof showToast === 'function') showToast('⚡ Scanned: ' + decodedText, 'success');
-      const readerEl = document.getElementById('scanner-qr-reader');
-      if (readerEl) {
-        readerEl.style.borderColor = '#10b981';
-        setTimeout(() => { if (readerEl) readerEl.style.borderColor = 'var(--border)'; }, 400);
-      }
     } else {
       stop();
-      if (typeof showToast === 'function') showToast('QR Code scanned successfully: ' + decodedText, 'success');
+      if (typeof showToast === 'function') showToast('QR Code scanned: ' + decodedText, 'success');
     }
+  }
+
+  // Hardware-accelerated native BarcodeDetector Turbo Engine
+  async function startTurboEngine() {
+    if (!('BarcodeDetector' in window)) return;
+    try {
+      if (!_turboDetector) {
+        const formats = await BarcodeDetector.getSupportedFormats().catch(() => []);
+        if (formats && formats.includes('qr_code')) {
+          _turboDetector = new BarcodeDetector({ formats: ['qr_code'] });
+        }
+      }
+      if (!_turboDetector) return;
+
+      _turboActive = true;
+      const video = document.querySelector('#scanner-qr-reader video');
+      if (!video) {
+        // Retry in 80ms if video element is still mounting
+        setTimeout(() => { if (_turboActive) startTurboEngine(); }, 80);
+        return;
+      }
+
+      let isDetecting = false;
+      const scanFrame = async () => {
+        if (!_turboActive || !video || video.paused || video.ended) return;
+        if (!isDetecting && video.readyState >= 2 && video.videoWidth > 0) {
+          isDetecting = true;
+          try {
+            const results = await _turboDetector.detect(video);
+            if (results && results.length > 0 && _turboActive) {
+              const raw = results[0].rawValue;
+              if (raw) {
+                handleDecoded(raw);
+                isDetecting = false;
+                return;
+              }
+            }
+          } catch(e) {}
+          isDetecting = false;
+        }
+
+        if (_turboActive) {
+          if ('requestVideoFrameCallback' in video) {
+            video.requestVideoFrameCallback(scanFrame);
+          } else {
+            requestAnimationFrame(scanFrame);
+          }
+        }
+      };
+
+      if ('requestVideoFrameCallback' in video) {
+        video.requestVideoFrameCallback(scanFrame);
+      } else {
+        requestAnimationFrame(scanFrame);
+      }
+    } catch(err) {
+      console.warn("Turbo detector error:", err);
+    }
+  }
+
+  function stopTurboEngine() {
+    _turboActive = false;
   }
 
   async function ensureLibraryLoaded() {
@@ -156,6 +279,7 @@ const Scanner = (() => {
   }
 
   async function safelyStopScanner() {
+    stopTurboEngine();
     if (_inactivityTimer) {
       clearTimeout(_inactivityTimer);
       _inactivityTimer = null;
@@ -212,34 +336,88 @@ const Scanner = (() => {
     }
   }
 
+  function attachViewfinderOverlay(qrRegion) {
+    qrRegion.querySelectorAll('.scanner-laser-line, .scanner-reticle-corner').forEach(el => el.remove());
+
+    const laser = document.createElement('div');
+    laser.className = 'scanner-laser-line';
+
+    const c1 = document.createElement('div'); c1.className = 'scanner-reticle-corner scanner-reticle-tl';
+    const c2 = document.createElement('div'); c2.className = 'scanner-reticle-corner scanner-reticle-tr';
+    const c3 = document.createElement('div'); c3.className = 'scanner-reticle-corner scanner-reticle-bl';
+    const c4 = document.createElement('div'); c4.className = 'scanner-reticle-corner scanner-reticle-br';
+
+    qrRegion.appendChild(laser);
+    qrRegion.appendChild(c1);
+    qrRegion.appendChild(c2);
+    qrRegion.appendChild(c3);
+    qrRegion.appendChild(c4);
+  }
+
   async function startCamera(cameraIdOrConstraints) {
     const qrRegion = document.getElementById('scanner-qr-reader');
     if (!qrRegion) return false;
 
-    // Responsive dynamic qrbox calculation avoids "qrbox is larger than video size" on mobile
+    // Optimized scanning configuration:
+    // - 25 FPS for rapid real-time frame scanning
+    // - Wide 85% dynamic scan box (no need to center QR perfectly)
+    // - 720p sweet-spot resolution (sharp enough for tiny QR, 4x faster than 1080p)
     const config = {
-      fps: 15,
+      fps: 25,
       qrbox: (viewfinderWidth, viewfinderHeight) => {
         const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
-        const qrEdge = Math.floor(minEdge * 0.72);
+        const qrEdge = Math.floor(minEdge * 0.85);
         return {
-          width: Math.max(160, Math.min(qrEdge, 280)),
-          height: Math.max(160, Math.min(qrEdge, 280))
+          width: Math.max(180, Math.min(qrEdge, 340)),
+          height: Math.max(180, Math.min(qrEdge, 340))
         };
       },
       aspectRatio: 1.0,
-      experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+      disableFlip: false,
+      videoConstraints: typeof cameraIdOrConstraints === 'object' ? {
+        ...cameraIdOrConstraints,
+        width: { ideal: 1280, max: 1920 },
+        height: { ideal: 720, max: 1080 }
+      } : {
+        deviceId: { exact: cameraIdOrConstraints },
+        width: { ideal: 1280, max: 1920 },
+        height: { ideal: 720, max: 1080 }
+      }
     };
 
     try {
-      setStatus("Starting camera feed...", "var(--primary)");
+      setStatus("Starting high-speed camera...", "var(--primary)");
       await html5QrcodeScanner.start(
         cameraIdOrConstraints,
         config,
         (decodedText) => handleDecoded(decodedText),
         (errorMessage) => {}
       );
-      setStatus("Point camera at JMPL QR Code sticker", "var(--text-secondary)");
+
+      // Hardware auto-focus & exposure lock for instant clarity
+      try {
+        const track = html5QrcodeScanner.getRunningTrack();
+        if (track && typeof track.applyConstraints === 'function') {
+          const caps = track.getCapabilities ? track.getCapabilities() : {};
+          const adv = {};
+          if (caps.focusMode && (caps.focusMode.includes('continuous') || caps.focusMode.includes('macro'))) {
+            adv.focusMode = caps.focusMode.includes('continuous') ? 'continuous' : 'macro';
+          }
+          if (caps.exposureMode && caps.exposureMode.includes('continuous')) {
+            adv.exposureMode = 'continuous';
+          }
+          if (caps.whiteBalanceMode && caps.whiteBalanceMode.includes('continuous')) {
+            adv.whiteBalanceMode = 'continuous';
+          }
+          if (Object.keys(adv).length > 0) {
+            await track.applyConstraints({ advanced: [adv] }).catch(() => {});
+          }
+        }
+      } catch(e) {}
+
+      attachViewfinderOverlay(qrRegion);
+      startTurboEngine();
+      setStatus("Point camera at QR code", "var(--text-secondary)");
       updateControlButtons();
       resetInactivityTimer();
       return true;
@@ -257,6 +435,8 @@ const Scanner = (() => {
     activeCallback = callback;
     lastScannedText = '';
     lastScanTime = 0;
+    prewarmAudio();
+    ensureScannerStyles();
 
     const ready = await ensureLibraryLoaded();
     if (!ready) {
@@ -279,6 +459,7 @@ const Scanner = (() => {
             <div style="display: flex; align-items: center; gap: 8px;">
               <span style="font-size: 20px;">📷</span>
               <h3 style="margin: 0; font-size: 16px;">Scan QR Code</h3>
+              <span style="font-size: 10px; background: rgba(16,185,129,0.15); color: #10b981; padding: 2px 6px; border-radius: 4px; font-weight: 700; margin-left: 4px;">FAST</span>
             </div>
             <button class="modal-close" onclick="Scanner.stop()" title="Close scanner" style="font-size: 18px;">✕</button>
           </div>
@@ -354,51 +535,65 @@ const Scanner = (() => {
     qrRegion.innerHTML = `
       <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; color:#94a3b8; font-size:13px; text-align:center; padding:20px;">
         <div style="font-size:28px; margin-bottom:8px; animation:spin 1s linear infinite;">⏳</div>
-        <div>Initializing camera...</div>
+        <div>Opening camera...</div>
       </div>`;
     qrRegion.style.background = '#000';
 
     modal.onclick = () => resetInactivityTimer();
     modal.ontouchstart = () => resetInactivityTimer();
 
-    html5QrcodeScanner = new Html5Qrcode("scanner-qr-reader");
+    // Instantiate with QR_CODE ONLY filter and native BarcodeDetector enabled
+    const supportedFormats = typeof Html5QrcodeSupportedFormats !== 'undefined'
+      ? [Html5QrcodeSupportedFormats.QR_CODE]
+      : undefined;
 
-    // Check secure context (HTTPS / localhost required for WebRTC getUserMedia on mobile browsers)
+    html5QrcodeScanner = new Html5Qrcode("scanner-qr-reader", {
+      formatsToSupport: supportedFormats,
+      useBarCodeDetectorIfSupported: true,
+      experimentalFeatures: {
+        useBarCodeDetectorIfSupported: true
+      },
+      verbose: false
+    });
+
     const isLocalhost = ['localhost', '127.0.0.1'].includes(window.location.hostname);
     const isSecure = window.isSecureContext || isLocalhost || window.location.protocol === 'https:';
 
     let started = false;
 
-    // Mobile Strategy 1: Camera device enumeration
+    // Fast Mobile-First Launch:
+    // Directly request environment camera constraints immediately (< 200ms) without
+    // waiting for slow device enumeration.
     try {
-      const devices = await Html5Qrcode.getCameras();
+      started = await startCamera({ facingMode: { ideal: "environment" } });
+    } catch(e) {
+      console.warn("Direct environment launch failed, falling back to enumeration...", e);
+    }
+
+    // Asynchronously enumerate cameras in the background to enable the Flip button
+    Html5Qrcode.getCameras().then(devices => {
       if (devices && devices.length > 0) {
         _availableCameras = devices;
-        // Prioritize rear/back camera
         const backIdx = devices.findIndex(c => {
           const l = (c.label || '').toLowerCase();
           return l.includes('back') || l.includes('rear') || l.includes('environment');
         });
-        // On mobile devices where labels may be empty, back camera is usually the last camera
         _currentCameraIndex = backIdx !== -1 ? backIdx : (devices.length > 1 ? devices.length - 1 : 0);
-        
-        started = await startCamera(_availableCameras[_currentCameraIndex].id);
+        updateControlButtons();
       }
-    } catch (e) {
-      console.warn("Camera enumeration failed, trying direct constraints...", e);
+    }).catch(() => {});
+
+    // If direct environment constraint failed, try enumerated back camera
+    if (!started && _availableCameras.length > 0) {
+      started = await startCamera(_availableCameras[_currentCameraIndex].id);
     }
 
-    // Mobile Strategy 2: Direct environment facing mode
-    if (!started) {
-      started = await startCamera({ facingMode: "environment" });
-    }
-
-    // Mobile Strategy 3: Default / user facing camera fallback
+    // Fallback: user/front facing camera
     if (!started) {
       started = await startCamera({ facingMode: "user" });
     }
 
-    // If live camera still couldn't start (e.g. HTTP insecure context or permissions denied)
+    // If live camera still couldn't start (permissions / insecure context)
     if (!started) {
       let errorReason = 'Camera access is unavailable.';
       if (!isSecure) {
@@ -432,6 +627,7 @@ const Scanner = (() => {
     const targetCameraId = _availableCameras[_currentCameraIndex].id;
 
     setStatus("Switching camera...", "var(--primary)");
+    stopTurboEngine();
     try {
       if (html5QrcodeScanner && html5QrcodeScanner.isScanning) {
         await html5QrcodeScanner.stop();
@@ -459,7 +655,7 @@ const Scanner = (() => {
       }
     } catch(err) {
       console.warn("Torch toggle error:", err);
-      _torchActive = !_torchActive; // revert state on error
+      _torchActive = !_torchActive;
     }
     updateControlButtons();
   }
@@ -467,8 +663,6 @@ const Scanner = (() => {
   async function handleFileSelect(inputElement) {
     if (!inputElement || !inputElement.files || !inputElement.files.length) return;
     const file = inputElement.files[0];
-    
-    // Reset file input so same file can be selected again
     inputElement.value = '';
 
     setStatus("Decoding photo...", "var(--primary)");
@@ -478,7 +672,6 @@ const Scanner = (() => {
     let createdTemporary = false;
 
     if (!scannerInstance || scannerInstance.isScanning) {
-      // If live scanner is active or null, create a headless reader element for file scan
       let headless = document.getElementById('scanner-headless-reader');
       if (!headless) {
         headless = document.createElement('div');
@@ -486,7 +679,15 @@ const Scanner = (() => {
         headless.style.display = 'none';
         document.body.appendChild(headless);
       }
-      scannerInstance = new Html5Qrcode('scanner-headless-reader');
+      const supportedFormats = typeof Html5QrcodeSupportedFormats !== 'undefined'
+        ? [Html5QrcodeSupportedFormats.QR_CODE]
+        : undefined;
+
+      scannerInstance = new Html5Qrcode('scanner-headless-reader', {
+        formatsToSupport: supportedFormats,
+        useBarCodeDetectorIfSupported: true,
+        verbose: false
+      });
       createdTemporary = true;
     }
 
@@ -511,6 +712,7 @@ const Scanner = (() => {
   }
 
   async function stop() {
+    stopTurboEngine();
     const modal = document.getElementById('scanner-modal-overlay');
     if (modal) modal.classList.add('hidden');
     await safelyStopScanner();

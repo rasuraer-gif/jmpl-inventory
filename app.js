@@ -1028,26 +1028,73 @@ const App = (() => {
   function triggerSyncStatusUpdate() {
     const dot = document.getElementById('sync-status-dot');
     const text = document.getElementById('sync-status-text');
-    if (!dot || !text) return;
+    const topBadge = document.getElementById('top-cloud-status-badge');
+    const topDot = document.getElementById('top-cloud-dot');
+    const topText = document.getElementById('top-cloud-text');
 
-    dot.classList.remove('pulse-green', 'pulse-amber');
+    if (dot) dot.classList.remove('pulse-green', 'pulse-amber');
+    if (topDot) topDot.classList.remove('pulse-green', 'pulse-amber');
 
-    const isConnected = typeof DB !== 'undefined' && typeof DB.isConnected === 'function' ? DB.isConnected() : true;
+    const isConnected = typeof DB !== 'undefined' && typeof DB.isOnline === 'function' ? DB.isOnline() : (typeof DB !== 'undefined' && typeof DB.isConnected === 'function' ? DB.isConnected() : true);
 
     if (!navigator.onLine || !isConnected) {
-      dot.style.background = '#ef4444'; // Red
-      text.innerText = !navigator.onLine ? 'OFFLINE' : 'RECONNECTING...';
-      text.style.color = '#ef4444';
+      const statusLabel = !navigator.onLine ? 'OFFLINE' : 'RECONNECTING...';
+      if (dot) dot.style.background = '#ef4444'; // Red
+      if (text) {
+        text.innerText = statusLabel;
+        text.style.color = '#ef4444';
+      }
+      if (topBadge) {
+        topBadge.style.background = 'rgba(239, 68, 68, 0.12)';
+        topBadge.style.borderColor = 'rgba(239, 68, 68, 0.35)';
+      }
+      if (topDot) topDot.style.background = '#ef4444';
+      if (topText) {
+        topText.innerText = '🔴 ' + statusLabel;
+        topText.style.color = '#ef4444';
+      }
     } else if (pendingSyncCollections.size > 0) {
-      dot.style.background = '#f59e0b'; // Amber
-      dot.classList.add('pulse-amber');
-      text.innerText = 'SYNCING...';
-      text.style.color = '#f59e0b';
+      if (dot) {
+        dot.style.background = '#f59e0b'; // Amber
+        dot.classList.add('pulse-amber');
+      }
+      if (text) {
+        text.innerText = 'SYNCING...';
+        text.style.color = '#f59e0b';
+      }
+      if (topBadge) {
+        topBadge.style.background = 'rgba(245, 158, 11, 0.12)';
+        topBadge.style.borderColor = 'rgba(245, 158, 11, 0.35)';
+      }
+      if (topDot) {
+        topDot.style.background = '#f59e0b';
+        topDot.classList.add('pulse-amber');
+      }
+      if (topText) {
+        topText.innerText = '🟡 Cloud Syncing...';
+        topText.style.color = '#f59e0b';
+      }
     } else {
-      dot.style.background = '#10b981'; // Green
-      dot.classList.add('pulse-green');
-      text.innerText = 'SYNCED';
-      text.style.color = '#10b981';
+      if (dot) {
+        dot.style.background = '#10b981'; // Green
+        dot.classList.add('pulse-green');
+      }
+      if (text) {
+        text.innerText = 'ONLINE';
+        text.style.color = '#10b981';
+      }
+      if (topBadge) {
+        topBadge.style.background = 'rgba(16, 185, 129, 0.1)';
+        topBadge.style.borderColor = 'rgba(16, 185, 129, 0.25)';
+      }
+      if (topDot) {
+        topDot.style.background = '#10b981';
+        topDot.classList.add('pulse-green');
+      }
+      if (topText) {
+        topText.innerText = '🟢 Cloud Online';
+        topText.style.color = '#10b981';
+      }
     }
   }
 
@@ -1427,17 +1474,23 @@ const App = (() => {
     const batch = DB.Batches.find(batchId);
     if (!batch) return 0;
     const recs = DB.StageRecords.byBatch(batchId);
-    if (!recs.length) return batch.initialQty || 0;
+    if (!recs.length) {
+      return Number(batch.remainingQty != null && !isNaN(Number(batch.remainingQty)) && Number(batch.remainingQty) > 0 ? batch.remainingQty : (batch.initialQty || 0));
+    }
     
-    recs.sort((a,b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+    recs.sort((a,b) => {
+      const tA = new Date(a.createdAt || a.date || 0).getTime();
+      const tB = new Date(b.createdAt || b.date || 0).getTime();
+      return tA - tB;
+    });
+
+    for (let i = recs.length - 1; i >= 0; i--) {
+      const r = recs[i];
+      const q = r.isRecheck ? Number(r.recheckQty) : Number(r.outputQty);
+      if (!isNaN(q) && q > 0) return q;
+    }
     
-    const stage = batch.currentStage;
-    const stageRecs = recs.filter(r => r.movedTo === stage);
-    if (!stageRecs.length) return batch.initialQty || 0;
-    
-    const lastStageRec = stageRecs[stageRecs.length - 1];
-    const qty = Number(lastStageRec.isRecheck ? lastStageRec.recheckQty : lastStageRec.outputQty);
-    return !isNaN(qty) ? qty : (batch.initialQty || 0);
+    return Number(batch.remainingQty != null && !isNaN(Number(batch.remainingQty)) && Number(batch.remainingQty) > 0 ? batch.remainingQty : (batch.initialQty || 0));
   }
 
   function getParentBatch(b) {
@@ -1791,7 +1844,7 @@ function showLoginPage() {
           </div>
 
           <div class="landing-hero-banner">
-            <img src="./jmpl_industrial_banner.jpg" alt="Automated Moulding Facility">
+            <img src="./jmpl_industrial_banner.jpg" alt="Automated Moulding Facility" width="1376" height="768" loading="lazy" decoding="async">
           </div>
         </div>
 
@@ -2220,6 +2273,10 @@ function showAppShell(session) {
             </div>
           </div>
 
+          <div id="top-cloud-status-badge" style="display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:14px; background:rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.25); cursor:pointer; font-size:11px; font-weight:700; color:#10b981; transition:all 0.3s ease; margin-right:8px;" onclick="if(typeof DB !== 'undefined' && DB.reconnect) DB.reconnect();" title="Click to test/refresh cloud connection">
+            <span id="top-cloud-dot" style="width:7px; height:7px; border-radius:50%; background:#10b981; display:inline-block;"></span>
+            <span id="top-cloud-text">🟢 Cloud Online</span>
+          </div>
           <span class="top-badge" id="top-badge-date">${new Date().toLocaleDateString('en-IN', {weekday:'short',day:'numeric',month:'short',year:'numeric'})}</span>
         </header>
         <div id="content" style="padding:28px;"></div>

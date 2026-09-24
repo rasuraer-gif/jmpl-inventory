@@ -22,17 +22,47 @@ const DeliveryChallanModule = (() => {
   };
 
   function getBatchCurrentQty(b, stageRecords = null) {
+    if (!b) return 0;
+
+    // If a lookup map of latest records by batchId is passed:
     if (stageRecords && typeof stageRecords.filter !== 'function') {
-      const key = `${b.id}_${b.currentStage}`;
-      const lastRec = stageRecords[key];
-      if (!lastRec) return Number(b.initialQty || 0);
-      return lastRec.isRecheck ? Number(lastRec.recheckQty || 0) : Number(lastRec.outputQty || 0);
+      const lastRec = stageRecords[b.id];
+      if (lastRec) {
+        const q = lastRec.isRecheck ? Number(lastRec.recheckQty) : Number(lastRec.outputQty);
+        if (!isNaN(q) && q > 0) return q;
+      }
+      return Number(b.remainingQty != null && !isNaN(Number(b.remainingQty)) && Number(b.remainingQty) > 0 ? b.remainingQty : (b.initialQty || 0));
     }
-    const records = stageRecords || DB.StageRecords.all();
-    const recs = records.filter(r => r.batchId === b.id && r.movedTo === b.currentStage);
-    if (!recs.length) return Number(b.initialQty || 0);
-    const lastRec = recs[recs.length - 1];
-    return lastRec.isRecheck ? Number(lastRec.recheckQty || 0) : Number(lastRec.outputQty || 0);
+
+    // Otherwise, find all stage records for this batch
+    const allRecs = Array.isArray(stageRecords) 
+      ? stageRecords 
+      : (DB.StageRecords.byBatch ? DB.StageRecords.byBatch(b.id) : DB.StageRecords.all().filter(r => r.batchId === b.id));
+    const batchRecs = allRecs.filter(r => r.batchId === b.id);
+    
+    if (batchRecs.length > 0) {
+      // Sort chronologically ascending by createdAt / date
+      batchRecs.sort((a, b) => {
+        const tA = new Date(a.createdAt || a.date || 0).getTime();
+        const tB = new Date(b.createdAt || b.date || 0).getTime();
+        return tA - tB;
+      });
+
+      // Find the most recent record that has a valid positive outputQty or recheckQty
+      for (let i = batchRecs.length - 1; i >= 0; i--) {
+        const r = batchRecs[i];
+        const q = r.isRecheck ? Number(r.recheckQty) : Number(r.outputQty);
+        if (!isNaN(q) && q > 0) {
+          return q;
+        }
+      }
+    }
+
+    // Fallback: batch remainingQty (if set and > 0), else batch initialQty
+    if (b.remainingQty != null && !isNaN(Number(b.remainingQty)) && Number(b.remainingQty) > 0) {
+      return Number(b.remainingQty);
+    }
+    return Number(b.initialQty || 0);
   }
 
   function formatChallanDate(createdAt, isLong = true) {
@@ -333,13 +363,22 @@ const DeliveryChallanModule = (() => {
     // Sort batches alphabetically by Batch No
     eligibleBatches.sort((a,b) => a.batchNo.localeCompare(b.batchNo));
 
-    const stageRecords = DB.StageRecords.all();
-    // Build a map of the last record for each batch/stage combination to avoid nested loops (O(N^2))
+    const stageRecords = DB.StageRecords.all().slice();
+    // Sort all stage records chronologically ascending
+    stageRecords.sort((a, b) => {
+      const tA = new Date(a.createdAt || a.date || 0).getTime();
+      const tB = new Date(b.createdAt || b.date || 0).getTime();
+      return tA - tB;
+    });
+
+    // Build a map of the latest record for each batch to avoid O(N^2) lookups
     const lastRecordMap = {};
     for (let i = 0; i < stageRecords.length; i++) {
       const r = stageRecords[i];
-      if (r.batchId && r.movedTo) {
-        lastRecordMap[`${r.batchId}_${r.movedTo}`] = r;
+      if (!r.batchId) continue;
+      const q = r.isRecheck ? Number(r.recheckQty) : Number(r.outputQty);
+      if (!isNaN(q) && q > 0) {
+        lastRecordMap[r.batchId] = r;
       }
     }
 
@@ -509,99 +548,123 @@ const DeliveryChallanModule = (() => {
     document.getElementById('dc-confirm-modal').classList.remove('hidden');
   }
 
-  function saveChallan(moveBatches = true) {
+  async function saveChallan(moveBatches = true) {
+    if (typeof DB !== 'undefined' && DB.isOnline && !DB.isOnline()) {
+      showToast("Cloud Connection Required: Cannot generate Delivery Challan while offline. Please check your internet connection.", "error");
+      return;
+    }
+
     const vendor = DB.Vendors.find(selectedVendorId);
     if (!vendor) return;
 
-    const session = Auth.getSession();
-    const dateStr = new Date().toISOString().slice(0, 10);
-    const destStage = vendor.department; // 'deflashing' or 'trimming'
+    const confirmBtn = document.querySelector('#dc-confirm-modal .btn-primary');
+    const originalBtnText = confirmBtn ? confirmBtn.innerHTML : 'Confirm &amp; Generate DC';
+    if (confirmBtn) {
+      confirmBtn.disabled = true;
+      confirmBtn.innerHTML = '⏳ Saving to Cloud...';
+    }
 
-    // Generate consecutive sequential DC Number
-    const allDCs = DB.DeliveryChallans.all();
-    const year = new Date().getFullYear();
-    const seq = allDCs.filter(d => d.dcNo && d.dcNo.includes(year)).length + 1;
-    const dcNo = `DC-JMPL-${year}-${String(seq).padStart(4, '0')}`;
+    try {
+      const session = Auth.getSession();
+      const dateStr = new Date().toISOString().slice(0, 10);
+      const destStage = vendor.department; // 'deflashing' or 'trimming'
 
-    // Process dispatches and stage record insertions
-    challanItems.forEach(item => {
-      const b = item.batch;
-      if (moveBatches) {
-        if (!item.isAlreadyAtDestination) {
-          // Record transition
-          DB.StageRecords.insert({
-            batchId: b.id,
-            stage: b.currentStage,
-            inputQty: item.qty,
-            outputQty: item.qty,
-            lossQty: 0,
-            vendorId: selectedVendorId,
-            movedTo: destStage,
-            movedFrom: b.currentStage,
-            date: dateStr,
-            recordedBy: session?.userId || 'unknown',
-            notes: `Dispatched via ${dcNo}`
-          });
+      // Generate consecutive sequential DC Number
+      const allDCs = DB.DeliveryChallans.all();
+      const year = new Date().getFullYear();
+      const seq = allDCs.filter(d => d.dcNo && d.dcNo.includes(year)).length + 1;
+      const dcNo = `DC-JMPL-${year}-${String(seq).padStart(4, '0')}`;
 
-          // Advance stage
-          DB.Batches.update(b.id, {
-            currentStage: destStage,
-            vendorId: selectedVendorId
-          });
-        } else {
-          // Update vendor even if it is already in the destination stage
-          DB.Batches.update(b.id, {
-            vendorId: selectedVendorId
-          });
+      // Process dispatches and stage record insertions
+      for (const item of challanItems) {
+        const b = item.batch;
+        if (moveBatches) {
+          if (!item.isAlreadyAtDestination) {
+            // Record transition
+            await DB.StageRecords.insertAsync({
+              batchId: b.id,
+              stage: b.currentStage,
+              inputQty: item.qty,
+              outputQty: item.qty,
+              lossQty: 0,
+              vendorId: selectedVendorId,
+              movedTo: destStage,
+              movedFrom: b.currentStage,
+              date: dateStr,
+              recordedBy: session?.userId || 'unknown',
+              notes: `Dispatched via ${dcNo}`
+            });
+
+            // Advance stage
+            await DB.Batches.updateAsync(b.id, {
+              currentStage: destStage,
+              vendorId: selectedVendorId,
+              remainingQty: item.qty
+            });
+          } else {
+            // Update vendor even if it is already in the destination stage
+            await DB.Batches.updateAsync(b.id, {
+              vendorId: selectedVendorId,
+              remainingQty: item.qty
+            });
+          }
         }
       }
-    });
 
-    // Save DC Document
-    const newDC = DB.DeliveryChallans.insert({
-      dcNo,
-      vendorId: selectedVendorId || '',
-      vendorName: vendor.name || '',
-      department: vendor.department || '',
-      batches: challanItems.map(item => ({
-        batchId: item.batch.id || '',
-        batchNo: item.batch.batchNo || '',
-        partNo: item.batch.partNo || '',
-        jmrefNo: item.batch.jmrefNo || '',
-        qty: Number(item.qty || 0),
-        sourceStage: item.batch.currentStage || ''
-      })),
-      totalQty: challanItems.reduce((s,i) => s + Number(i.qty || 0), 0),
-      createdAt: new Date().toISOString(),
-      createdBy: session?.userId || 'unknown'
-    });
+      // Save DC Document
+      const newDC = await DB.DeliveryChallans.insertAsync({
+        dcNo,
+        vendorId: selectedVendorId || '',
+        vendorName: vendor.name || '',
+        department: vendor.department || '',
+        batches: challanItems.map(item => ({
+          batchId: item.batch.id || '',
+          batchNo: item.batch.batchNo || '',
+          partNo: item.batch.partNo || '',
+          jmrefNo: item.batch.jmrefNo || '',
+          qty: Number(item.qty || 0),
+          sourceStage: item.batch.currentStage || ''
+        })),
+        totalQty: challanItems.reduce((s,i) => s + Number(i.qty || 0), 0),
+        createdAt: new Date().toISOString(),
+        createdBy: session?.userId || 'unknown'
+      });
 
-    // Hide Modal & Alert
-    document.getElementById('dc-confirm-modal').classList.add('hidden');
-    showToast(`Delivery Challan ${dcNo} created successfully`, 'success');
+      // Hide Modal & Alert
+      document.getElementById('dc-confirm-modal').classList.add('hidden');
+      showToast(`Delivery Challan ${dcNo} created successfully`, 'success');
 
-    // Clear active states
-    challanItems = [];
-    selectedVendorId = '';
-    
-    // Switch to history tab and render
-    activeTab = 'history';
-    render();
-
-    // Show the non-blocking custom print modal
-    const printModal = document.getElementById('dc-print-modal');
-    if (printModal) {
-      const titleEl = document.getElementById('dc-success-title');
-      if (titleEl) titleEl.textContent = `Delivery Challan ${dcNo} Saved`;
+      // Clear active states
+      challanItems = [];
+      selectedVendorId = '';
       
-      const printBtn = document.getElementById('dc-print-confirm-btn');
-      if (printBtn) {
-        printBtn.onclick = () => {
-          printChallan(newDC.id);
-          printModal.classList.add('hidden');
-        };
+      // Switch to history tab and render
+      activeTab = 'history';
+      render();
+
+      // Show the non-blocking custom print modal
+      const printModal = document.getElementById('dc-print-modal');
+      if (printModal) {
+        const titleEl = document.getElementById('dc-success-title');
+        if (titleEl) titleEl.textContent = `Delivery Challan ${dcNo} Saved`;
+        
+        const printBtn = document.getElementById('dc-print-confirm-btn');
+        if (printBtn) {
+          printBtn.onclick = () => {
+            printChallan(newDC.id);
+            printModal.classList.add('hidden');
+          };
+        }
+        printModal.classList.remove('hidden');
       }
-      printModal.classList.remove('hidden');
+    } catch (err) {
+      console.error("Save Challan error:", err);
+      showToast(`Failed to generate Delivery Challan: ${err.message}`, 'error');
+    } finally {
+      if (confirmBtn) {
+        confirmBtn.disabled = false;
+        confirmBtn.innerHTML = originalBtnText;
+      }
     }
   }
 

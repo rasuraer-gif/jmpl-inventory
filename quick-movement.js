@@ -356,8 +356,14 @@ const QuickMovementModule = (() => {
     render();
   }
 
-  function processMove() {
+  async function processMove() {
     if (!_activeBatch) return;
+
+    if (typeof DB !== 'undefined' && DB.isOnline && !DB.isOnline()) {
+      showToast("Cloud Connection Required: Cannot move batch while offline. Please check your internet connection.", "error");
+      return;
+    }
+
     const outVal = parseInt(document.getElementById('quick-output-qty')?.value, 10);
     if (isNaN(outVal) || outVal < 0) {
       showToast('Please enter a valid Output Quantity', 'error');
@@ -396,65 +402,82 @@ const QuickMovementModule = (() => {
     const dateStr = new Date().toISOString().slice(0, 10);
     const b = _activeBatch;
 
-    // Insert Stage Record
-    DB.StageRecords.insert({
-      batchId: b.id,
-      stage: b.currentStage,
-      inputQty: _inputQty,
-      outputQty: outVal,
-      lossQty: lossQty,
-      vendorId: vendorId || b.vendorId || '',
-      movedTo: _nextStage,
-      movedFrom: b.currentStage,
-      date: dateStr,
-      recordedBy: session?.userId || 'unknown',
-      notes: notes || `Quick Movement to ${STAGE_LABELS[_nextStage] || _nextStage}`
-    });
-
-    // Update Batch current stage and handle Store completion
-    if (_nextStage === 'store') {
-      DB.StageRecords.insert({
-        batchId: b.id,
-        stage: 'store',
-        inputQty: outVal,
-        outputQty: 0,
-        lossQty: 0,
-        movedFrom: b.currentStage,
-        date: dateStr,
-        recordedBy: session?.userId || 'unknown'
-      });
-      DB.Batches.update(b.id, {
-        status: 'completed',
-        currentStage: 'store',
-        completedAt: new Date().toISOString(),
-        remainingQty: outVal,
-        vendorId: null
-      });
-    } else {
-      DB.Batches.update(b.id, {
-        currentStage: _nextStage,
-        vendorId: vendorId || b.vendorId || ''
-      });
+    const moveBtn = document.querySelector('#quick-batch-form-area .btn-teal, #quick-batch-form-area button[onclick*="processMove"]');
+    const originalBtnHtml = moveBtn ? moveBtn.innerHTML : '⚡ Confirm &amp; Move Stage';
+    if (moveBtn) {
+      moveBtn.disabled = true;
+      moveBtn.innerHTML = '⏳ Saving to Cloud...';
     }
 
-    // Track loss in LossTracker if loss > 0
-    if (lossQty > 0) {
-      DB.LossTracker.insert({
+    try {
+      // Insert Stage Record
+      await DB.StageRecords.insertAsync({
         batchId: b.id,
         stage: b.currentStage,
-        lossQty,
+        inputQty: _inputQty,
+        outputQty: outVal,
+        lossQty: lossQty,
+        vendorId: vendorId || b.vendorId || '',
+        movedTo: _nextStage,
+        movedFrom: b.currentStage,
         date: dateStr,
-        jmrefNo: b.jmrefNo,
-        partNo: b.partNo
+        recordedBy: session?.userId || 'unknown',
+        notes: notes || `Quick Movement to ${STAGE_LABELS[_nextStage] || _nextStage}`
       });
+
+      // Update Batch current stage and handle Store completion
+      if (_nextStage === 'store') {
+        await DB.StageRecords.insertAsync({
+          batchId: b.id,
+          stage: 'store',
+          inputQty: outVal,
+          outputQty: 0,
+          lossQty: 0,
+          movedFrom: b.currentStage,
+          date: dateStr,
+          recordedBy: session?.userId || 'unknown'
+        });
+        await DB.Batches.updateAsync(b.id, {
+          status: 'completed',
+          currentStage: 'store',
+          completedAt: new Date().toISOString(),
+          remainingQty: outVal,
+          vendorId: null
+        });
+      } else {
+        await DB.Batches.updateAsync(b.id, {
+          currentStage: _nextStage,
+          vendorId: vendorId || b.vendorId || ''
+        });
+      }
+
+      // Track loss in LossTracker if loss > 0
+      if (lossQty > 0) {
+        await DB.LossTracker.insertAsync({
+          batchId: b.id,
+          stage: b.currentStage,
+          lossQty,
+          date: dateStr,
+          jmrefNo: b.jmrefNo,
+          partNo: b.partNo
+        });
+      }
+
+      showToast(`⚡ Batch ${b.batchNo} moved to ${STAGE_LABELS[_nextStage] || _nextStage}`, 'success');
+
+      // Reset active batch state and keep input focused for continuous scanning!
+      _activeBatch = null;
+      activeSearch = '';
+      render();
+    } catch (err) {
+      console.error("Quick movement error:", err);
+      showToast(`Failed to move batch: ${err.message}`, 'error');
+    } finally {
+      if (moveBtn) {
+        moveBtn.disabled = false;
+        moveBtn.innerHTML = originalBtnHtml;
+      }
     }
-
-    showToast(`⚡ Batch ${b.batchNo} moved to ${STAGE_LABELS[_nextStage] || _nextStage}`, 'success');
-
-    // Reset active batch state and keep input focused for continuous scanning!
-    _activeBatch = null;
-    activeSearch = '';
-    render();
   }
 
   return {
