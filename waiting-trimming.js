@@ -25,6 +25,23 @@ const WaitingTrimmingModule = (() => {
     return Number(lastRec.outputQty) || batch.initialQty || 0;
   }
 
+  function buildLastRecordMap(batchList) {
+    const map = {};
+    if (!batchList || !batchList.length) return map;
+    for (let i = 0; i < batchList.length; i++) {
+      const b = batchList[i];
+      if (!b || !b.id) continue;
+      const recs = DB.StageRecords.byBatch(b.id);
+      for (let j = recs.length - 1; j >= 0; j--) {
+        if (recs[j].movedTo === 'waiting-trimming') {
+          map[b.id] = recs[j];
+          break;
+        }
+      }
+    }
+    return map;
+  }
+
   function render() {
     currentPage = 1;
     pendingSearch = '';
@@ -32,15 +49,8 @@ const WaitingTrimmingModule = (() => {
     const batches = DB.Batches.byStage('waiting-trimming');
     const history = DB.StageRecords.byStage('waiting-trimming');
 
-    // Build the lookup map for StageRecords
-    const stageRecords = DB.StageRecords.all();
-    const lastRecordMap = {};
-    for (let i = 0; i < stageRecords.length; i++) {
-      const r = stageRecords[i];
-      if (r.batchId && r.movedTo === 'waiting-trimming') {
-        lastRecordMap[r.batchId] = r;
-      }
-    }
+    // Build targeted lookup map for only active waiting-trimming batches
+    const lastRecordMap = buildLastRecordMap(batches);
 
     const totalQty = batches.reduce((sum, b) => sum + getInputQty(b, lastRecordMap), 0);
 
@@ -81,17 +91,7 @@ const WaitingTrimmingModule = (() => {
     }
     if (!filtered.length && !pendingSearch) return '<div class="card card-body"><div class="empty-state"><div class="empty-icon">⏳</div><p>No batches waiting for trimming</p></div></div>';
 
-    const recordMap = lastRecordMap || (() => {
-      const stageRecords = DB.StageRecords.all();
-      const map = {};
-      for (let i = 0; i < stageRecords.length; i++) {
-        const r = stageRecords[i];
-        if (r.batchId && r.movedTo === 'waiting-trimming') {
-          map[r.batchId] = r;
-        }
-      }
-      return map;
-    })();
+    const recordMap = lastRecordMap || buildLastRecordMap(filtered);
 
     const totalItems = filtered.length;
     const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;

@@ -16,14 +16,14 @@ const StoreModule = (() => {
 
   // ── FIFO precomputation cache ──────────────────────────────
   function buildFifoPrecomputed() {
-    const stageRecords = DB.StageRecords.all();
+    const stageRecords = DB.StageRecords.byStage ? DB.StageRecords.byStage('store') : DB.StageRecords.all().filter(r => r.stage === 'store');
     const sales = DB.Sales.all();
     const allBatches = DB.Batches.all();
 
     const storeRecordsByBatchId = {};
     for (let i = 0; i < stageRecords.length; i++) {
       const r = stageRecords[i];
-      if (r.batchId && r.stage === 'store') {
+      if (r && r.batchId && !storeRecordsByBatchId[r.batchId]) {
         storeRecordsByBatchId[r.batchId] = r;
       }
     }
@@ -128,14 +128,14 @@ const StoreModule = (() => {
     }
 
     const list = [];
-    const stageRecords = precomputed?.storeRecordsByBatchId ? null : DB.StageRecords.all();
     for (const b of batches) {
       let storeQty = 0;
       if (precomputed?.storeRecordsByBatchId) {
         const r = precomputed.storeRecordsByBatchId[b.id];
         storeQty = r ? (r.inputQty !== undefined ? Number(r.inputQty) : Number(b.initialQty || 0)) : Number(b.initialQty || 0);
       } else {
-        const storeRecs = stageRecords.filter(r => r.batchId === b.id && r.stage === 'store');
+        const bRecs = (DB.StageRecords.byBatch ? DB.StageRecords.byBatch(b.id) : DB.StageRecords.all().filter(r => r.batchId === b.id));
+        const storeRecs = bRecs.filter(r => r.stage === 'store');
         storeQty = storeRecs.length ? (storeRecs[0].inputQty !== undefined ? Number(storeRecs[0].inputQty) : Number(b.initialQty || 0)) : Number(b.initialQty || 0);
       }
       if (storeQty <= 0) continue;
@@ -753,7 +753,14 @@ const StoreModule = (() => {
   let completedBatchSearch = '';
 
   function batchesTab() {
-    const stageRecords = DB.StageRecords.all();
+    const storeRecords = DB.StageRecords.byStage ? DB.StageRecords.byStage('store') : DB.StageRecords.all().filter(r => r.stage === 'store');
+    const storeQtyByBatchId = new Map();
+    for (let i = 0; i < storeRecords.length; i++) {
+      const r = storeRecords[i];
+      if (r && r.batchId && !storeQtyByBatchId.has(r.batchId)) {
+        storeQtyByBatchId.set(r.batchId, r.inputQty !== undefined ? Number(r.inputQty) : null);
+      }
+    }
     const sales = DB.Sales.all();
     let batches = DB.Batches.all().filter(b => b.status === 'completed' || b.currentStage === 'store');
     
@@ -801,8 +808,8 @@ const StoreModule = (() => {
       let totalSold = salesMap[key] || 0;
 
       bList.forEach(b => {
-        const storeRecs = stageRecords.filter(r => r.batchId === b.id && r.stage === 'store');
-        let initialQty = storeRecs.length ? (storeRecs[0].inputQty !== undefined ? Number(storeRecs[0].inputQty) : Number(b.initialQty || 0)) : Number(b.initialQty || 0);
+        const storeVal = storeQtyByBatchId.get(b.id);
+        let initialQty = (storeVal !== undefined && storeVal !== null) ? storeVal : Number(b.initialQty || 0);
         if (b.notes && (b.notes.includes('Closed via stock') || b.notes.includes('Zeroed via stock') || b.notes.includes('zeroing'))) {
           initialQty = 0;
         }

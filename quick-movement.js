@@ -37,7 +37,9 @@ const QuickMovementModule = (() => {
   ];
 
   function getBatchInputQty(batch) {
-    const stageRecords = DB.StageRecords.all().filter(r => r.batchId === batch.id && r.movedTo === batch.currentStage);
+    if (!batch || !batch.id) return 0;
+    const batchRecs = DB.StageRecords.byBatch ? DB.StageRecords.byBatch(batch.id) : DB.StageRecords.all().filter(r => r.batchId === batch.id);
+    const stageRecords = batchRecs.filter(r => r.movedTo === batch.currentStage);
     if (!stageRecords.length) return Number(batch.initialQty || 0);
     const last = stageRecords[stageRecords.length - 1];
     return last.isRecheck ? Number(last.recheckQty || 0) : Number(last.outputQty || 0);

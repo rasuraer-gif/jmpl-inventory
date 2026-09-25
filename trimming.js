@@ -107,7 +107,18 @@ const TrimmingModule = (() => {
     const rows = pageItems.map(b => {
       const inputQty = getInputQty(b.id);
       const isRecheck = !!(b.recheckCount && b.recheckCount > 0 && b.currentStage === 'trimming');
-      const v = vendors.find(vv => vv.id === b.vendorId) || {};
+      const v = vendors.find(vv => vv.id === b.vendorId) ||
+                vendors.find(vv => vv.name && (vv.name.toLowerCase() === (b.vendor||'').toLowerCase())) ||
+                (() => {
+                  const recs = DB.StageRecords.byBatch ? DB.StageRecords.byBatch(b.id) : [];
+                  for (let i = recs.length - 1; i >= 0; i--) {
+                    if (recs[i].movedTo === 'trimming' && recs[i].vendorId) {
+                      const match = vendors.find(vv => vv.id === recs[i].vendorId);
+                      if (match) return match;
+                    }
+                  }
+                  return null;
+                })() || {};
       const vendorName = v.name || (b.productionType === 'inhouse' ? 'In-House' : '—');
       const recheckIter = (b.batchNo && b.batchNo.includes('7033-JSV/258/170926-11-D-S-1')) ? 1 : (b.recheckIteration||1);
       return `<tr>

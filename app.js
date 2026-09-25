@@ -1030,7 +1030,6 @@ const App = (() => {
     const text = document.getElementById('sync-status-text');
     const topBadge = document.getElementById('top-cloud-status-badge');
     const topDot = document.getElementById('top-cloud-dot');
-    const topText = document.getElementById('top-cloud-text');
 
     if (dot) dot.classList.remove('pulse-green', 'pulse-amber');
     if (topDot) topDot.classList.remove('pulse-green', 'pulse-amber');
@@ -1045,14 +1044,11 @@ const App = (() => {
         text.style.color = '#ef4444';
       }
       if (topBadge) {
-        topBadge.style.background = 'rgba(239, 68, 68, 0.12)';
-        topBadge.style.borderColor = 'rgba(239, 68, 68, 0.35)';
+        topBadge.style.background = 'rgba(239, 68, 68, 0.15)';
+        topBadge.style.borderColor = 'rgba(239, 68, 68, 0.4)';
+        topBadge.title = statusLabel + ' (Click to test/refresh)';
       }
       if (topDot) topDot.style.background = '#ef4444';
-      if (topText) {
-        topText.innerText = '🔴 ' + statusLabel;
-        topText.style.color = '#ef4444';
-      }
     } else if (pendingSyncCollections.size > 0) {
       if (dot) {
         dot.style.background = '#f59e0b'; // Amber
@@ -1063,16 +1059,13 @@ const App = (() => {
         text.style.color = '#f59e0b';
       }
       if (topBadge) {
-        topBadge.style.background = 'rgba(245, 158, 11, 0.12)';
-        topBadge.style.borderColor = 'rgba(245, 158, 11, 0.35)';
+        topBadge.style.background = 'rgba(245, 158, 11, 0.15)';
+        topBadge.style.borderColor = 'rgba(245, 158, 11, 0.4)';
+        topBadge.title = 'Cloud Syncing...';
       }
       if (topDot) {
         topDot.style.background = '#f59e0b';
         topDot.classList.add('pulse-amber');
-      }
-      if (topText) {
-        topText.innerText = '🟡 Cloud Syncing...';
-        topText.style.color = '#f59e0b';
       }
     } else {
       if (dot) {
@@ -1084,16 +1077,13 @@ const App = (() => {
         text.style.color = '#10b981';
       }
       if (topBadge) {
-        topBadge.style.background = 'rgba(16, 185, 129, 0.1)';
-        topBadge.style.borderColor = 'rgba(16, 185, 129, 0.25)';
+        topBadge.style.background = 'rgba(16, 185, 129, 0.12)';
+        topBadge.style.borderColor = 'rgba(16, 185, 129, 0.3)';
+        topBadge.title = 'Cloud Online (Click to test/refresh)';
       }
       if (topDot) {
         topDot.style.background = '#10b981';
         topDot.classList.add('pulse-green');
-      }
-      if (topText) {
-        topText.innerText = '🟢 Cloud Online';
-        topText.style.color = '#10b981';
       }
     }
   }
@@ -2273,9 +2263,8 @@ function showAppShell(session) {
             </div>
           </div>
 
-          <div id="top-cloud-status-badge" style="display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:14px; background:rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.25); cursor:pointer; font-size:11px; font-weight:700; color:#10b981; transition:all 0.3s ease; margin-right:8px;" onclick="if(typeof DB !== 'undefined' && DB.reconnect) DB.reconnect();" title="Click to test/refresh cloud connection">
-            <span id="top-cloud-dot" style="width:7px; height:7px; border-radius:50%; background:#10b981; display:inline-block;"></span>
-            <span id="top-cloud-text">🟢 Cloud Online</span>
+          <div id="top-cloud-status-badge" style="display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:50%; background:rgba(16,185,129,0.12); border:1px solid rgba(16,185,129,0.3); cursor:pointer; transition:all 0.3s ease; margin-right:8px;" onclick="if(typeof DB !== 'undefined' && DB.reconnect) DB.reconnect();" title="Cloud Online (Click to test/refresh)">
+            <span id="top-cloud-dot" style="width:10px; height:10px; border-radius:50%; background:#10b981; display:inline-block; transition:all 0.3s ease;"></span>
           </div>
           <span class="top-badge" id="top-badge-date">${new Date().toLocaleDateString('en-IN', {weekday:'short',day:'numeric',month:'short',year:'numeric'})}</span>
         </header>
@@ -2346,27 +2335,64 @@ function renderDashboard() {
   const rejected  = DB.RejectionTracker.all();
   const rechecks  = DB.RecheckTracker.all();
 
-  // Build quick batch lookups map
+  // Build quick batch lookups map and single-pass metrics
   const batchMap = new Map();
-  batches.forEach(b => batchMap.set(b.id, b));
+  let active = 0;
+  let completed = 0;
+  let rejectedCount = 0;
+  let producedQtyThisMonth = 0;
+  const uniqueMonths = new Set();
+  uniqueMonths.add(new Date().toISOString().slice(0, 7)); // always include current month
 
-  const active    = batches.filter(b => b.status === 'active').length;
-  const completed = batches.filter(b => b.status === 'completed' && (b.completedAt || b.createdAt || '').slice(0, 7) === thisMonth).length;
-  const rejectedCount = batches.filter(b => b.status === 'rejected' && (b.updatedAt || b.createdAt || '').slice(0, 7) === thisMonth).length;
-  const totalLoss = losses.filter(l => (l.date || l.createdAt || '').slice(0, 7) === thisMonth).reduce((s, l) => s + (l.lossQty || 0), 0);
+  for (let i = 0; i < batches.length; i++) {
+    const b = batches[i];
+    if (!b) continue;
+    batchMap.set(b.id, b);
+
+    const d = b.productionDate || b.createdAt;
+    if (d) uniqueMonths.add(d.slice(0, 7));
+
+    if (b.status === 'active') {
+      active++;
+    } else if (b.status === 'completed') {
+      if ((b.completedAt || b.createdAt || '').slice(0, 7) === thisMonth) {
+        completed++;
+      }
+    } else if (b.status === 'rejected') {
+      if ((b.updatedAt || b.createdAt || '').slice(0, 7) === thisMonth) {
+        rejectedCount++;
+      }
+    }
+
+    const bd = (b.productionDate || b.createdAt || '').slice(0, 7);
+    if (bd === thisMonth && 
+        !b.isReprocess && 
+        !b.isStockUpload && 
+        !(b.batchNo && (b.batchNo.includes('-REP') || b.batchNo.includes('-REC-')))) {
+      producedQtyThisMonth += (b.initialQty || 0);
+    }
+  }
+
+  let totalLoss = 0;
+  for (let i = 0; i < losses.length; i++) {
+    const l = losses[i];
+    if ((l.date || l.createdAt || '').slice(0, 7) === thisMonth) {
+      totalLoss += (l.lossQty || 0);
+    }
+  }
+
   const storeInv  = DB.StoreInventory.allParts();
   const totalStock = storeInv.reduce((s, p) => s + (p.available || 0), 0);
 
   // Monthly stats
-  const salesThisMonth = sales.filter(s => (s.saleDate||'').startsWith(thisMonth)).reduce((s,r)=>s+(r.qty||0),0);
-
-  // Extract unique months for select options (using batches and current month)
-  const uniqueMonths = new Set();
-  uniqueMonths.add(new Date().toISOString().slice(0, 7)); // always include current month
-  for (let i = 0; i < batches.length; i++) {
-    const d = batches[i].productionDate || batches[i].createdAt;
-    if (d) uniqueMonths.add(d.slice(0, 7));
+  let salesThisMonth = 0;
+  for (let i = 0; i < sales.length; i++) {
+    const s = sales[i];
+    if ((s.saleDate || '').startsWith(thisMonth)) {
+      salesThisMonth += (s.qty || 0);
+    }
   }
+
   const sortedMonths = Array.from(uniqueMonths).sort().reverse();
   const monthOptions = sortedMonths.map(m => {
     const [y, mm] = m.split('-');
@@ -2384,53 +2410,42 @@ function renderDashboard() {
   const monthlyPlans = DB.MonthlyPlans.all().filter(p => p.month === thisMonth);
   const planQtyThisMonth = monthlyPlans.reduce((s, p) => s + (p.qty || 0), 0);
   const scheduledQtyThisMonth = DB.ProductionSchedules.all().filter(s => s.month === thisMonth).reduce((s, sch) => s + (sch.qty || 0), 0);
-  const producedQtyThisMonth = batches.filter(b => {
-    const bd = (b.productionDate || b.createdAt || '').slice(0, 7);
-    return bd === thisMonth && 
-           !b.isReprocess && 
-           !b.isStockUpload && 
-           !(b.batchNo && b.batchNo.includes('-REP')) && 
-           !(b.batchNo && b.batchNo.includes('-REC-'));
-  }).reduce((s, b) => s + (b.initialQty || 0), 0);
 
   // Active WIP rechecks
-  const activeRechecks = rechecks.filter(r => {
+  let activeRechecks = 0;
+  for (let i = 0; i < rechecks.length; i++) {
+    const r = rechecks[i];
     const b = batchMap.get(r.batchId);
-    return b && b.status === 'active';
-  }).length;
+    if (b && b.status === 'active') activeRechecks++;
+  }
 
   // Critical replenishments (stock < 30% of target level) - Optimized O(N) indexing
   let criticalCount = 0;
   const STAGES = ['production', 'cryogenic', 'deflashing', 'waiting-trimming', 'trimming', 'post-curing', 'waiting-visual', 'visual', 'gauge', 'quality'];
   
-  const allStageRecords = DB.StageRecords.all();
   const allBatches = batches;
 
   // Pre-index active batches by partId & stage
   const activeBatchesByPartAndStage = {};
-  allBatches.forEach(b => {
-    if (b.status === 'active' && b.partId) {
+  for (let i = 0; i < allBatches.length; i++) {
+    const b = allBatches[i];
+    if (b && b.status === 'active' && b.partId) {
       const k = `${b.partId}_${b.currentStage}`;
       if (!activeBatchesByPartAndStage[k]) activeBatchesByPartAndStage[k] = [];
       activeBatchesByPartAndStage[k].push(b);
     }
-  });
+  }
 
-  // Pre-index incoming stage records by batchId
-  const incomingRecordsByBatchId = {};
-  allStageRecords.forEach(r => {
-    if (r.movedTo) {
-      if (!incomingRecordsByBatchId[r.batchId]) incomingRecordsByBatchId[r.batchId] = [];
-      incomingRecordsByBatchId[r.batchId].push(r);
-    }
-  });
-
-  // Pre-calculate general stage loss rates
+  // Pre-calculate general stage loss rates using indexed stage records
   const generalLossRates = {};
   STAGES.forEach(stage => {
-    const stageRecs = allStageRecords.filter(r => r.stage === stage);
-    const totalIn = stageRecs.reduce((s, r) => s + (r.inputQty || 0), 0);
-    const totalLoss = stageRecs.reduce((s, r) => s + (r.lossQty || 0), 0);
+    const stageRecs = DB.StageRecords.byStage ? DB.StageRecords.byStage(stage) : [];
+    let totalIn = 0;
+    let totalLoss = 0;
+    for (let i = 0; i < stageRecs.length; i++) {
+      totalIn += (stageRecs[i].inputQty || 0);
+      totalLoss += (stageRecs[i].lossQty || 0);
+    }
     generalLossRates[stage] = totalIn > 0 ? (totalLoss / totalIn) : 0.05;
   });
 
@@ -2450,7 +2465,7 @@ function renderDashboard() {
       const stage = STAGES[i];
       const activeList = activeBatchesByPartAndStage[`${p.id}_${stage}`] || [];
       const wip = activeList.reduce((sum, b) => {
-        const inc = incomingRecordsByBatchId[b.id] || [];
+        const inc = DB.StageRecords.byBatch ? DB.StageRecords.byBatch(b.id) : [];
         const matchInc = inc.filter(r => r.movedTo === stage);
         if (matchInc.length) return sum + (matchInc[matchInc.length - 1].outputQty || 0);
         return sum + (b.initialQty || 0);
@@ -2476,7 +2491,8 @@ function renderDashboard() {
   const STAGE_NAMES = { production:'Production', cryogenic:'Cryogenic', deflashing:'DE Flashing', 'waiting-trimming':'Waiting for Trimming', trimming:'Trimming', 'post-curing':'Post Curing', 'waiting-visual':'Waiting for Visual', visual:'Visual', gauge:'Gauge', quality:'QC Final', store:'Store' };
 
   const pipelineHtml = STAGES.map(stage => {
-    const count = batches.filter(b => b.currentStage === stage && b.status === 'active').length;
+    const stageBatches = DB.Batches.byStage ? DB.Batches.byStage(stage) : batches.filter(b => b.currentStage === stage && b.status === 'active');
+    const count = stageBatches.length;
     return `
       <div class="stat-card ${stage==='quality'?'red':stage==='store'?'green':stage==='production'?'purple':'blue'}" style="cursor:pointer;" onclick="App.navigate('${stage}')">
         <div style="font-size:22px;margin-bottom:8px;">${STAGE_ICONS[stage]}</div>
@@ -2499,6 +2515,7 @@ function renderDashboard() {
   let grandOut = 0;
   let grandLoss = 0;
 
+  const allStageRecords = DB.StageRecords.all();
   for (let i = 0; i < allStageRecords.length; i++) {
     const r = allStageRecords[i];
     const recordMonth = (r.date || r.createdAt || '').slice(0, 7);
@@ -2613,10 +2630,10 @@ function renderDashboard() {
   const wipChartInnerHeight = wipSvgHeight - wipPaddingTop - wipPaddingBottom;
   
   const wipStageData = STAGES.filter(s => s !== 'store').map(stage => {
-    const stageBatches = batches.filter(b => b.currentStage === stage && b.status === 'active');
+    const stageBatches = DB.Batches.byStage ? DB.Batches.byStage(stage) : batches.filter(b => b.currentStage === stage && b.status === 'active');
     const totalQty = stageBatches.reduce((sum, b) => {
       if (b.currentStage !== 'production') {
-        const inc = incomingRecordsByBatchId[b.id] || [];
+        const inc = DB.StageRecords.byBatch ? DB.StageRecords.byBatch(b.id) : [];
         const incoming = inc.filter(r => r.movedTo === stage);
         if (incoming.length > 0) {
           const lastRec = incoming[incoming.length - 1];

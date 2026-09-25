@@ -27,6 +27,23 @@ const WaitingVisualModule = (() => {
     return !isNaN(qtyVal) ? qtyVal : (batch.initialQty || 0);
   }
 
+  function buildLastRecordMap(batchList) {
+    const map = {};
+    if (!batchList || !batchList.length) return map;
+    for (let i = 0; i < batchList.length; i++) {
+      const b = batchList[i];
+      if (!b || !b.id) continue;
+      const recs = DB.StageRecords.byBatch(b.id);
+      for (let j = recs.length - 1; j >= 0; j--) {
+        if (recs[j].movedTo === 'waiting-visual') {
+          map[b.id] = recs[j];
+          break;
+        }
+      }
+    }
+    return map;
+  }
+
   function render() {
     pendingSearch = '';
     currentPage = 1;
@@ -36,15 +53,8 @@ const WaitingVisualModule = (() => {
     const thisMonth = new Date().toISOString().slice(0,7);
     const monthLoss = DB.LossTracker.byStage('waiting-visual').filter(l=>(l.date||'').startsWith(thisMonth)).reduce((s,l)=>s+(l.lossQty||0),0);
 
-    // Build the lookup map for StageRecords
-    const stageRecords = DB.StageRecords.all();
-    const lastRecordMap = {};
-    for (let i = 0; i < stageRecords.length; i++) {
-      const r = stageRecords[i];
-      if (r.batchId && r.movedTo === 'waiting-visual') {
-        lastRecordMap[r.batchId] = r;
-      }
-    }
+    // Build targeted lookup map for only active waiting-visual batches
+    const lastRecordMap = buildLastRecordMap(batches);
 
     const totalQty = batches.reduce((sum, b) => sum + getInputQty(b, lastRecordMap), 0);
 
@@ -94,17 +104,7 @@ const WaitingVisualModule = (() => {
     const endIdx = startIdx + itemsPerPage;
     const pageItems = filtered.slice(startIdx, endIdx);
 
-    const recordMap = lastRecordMap || (() => {
-      const stageRecords = DB.StageRecords.all();
-      const map = {};
-      for (let i = 0; i < stageRecords.length; i++) {
-        const r = stageRecords[i];
-        if (r.batchId && r.movedTo === 'waiting-visual') {
-          map[r.batchId] = r;
-        }
-      }
-      return map;
-    })();
+    const recordMap = lastRecordMap || buildLastRecordMap(filtered);
 
     const rows = pageItems.map(b => {
       const inputQty = getInputQty(b, recordMap);

@@ -200,7 +200,11 @@ const DB = (() => {
   const masterByJmrefIndex = new Map();
   const stageRecordsByBatchIndex = new Map();
   const stageRecordsByStageIndex = new Map();
+  const lossTrackerByBatchIndex = new Map();
+  const lossTrackerByStageIndex = new Map();
   let _memoStoreInventory = null;
+  const _memoStoreInventoryById = new Map();
+  const _memoStoreInventoryByJmref = new Map();
 
   function rebuildIndexesForTable(table) {
     const list = cache[table] || [];
@@ -281,10 +285,35 @@ const DB = (() => {
           sList.push(r);
         }
       }
+    } else if (table === 'lossTracker') {
+      lossTrackerByBatchIndex.clear();
+      lossTrackerByStageIndex.clear();
+      for (let i = 0; i < list.length; i++) {
+        const l = list[i];
+        if (!l) continue;
+        if (l.batchId) {
+          let bList = lossTrackerByBatchIndex.get(l.batchId);
+          if (!bList) {
+            bList = [];
+            lossTrackerByBatchIndex.set(l.batchId, bList);
+          }
+          bList.push(l);
+        }
+        if (l.stage) {
+          let sList = lossTrackerByStageIndex.get(l.stage);
+          if (!sList) {
+            sList = [];
+            lossTrackerByStageIndex.set(l.stage, sList);
+          }
+          sList.push(l);
+        }
+      }
     }
 
     if (table === 'batches' || table === 'stageRecords' || table === 'master' || table === 'sales') {
       _memoStoreInventory = null;
+      _memoStoreInventoryById.clear();
+      _memoStoreInventoryByJmref.clear();
     }
   }
 
@@ -317,13 +346,34 @@ const DB = (() => {
     runStoreSyncPatch();
   }
 
+  // For massive historical collections, store only the recent sliding window in localStorage
+  // to avoid hitting 5MB browser quota and blocking main thread with 8.5MB JSON stringify
+  const STORAGE_LIMITS = {
+    stageRecords: 1500,
+    lossTracker: 1000,
+    recheckTracker: 1000,
+    rejectionTracker: 1000,
+    auditLogs: 500,
+    printHistory: 500
+  };
+
+  function prepareForStorage(table, data) {
+    if (!Array.isArray(data)) return [];
+    const limit = STORAGE_LIMITS[table];
+    if (limit && data.length > limit) {
+      return data.slice(-limit);
+    }
+    return data;
+  }
+
   // Debounced storage saver to prevent UI freezes on low-spec hardware
   const _saveTimers = {};
   function saveLocal(table) {
     if (_saveTimers[table]) clearTimeout(_saveTimers[table]);
     _saveTimers[table] = setTimeout(() => {
       try {
-        localStorage.setItem(PREFIX + table, JSON.stringify(cache[table] || []));
+        const toSave = prepareForStorage(table, cache[table] || []);
+        localStorage.setItem(PREFIX + table, JSON.stringify(toSave));
       } catch (e) {
         console.warn(`Could not save ${table} to local cache:`, e);
       }
@@ -333,7 +383,8 @@ const DB = (() => {
   function saveLocalImmediate(table) {
     if (_saveTimers[table]) clearTimeout(_saveTimers[table]);
     try {
-      localStorage.setItem(PREFIX + table, JSON.stringify(cache[table] || []));
+      const toSave = prepareForStorage(table, cache[table] || []);
+      localStorage.setItem(PREFIX + table, JSON.stringify(toSave));
     } catch (e) {
       console.warn(`Could not save ${table} to local cache:`, e);
     }
@@ -412,28 +463,63 @@ const DB = (() => {
       const collections = Object.keys(cache);
       collections.forEach(table => {
         let query = db.collection(table);
+        let isInitial = true;
 
         query.onSnapshot(snapshot => {
-          const list = [];
-          snapshot.forEach(doc => {
-            list.push({ id: doc.id, ...doc.data() });
-          });
-
-          // Fast primitive property comparison to detect remote data changes without JSON.stringify overhead
-          let hasChanges = cache[table].length !== list.length;
-          if (!hasChanges) {
-            for (let i = 0; i < list.length; i++) {
-              const a = cache[table][i];
-              const b = list[i];
-              if (!a || !b || a.id !== b.id || a.updatedAt !== b.updatedAt || a.status !== b.status || a.currentStage !== b.currentStage || a.remainingQty !== b.remainingQty) {
-                hasChanges = true;
-                break;
-              }
+          if (isInitial) {
+            isInitial = false;
+            const list = [];
+            snapshot.forEach(doc => {
+              list.push({ id: doc.id, ...doc.data() });
+            });
+            cache[table] = list;
+            rebuildIndexesForTable(table);
+            saveLocal(table);
+            if (['batches', 'recheckTracker', 'stageRecords', 'lossTracker'].includes(table)) {
+              runRecheckPatch();
             }
+            triggerDataChange(table);
+            return;
           }
 
-          if (hasChanges) {
-            cache[table] = list;
+          // Incremental Delta Updates using snapshot.docChanges()
+          const changes = snapshot.docChanges();
+          if (!changes || changes.length === 0) return;
+
+          let modifiedAny = false;
+          const currentTable = cache[table];
+          const tableIdMap = idIndex[table];
+
+          changes.forEach(change => {
+            const docId = change.doc.id;
+            const docData = { id: docId, ...change.doc.data() };
+
+            if (change.type === 'added') {
+              if (tableIdMap && tableIdMap.has(docId)) {
+                const existing = tableIdMap.get(docId);
+                Object.assign(existing, docData);
+              } else {
+                currentTable.push(docData);
+              }
+              modifiedAny = true;
+            } else if (change.type === 'modified') {
+              if (tableIdMap && tableIdMap.has(docId)) {
+                const existing = tableIdMap.get(docId);
+                Object.assign(existing, docData);
+              } else {
+                currentTable.push(docData);
+              }
+              modifiedAny = true;
+            } else if (change.type === 'removed') {
+              const idx = currentTable.findIndex(d => d.id === docId);
+              if (idx !== -1) {
+                currentTable.splice(idx, 1);
+              }
+              modifiedAny = true;
+            }
+          });
+
+          if (modifiedAny) {
             rebuildIndexesForTable(table);
             saveLocal(table);
             if (['batches', 'recheckTracker', 'stageRecords', 'lossTracker'].includes(table)) {
@@ -1055,18 +1141,17 @@ const DB = (() => {
         return db.collection(table).doc(id).delete();
       }
       let payload = docData;
-      if (operation === 'set' && cache[table]) {
+      if (!payload && operation === 'set' && cache[table]) {
         const latest = cache[table].find(r => r && r.id === id);
         if (latest) {
-          payload = sanitizeFirestoreDoc({ ...latest });
-          delete payload.id;
+          payload = latest;
         }
       }
-      if (payload && payload.id) {
+      if (payload) {
         payload = sanitizeFirestoreDoc({ ...payload });
         delete payload.id;
       }
-      return db.collection(table).doc(id).set(payload, { merge: true });
+      return db.collection(table).doc(id).set(payload || {}, { merge: true });
     };
 
     let opFinished = false;
@@ -1231,14 +1316,7 @@ const DB = (() => {
       updatedAt: new Date().toISOString() 
     };
 
-    // Await cloud commit first!
-    if (db) {
-      const docData = sanitizeFirestoreDoc({ ...row });
-      delete docData.id;
-      await syncDocToCloud(table, id, docData, 'set');
-    }
-
-    // Now commit to local cache
+    // Update local cache & store immediately
     const existingIdx = cache[table].findIndex(r => r.id === id);
     if (existingIdx >= 0) {
       cache[table][existingIdx] = row;
@@ -1249,6 +1327,24 @@ const DB = (() => {
     saveLocal(table);
     triggerDataChange(table);
 
+    // Confirm Cloud write with rollback on failure
+    if (db) {
+      const docData = sanitizeFirestoreDoc({ ...row });
+      delete docData.id;
+      try {
+        await syncDocToCloud(table, id, docData, 'set');
+      } catch (err) {
+        const idx = cache[table].findIndex(r => r.id === id);
+        if (idx !== -1) {
+          cache[table].splice(idx, 1);
+          rebuildIndexesForTable(table);
+          saveLocal(table);
+          triggerDataChange(table);
+        }
+        throw err;
+      }
+    }
+
     return row;
   }
 
@@ -1258,23 +1354,36 @@ const DB = (() => {
     const index = cache[table].findIndex(r => r.id === id);
     if (index === -1) return null;
 
+    const previousRow = { ...cache[table][index] };
     const updatedRow = { 
       ...cache[table][index], 
       ...changes, 
       updatedAt: new Date().toISOString() 
     };
 
-    // Await cloud commit first!
-    if (db) {
-      const docData = sanitizeFirestoreDoc({ ...updatedRow });
-      delete docData.id;
-      await syncDocToCloud(table, id, docData, 'set');
-    }
-
+    // Update local cache & store immediately
     cache[table][index] = updatedRow;
     rebuildIndexesForTable(table);
     saveLocal(table);
     triggerDataChange(table);
+
+    // Confirm Cloud write with rollback on failure
+    if (db) {
+      const docData = sanitizeFirestoreDoc({ ...updatedRow });
+      delete docData.id;
+      try {
+        await syncDocToCloud(table, id, docData, 'set');
+      } catch (err) {
+        const curIdx = cache[table].findIndex(r => r.id === id);
+        if (curIdx !== -1) {
+          cache[table][curIdx] = previousRow;
+          rebuildIndexesForTable(table);
+          saveLocal(table);
+          triggerDataChange(table);
+        }
+        throw err;
+      }
+    }
 
     return updatedRow;
   }
@@ -1282,14 +1391,25 @@ const DB = (() => {
   async function removeAsync(table, id) {
     assertOnline('delete from ' + table);
 
-    if (db) {
-      await syncDocToCloud(table, id, null, 'delete');
-    }
-
+    const prevItem = cache[table].find(r => r.id === id);
     cache[table] = cache[table].filter(r => r.id !== id);
     rebuildIndexesForTable(table);
     saveLocal(table);
     triggerDataChange(table);
+
+    if (db) {
+      try {
+        await syncDocToCloud(table, id, null, 'delete');
+      } catch (err) {
+        if (prevItem) {
+          cache[table].push(prevItem);
+          rebuildIndexesForTable(table);
+          saveLocal(table);
+          triggerDataChange(table);
+        }
+        throw err;
+      }
+    }
   }
 
   function clearTable(table) {
@@ -1973,8 +2093,15 @@ const DB = (() => {
   // ── LOSS TRACKER ──────────────────────────────────────────
   const LossTracker = {
     all: () => getAll('lossTracker'),
-    byStage: (stage) => getAll('lossTracker').filter(r => r.stage === stage),
-    byBatch: (batchId) => getAll('lossTracker').filter(r => r.batchId === batchId),
+    byStage: (stage) => {
+      const list = lossTrackerByStageIndex.get(stage);
+      return list ? [...list] : getAll('lossTracker').filter(r => r.stage === stage);
+    },
+    byBatch: (batchId) => {
+      if (!batchId) return [];
+      const list = lossTrackerByBatchIndex.get(batchId);
+      return list ? [...list] : getAll('lossTracker').filter(r => r.batchId === batchId);
+    },
     insert: (r) => insert('lossTracker', r),
     insertAsync: (r) => insertAsync('lossTracker', r),
     update: (id, c) => update('lossTracker', id, c),
@@ -1982,8 +2109,8 @@ const DB = (() => {
     remove: (id) => remove('lossTracker', id),
     removeAsync: (id) => removeAsync('lossTracker', id),
     sumByStageAndDate: (stage, from, to) => {
-      return getAll('lossTracker')
-        .filter(r => r.stage === stage && (!from || r.date >= from) && (!to || r.date <= to));
+      const list = lossTrackerByStageIndex.get(stage) || getAll('lossTracker').filter(r => r.stage === stage);
+      return list.filter(r => (!from || r.date >= from) && (!to || r.date <= to));
     },
   };
 
@@ -2268,15 +2395,15 @@ const DB = (() => {
     allParts: () => {
       if (_memoStoreInventory) return _memoStoreInventory;
       const master = getAll('master');
-      const stageRecords = getAll('stageRecords');
+      const storeStageRecs = stageRecordsByStageIndex.get('store') || [];
       const batches = getAll('batches');
       const sales = getAll('sales');
 
-      // Pre-index store stage records by batchId: batchId -> inputQty
+      // Pre-index store stage records by batchId: batchId -> inputQty (using 3,849 store records instead of 24,776)
       const storeQtyByBatchId = new Map();
-      for (let i = 0; i < stageRecords.length; i++) {
-        const r = stageRecords[i];
-        if (r.stage === 'store' && !storeQtyByBatchId.has(r.batchId)) {
+      for (let i = 0; i < storeStageRecs.length; i++) {
+        const r = storeStageRecs[i];
+        if (r && r.batchId && !storeQtyByBatchId.has(r.batchId)) {
           storeQtyByBatchId.set(r.batchId, r.inputQty !== undefined ? Number(r.inputQty) : null);
         }
       }
@@ -2348,17 +2475,34 @@ const DB = (() => {
           available
         };
       });
+
+      _memoStoreInventoryById.clear();
+      _memoStoreInventoryByJmref.clear();
+      for (let i = 0; i < _memoStoreInventory.length; i++) {
+        const item = _memoStoreInventory[i];
+        if (item.id) _memoStoreInventoryById.set(item.id, item);
+        if (item.jmrefNo) {
+          const norm = String(item.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+          if (norm && !_memoStoreInventoryByJmref.has(norm)) {
+            _memoStoreInventoryByJmref.set(norm, item);
+          }
+        }
+      }
+
       return _memoStoreInventory;
     },
 
     availableByJmref: (jmrefNo, partId) => {
+      StoreInventory.allParts();
+      if (partId && _memoStoreInventoryById.has(partId)) {
+        return _memoStoreInventoryById.get(partId).available;
+      }
       const normTarget = String(jmrefNo || '').trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
-      const all = StoreInventory.allParts();
-      const match = all.find(p => (partId && p.id === partId) || (normTarget && String(p.jmrefNo || '').trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase() === normTarget));
-      if (match) return match.available;
+      if (normTarget && _memoStoreInventoryByJmref.has(normTarget)) {
+        return _memoStoreInventoryByJmref.get(normTarget).available;
+      }
 
-      // Fallback for non-master items: direct computation
-      const stageRecords = getAll('stageRecords');
+      // Fallback for non-master items: direct computation using indexed batch lookups
       const batches = getAll('batches');
       const sales = getAll('sales');
       let totalReceived = 0;
@@ -2372,7 +2516,8 @@ const DB = (() => {
           if (normTarget && bNorm === normTarget) isMatch = true;
         }
         if (isMatch) {
-          const storeRecs = stageRecords.filter(r => r.batchId === b.id && r.stage === 'store');
+          const bRecs = stageRecordsByBatchIndex.get(b.id) || [];
+          const storeRecs = bRecs.filter(r => r.stage === 'store');
           const storeQty = storeRecs.length ? (storeRecs[0].inputQty !== undefined ? Number(storeRecs[0].inputQty) : Number(b.initialQty || 0)) : Number(b.initialQty || 0);
           totalReceived += storeQty;
         }
@@ -2388,7 +2533,7 @@ const DB = (() => {
         if (isMatch) totalSold += Number(s.qty) || 0;
       });
       return Math.max(0, totalReceived - totalSold);
-    }
+    },
   };
 
   // ── PRODUCTION OPERATOR RECORDS ───────────────────────────
