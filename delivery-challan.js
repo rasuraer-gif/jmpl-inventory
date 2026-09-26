@@ -233,7 +233,7 @@ const DeliveryChallanModule = (() => {
             <div class="form-group mt-4">
               <label class="form-label">Add Batch (Scan or Type) <span class="required">*</span></label>
               <div class="flex gap-2">
-                <input type="text" id="dc-batch-input" class="form-control" style="flex:1;" placeholder="Type or scan Batch No..." list="dc-batch-list" oninput="DeliveryChallanModule.checkAutoAdd(this.value)" onkeydown="if(event.key === 'Enter') { DeliveryChallanModule.addBatchItem(); event.preventDefault(); }">
+                <input type="text" id="dc-batch-input" class="form-control" style="flex:1;" placeholder="Type or scan Batch No..." list="dc-batch-list" oninput="DeliveryChallanModule.checkAutoAdd(this.value)" onchange="DeliveryChallanModule.onBatchChange(this.value)" onkeydown="if(event.key === 'Enter') { DeliveryChallanModule.onBatchEnter(event); }">
                 <datalist id="dc-batch-list"></datalist>
                 <button class="btn btn-secondary" onclick="DeliveryChallanModule.startScan()" style="padding:0 12px; display:flex; align-items:center; justify-content:center; height:42px;" title="Scan QR Code">📷 Scan</button>
               </div>
@@ -401,14 +401,82 @@ const DeliveryChallanModule = (() => {
     }
   }
 
-  function checkAutoAdd(val) {
+  let autoAddTimer = null;
+  let _isScanningWithCamera = false;
+
+  function onBatchEnter(event) {
+    if (event) event.preventDefault();
+    if (autoAddTimer) {
+      clearTimeout(autoAddTimer);
+      autoAddTimer = null;
+    }
+    addBatchItem();
+  }
+
+  function onBatchChange(val) {
     if (!val || !selectedVendorId) return;
     const cleanVal = val.trim();
     if (!cleanVal) return;
-    const b = DB.Batches.all().find(x => x.batchNo && x.batchNo.toLowerCase() === cleanVal.toLowerCase() && x.status === 'active');
-    if (b && !challanItems.some(item => item.batch.id === b.id)) {
-      addBatchToChallan(b);
+    const allBatches = DB.Batches.all();
+    const exactMatch = allBatches.find(x => x.batchNo && x.batchNo.trim().toLowerCase() === cleanVal.toLowerCase() && x.status === 'active')
+           || allBatches.find(x => x.batchNo && x.batchNo.trim().toLowerCase() === cleanVal.toLowerCase());
+    if (exactMatch && !challanItems.some(item => item.batch.id === exactMatch.id)) {
+      if (autoAddTimer) {
+        clearTimeout(autoAddTimer);
+        autoAddTimer = null;
+      }
+      addBatchToChallan(exactMatch);
     }
+  }
+
+  function checkAutoAdd(val) {
+    if (_isScanningWithCamera) return;
+    if (autoAddTimer) {
+      clearTimeout(autoAddTimer);
+      autoAddTimer = null;
+    }
+    if (!val || !selectedVendorId) return;
+    const cleanVal = val.trim();
+    if (!cleanVal) return;
+
+    const allBatches = DB.Batches.all();
+    // Check if cleanVal exactly matches an active batch
+    const exactMatch = allBatches.find(x => x.batchNo && x.batchNo.trim().toLowerCase() === cleanVal.toLowerCase() && x.status === 'active');
+    if (!exactMatch) return;
+
+    // Check if there is ANY other active batch starting with cleanVal (e.g. child / reprocess batch with -REP suffix)
+    // If so, cleanVal is an ambiguous prefix; NEVER auto-add immediately while scanning/typing!
+    const cleanValLower = cleanVal.toLowerCase();
+    const hasLongerMatches = allBatches.some(x => {
+      if (!x.batchNo || x.status !== 'active') return false;
+      const bLower = x.batchNo.trim().toLowerCase();
+      return bLower.length > cleanValLower.length && bLower.startsWith(cleanValLower);
+    });
+
+    if (hasLongerMatches) {
+      // Allow user or hardware barcode scanner to finish typing/transmitting the longer suffix (e.g. -REP)
+      autoAddTimer = setTimeout(() => {
+        const input = document.getElementById('dc-batch-input');
+        const currentVal = (input ? input.value : '').trim();
+        if (currentVal.toLowerCase() === cleanValLower) {
+          if (!challanItems.some(item => item.batch.id === exactMatch.id)) {
+            addBatchToChallan(exactMatch);
+          }
+        }
+      }, 500);
+      return;
+    }
+
+    // No longer prefix matches exist. Debounce by 250ms to allow barcode scanner keystrokes to settle.
+    autoAddTimer = setTimeout(() => {
+      const input = document.getElementById('dc-batch-input');
+      const currentVal = (input ? input.value : '').trim();
+      if (currentVal.toLowerCase() === cleanValLower) {
+        if (!challanItems.some(item => item.batch.id === exactMatch.id)) {
+          addBatchToChallan(exactMatch);
+        }
+      }
+    }, 250);
   }
 
   function startScan() {
@@ -420,10 +488,18 @@ const DeliveryChallanModule = (() => {
       showToast('Scanner module not loaded', 'error');
       return;
     }
+    _isScanningWithCamera = true;
     Scanner.start('dc-batch-input', (scannedText) => {
+      _isScanningWithCamera = false;
+      if (autoAddTimer) {
+        clearTimeout(autoAddTimer);
+        autoAddTimer = null;
+      }
       const cleanText = (scannedText || '').trim();
       if (!cleanText) return;
-      const b = DB.Batches.all().find(x => x.batchNo && x.batchNo.toLowerCase() === cleanText.toLowerCase());
+      const allBatches = DB.Batches.all();
+      const b = allBatches.find(x => x.batchNo && x.batchNo.trim().toLowerCase() === cleanText.toLowerCase() && x.status === 'active')
+             || allBatches.find(x => x.batchNo && x.batchNo.trim().toLowerCase() === cleanText.toLowerCase());
       if (!b) {
         showToast('Batch not found: ' + cleanText, 'error');
         return;
@@ -433,13 +509,19 @@ const DeliveryChallanModule = (() => {
   }
 
   function addBatchItem() {
+    if (autoAddTimer) {
+      clearTimeout(autoAddTimer);
+      autoAddTimer = null;
+    }
     const input = document.getElementById('dc-batch-input');
     if (!input || !input.value.trim()) {
       showToast('Please enter a batch number to add', 'warning');
       return;
     }
     const batchNoVal = input.value.trim();
-    const b = DB.Batches.all().find(x => x.batchNo && x.batchNo.toLowerCase() === batchNoVal.toLowerCase());
+    const allBatches = DB.Batches.all();
+    const b = allBatches.find(x => x.batchNo && x.batchNo.trim().toLowerCase() === batchNoVal.toLowerCase() && x.status === 'active')
+           || allBatches.find(x => x.batchNo && x.batchNo.trim().toLowerCase() === batchNoVal.toLowerCase());
     if (!b) {
       showToast('Batch not found: ' + batchNoVal, 'error');
       return;
@@ -868,6 +950,8 @@ const DeliveryChallanModule = (() => {
     printChallan,
     filterHistory,
     checkAutoAdd,
+    onBatchEnter,
+    onBatchChange,
     addBatchFromQuickMove
   };
 })();
