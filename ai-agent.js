@@ -592,11 +592,18 @@ const AIAgentModule = (() => {
     });
 
     // Recent Sales (last 5 transactions)
-    const recentSales = sales.sort((a,b) => (b.saleDate||'').localeCompare(a.saleDate||'')).slice(0, 5).map(s => ({
-      jmrefNo: s.jmrefNo,
-      qty: s.qty,
-      date: s.saleDate
-    }));
+    const recentSales = sales
+      .filter(s => {
+        const n = String(s.notes || '').toLowerCase();
+        return !n.includes('direct store stock reconciliation') && !n.includes('stock reconciliation');
+      })
+      .sort((a,b) => (b.saleDate||'').localeCompare(a.saleDate||''))
+      .slice(0, 5)
+      .map(s => ({
+        jmrefNo: s.jmrefNo,
+        qty: s.qty,
+        date: s.saleDate
+      }));
 
     return {
       sys: {

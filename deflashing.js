@@ -64,10 +64,10 @@ const DeflashingModule = (() => {
   }
 
   function pendingTab(batches) {
-    let filtered = batches;
+    let filtered = [...batches].sort((a, b) => ((Number(b.internalBatchNo) || 0) - (Number(a.internalBatchNo) || 0)) || (b.createdAt || '').localeCompare(a.createdAt || ''));
     if (pendingSearch) {
       const q = pendingSearch.toLowerCase();
-      filtered = batches.filter(b => (b.batchNo || '').toLowerCase().includes(q));
+      filtered = filtered.filter(b => (b.batchNo || '').toLowerCase().includes(q));
     }
     if (!filtered.length && !pendingSearch) return `<div class="card card-body"><div class="empty-state"><div class="empty-icon">&#128295;</div><p>No batches in Flash Removal stage</p></div></div>`;
     

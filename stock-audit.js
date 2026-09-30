@@ -263,6 +263,9 @@ const StockAuditModule = (() => {
     if (!el) return;
 
     const session = getActiveSession();
+    if (session && session.stageScope && session.stageScope !== 'all') {
+      pinnedAuditingStage = session.stageScope;
+    }
     const allSessions = DB.AuditSessions.all().sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
     const metrics = getSessionMetrics(session);
 
@@ -464,19 +467,26 @@ const StockAuditModule = (() => {
 
           <div style="display:flex; gap:12px; flex-wrap:wrap; margin-top:12px; font-size:12px; color:var(--text-muted);">
             <div>💡 <strong>Auditing Stage:</strong> 
-              <select id="audit-floor-stage-lock" class="form-control form-control-sm" style="display:inline-block; width:auto; margin-left:4px;" onchange="StockAuditModule.updateAuditingStage(this.value)">
-                <option value="auto" ${pinnedAuditingStage === 'auto' ? 'selected' : ''}>⚡ Auto-detect registered stage</option>
-                <option value="store" ${pinnedAuditingStage === 'store' ? 'selected' : ''}>Store</option>
-                <option value="waiting-visual" ${pinnedAuditingStage === 'waiting-visual' ? 'selected' : ''}>Waiting for Visual</option>
-                <option value="visual" ${pinnedAuditingStage === 'visual' ? 'selected' : ''}>Visual Inspection</option>
-                <option value="gauge" ${pinnedAuditingStage === 'gauge' ? 'selected' : ''}>Gauge Inspection</option>
-                <option value="quality" ${pinnedAuditingStage === 'quality' ? 'selected' : ''}>Quality Final</option>
-                <option value="production" ${pinnedAuditingStage === 'production' ? 'selected' : ''}>Production / Moulding</option>
-                <option value="cryogenic" ${pinnedAuditingStage === 'cryogenic' ? 'selected' : ''}>Cryogenic</option>
-                <option value="deflashing" ${pinnedAuditingStage === 'deflashing' ? 'selected' : ''}>Flash Removal</option>
-                <option value="trimming" ${pinnedAuditingStage === 'trimming' ? 'selected' : ''}>Trimming</option>
-                <option value="post-curing" ${pinnedAuditingStage === 'post-curing' ? 'selected' : ''}>Post Curing</option>
-              </select>
+              ${session && session.stageScope && session.stageScope !== 'all' ? `
+                <select id="audit-floor-stage-lock" class="form-control form-control-sm" disabled style="display:inline-block; width:auto; margin-left:4px; font-weight:700; background:var(--bg-glass-hover); opacity:0.9;">
+                  <option value="${session.stageScope}" selected>${STAGE_LABELS[session.stageScope] || session.stageScope}</option>
+                </select>
+                <span class="badge badge-teal text-xs ml-1" style="vertical-align:middle;">🔒 Locked by Session Scope</span>
+              ` : `
+                <select id="audit-floor-stage-lock" class="form-control form-control-sm" style="display:inline-block; width:auto; margin-left:4px;" onchange="StockAuditModule.updateAuditingStage(this.value)">
+                  <option value="auto" ${pinnedAuditingStage === 'auto' ? 'selected' : ''}>⚡ Auto-detect registered stage</option>
+                  <option value="store" ${pinnedAuditingStage === 'store' ? 'selected' : ''}>Store</option>
+                  <option value="waiting-visual" ${pinnedAuditingStage === 'waiting-visual' ? 'selected' : ''}>Waiting for Visual</option>
+                  <option value="visual" ${pinnedAuditingStage === 'visual' ? 'selected' : ''}>Visual Inspection</option>
+                  <option value="gauge" ${pinnedAuditingStage === 'gauge' ? 'selected' : ''}>Gauge Inspection</option>
+                  <option value="quality" ${pinnedAuditingStage === 'quality' ? 'selected' : ''}>Quality Final</option>
+                  <option value="production" ${pinnedAuditingStage === 'production' ? 'selected' : ''}>Production / Moulding</option>
+                  <option value="cryogenic" ${pinnedAuditingStage === 'cryogenic' ? 'selected' : ''}>Cryogenic</option>
+                  <option value="deflashing" ${pinnedAuditingStage === 'deflashing' ? 'selected' : ''}>Flash Removal</option>
+                  <option value="trimming" ${pinnedAuditingStage === 'trimming' ? 'selected' : ''}>Trimming</option>
+                  <option value="post-curing" ${pinnedAuditingStage === 'post-curing' ? 'selected' : ''}>Post Curing</option>
+                </select>
+              `}
             </div>
           </div>
 
@@ -1022,21 +1032,46 @@ const StockAuditModule = (() => {
               <input type="text" id="new-audit-title" class="form-control" placeholder="e.g. August 2026 Monthly Stock Audit" value="${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} Monthly Stock Audit">
             </div>
 
-            <div class="form-group">
-              <label class="form-label">Audit Stage Scope <span class="required">*</span></label>
-              <select id="new-audit-scope" class="form-control">
-                <option value="all">🏢 All Factory Stages &amp; Finished Goods Store (Full Factory Audit)</option>
-                <option value="store">🏪 Store / Finished Goods Only</option>
-                <option value="waiting-visual">⏳ Waiting for Visual Inspection Only</option>
-                <option value="visual">👁️ Visual Inspection Department Only</option>
-                <option value="gauge">📏 Gauge Inspection Only</option>
-                <option value="quality">⭐ Quality Final QC Only</option>
-                <option value="production">🏭 Moulding / Production Stage Only</option>
-                <option value="cryogenic">❄️ Cryogenic Deflashing Only</option>
-                <option value="deflashing">🔧 Manual DE Flashing Only</option>
-                <option value="trimming">✂️ Trimming Stage Only</option>
-                <option value="post-curing">🔥 Post Curing Only</option>
-              </select>
+            <div class="form-row-2">
+              <div class="form-group">
+                <label class="form-label">Audit Scope <span class="required">*</span></label>
+                <select id="new-audit-scope" class="form-control" onchange="StockAuditModule.onAuditScopeChange(this.value)">
+                  <option value="all">🏢 Full Factory Audit (All Stages &amp; Store)</option>
+                  <option value="store">🏪 Finished Goods Store Only</option>
+                  <option value="single">🎯 Specific WIP Department / Single Stage</option>
+                  <option value="production">🏭 Moulding / Production Stage</option>
+                  <option value="cryogenic">❄️ Cryogenic Deflashing</option>
+                  <option value="deflashing">🔧 Manual DE Flashing</option>
+                  <option value="trimming">✂️ Trimming Stage</option>
+                  <option value="post-curing">🔥 Post Curing</option>
+                  <option value="waiting-visual">⏳ Waiting for Visual Inspection</option>
+                  <option value="visual">👁️ Visual Inspection Department</option>
+                  <option value="gauge">📏 Gauge Inspection</option>
+                  <option value="quality">⭐ Quality Final QC</option>
+                </select>
+                <p class="text-xs text-muted mt-1" id="new-audit-scope-note">Full factory audit covers all active WIP stages plus finished goods store.</p>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label flex justify-between items-center">
+                  <span>Audit Stage <span class="required">*</span></span>
+                  <span id="new-audit-stage-lock-badge" class="badge badge-gray text-xs" style="padding:2px 8px;">🔒 Locked to Full Factory</span>
+                </label>
+                <select id="new-audit-stage" class="form-control" disabled style="font-weight:600; background:var(--bg-glass-hover);" onchange="StockAuditModule.onAuditStageChange(this.value)">
+                  <option value="all">🏢 All Factory Stages &amp; Finished Goods Store</option>
+                  <option value="store">🏪 Store / Finished Goods</option>
+                  <option value="waiting-visual">⏳ Waiting for Visual Inspection</option>
+                  <option value="visual">👁️ Visual Inspection Department</option>
+                  <option value="gauge">📏 Gauge Inspection</option>
+                  <option value="quality">⭐ Quality Final QC</option>
+                  <option value="production">🏭 Moulding / Production</option>
+                  <option value="cryogenic">❄️ Cryogenic Deflashing</option>
+                  <option value="deflashing">🔧 Manual DE Flashing</option>
+                  <option value="trimming">✂️ Trimming Stage</option>
+                  <option value="post-curing">🔥 Post Curing</option>
+                </select>
+                <p class="text-xs text-muted mt-1" id="new-audit-stage-help">Audit stage is locked to all stages for full factory audit.</p>
+              </div>
             </div>
 
             <div class="form-row-2">
@@ -1281,7 +1316,21 @@ const StockAuditModule = (() => {
     document.getElementById('v-expected-stage').value = expectedStage;
 
     const physicalStageSelect = document.getElementById('v-physical-stage');
-    if (physicalStageSelect) physicalStageSelect.value = scannedStage;
+    if (physicalStageSelect) {
+      if (session && session.stageScope && session.stageScope !== 'all') {
+        physicalStageSelect.value = session.stageScope;
+        physicalStageSelect.disabled = true;
+        const mismatchAlert = document.getElementById('v-stage-mismatch-alert');
+        if (mismatchAlert) {
+          mismatchAlert.classList.remove('hidden');
+          mismatchAlert.innerHTML = `🔒 Stage locked to <strong>${STAGE_LABELS[session.stageScope] || session.stageScope}</strong> by Session Scope.`;
+        }
+      } else {
+        physicalStageSelect.value = scannedStage;
+        physicalStageSelect.disabled = false;
+        checkStageMismatch();
+      }
+    }
 
     const countedQtyInput = document.getElementById('v-counted-qty');
     if (countedQtyInput) {
@@ -1365,7 +1414,7 @@ const StockAuditModule = (() => {
     const partNo = document.getElementById('v-partno').value;
     const expectedQty = Number(document.getElementById('v-expected-qty').value || 0);
     const expectedStage = document.getElementById('v-expected-stage').value;
-    const scannedStage = document.getElementById('v-physical-stage').value;
+    const scannedStage = (session && session.stageScope && session.stageScope !== 'all') ? session.stageScope : document.getElementById('v-physical-stage').value;
     const countedQty = Number(document.getElementById('v-counted-qty').value || 0);
     const rackLocation = (document.getElementById('v-rack-location').value || '').trim();
     if (rackLocation) {
@@ -1448,14 +1497,90 @@ const StockAuditModule = (() => {
   }
 
   // ── Session Lifecycle Actions ──────────────────────────────
+  function onAuditScopeChange(scopeVal) {
+    const stageSelect = document.getElementById('new-audit-stage');
+    const lockBadge = document.getElementById('new-audit-stage-lock-badge');
+    const stageHelp = document.getElementById('new-audit-stage-help');
+    const scopeNote = document.getElementById('new-audit-scope-note');
+
+    if (!stageSelect) return;
+
+    if (scopeVal === 'all') {
+      stageSelect.value = 'all';
+      stageSelect.disabled = true;
+      stageSelect.style.background = 'var(--bg-glass-hover)';
+      if (lockBadge) {
+        lockBadge.innerHTML = '🔒 Locked to Full Factory';
+        lockBadge.className = 'badge badge-gray text-xs';
+      }
+      if (stageHelp) stageHelp.textContent = 'Audit stage is locked to all stages for full factory audit.';
+      if (scopeNote) scopeNote.textContent = 'Full factory audit covers all active WIP stages plus finished goods store.';
+    } else if (scopeVal === 'store') {
+      stageSelect.value = 'store';
+      stageSelect.disabled = true;
+      stageSelect.style.background = 'var(--bg-glass-hover)';
+      if (lockBadge) {
+        lockBadge.innerHTML = '🔒 Locked to Store';
+        lockBadge.className = 'badge badge-teal text-xs';
+      }
+      if (stageHelp) stageHelp.textContent = 'Audit stage is locked to Finished Goods Store only.';
+      if (scopeNote) scopeNote.textContent = 'Store audit covers finished goods inventory ready for sale.';
+    } else if (scopeVal === 'single') {
+      stageSelect.disabled = false;
+      stageSelect.style.background = 'var(--bg-card)';
+      if (stageSelect.value === 'all') stageSelect.value = 'visual';
+      const stageName = STAGE_LABELS[stageSelect.value] || stageSelect.value;
+      if (lockBadge) {
+        lockBadge.innerHTML = `🔓 Unlocked (${stageName})`;
+        lockBadge.className = 'badge badge-blue text-xs';
+      }
+      if (stageHelp) stageHelp.textContent = 'Select the specific WIP stage/department to audit.';
+      if (scopeNote) scopeNote.textContent = 'Audit will be restricted to the specific department chosen on the right.';
+      stageSelect.focus();
+    } else {
+      // Direct stage selected
+      stageSelect.value = scopeVal;
+      stageSelect.disabled = true;
+      stageSelect.style.background = 'var(--bg-glass-hover)';
+      const stageName = STAGE_LABELS[scopeVal] || scopeVal;
+      if (lockBadge) {
+        lockBadge.innerHTML = `🔒 Locked to ${stageName}`;
+        lockBadge.className = 'badge badge-amber text-xs';
+      }
+      if (stageHelp) stageHelp.textContent = `Audit stage is locked to ${stageName} based on selected audit scope.`;
+      if (scopeNote) scopeNote.textContent = `Only batches currently registered at ${stageName} will be in scope.`;
+    }
+  }
+
+  function onAuditStageChange(stageVal) {
+    const lockBadge = document.getElementById('new-audit-stage-lock-badge');
+    const stageHelp = document.getElementById('new-audit-stage-help');
+    const stageName = STAGE_LABELS[stageVal] || stageVal;
+    if (lockBadge) {
+      lockBadge.innerHTML = `🔓 Unlocked (${stageName})`;
+      lockBadge.className = 'badge badge-blue text-xs';
+    }
+    if (stageHelp) {
+      stageHelp.textContent = `Session will be locked to ${stageName} when created.`;
+    }
+  }
+
   function openNewSessionModal() {
     const modal = document.getElementById('modal-audit-new-session');
-    if (modal) modal.classList.remove('hidden');
+    if (modal) {
+      modal.classList.remove('hidden');
+      const scopeEl = document.getElementById('new-audit-scope');
+      if (scopeEl) {
+        onAuditScopeChange(scopeEl.value);
+      }
+    }
   }
 
   function submitNewSession() {
     const title = (document.getElementById('new-audit-title')?.value || '').trim();
-    const stageScope = document.getElementById('new-audit-scope')?.value || 'all';
+    const scopeVal = document.getElementById('new-audit-scope')?.value || 'all';
+    const stageSelect = document.getElementById('new-audit-stage');
+    const stageVal = stageSelect ? stageSelect.value : 'all';
     const auditorName = (document.getElementById('new-audit-auditor')?.value || '').trim();
     const startedAt = document.getElementById('new-audit-date')?.value || new Date().toISOString().slice(0, 10);
     const notes = (document.getElementById('new-audit-notes')?.value || '').trim();
@@ -1463,6 +1588,17 @@ const StockAuditModule = (() => {
     if (!title) {
       showToast('Please enter an audit session title', 'warning');
       return;
+    }
+
+    let stageScope = 'all';
+    if (scopeVal === 'all') {
+      stageScope = 'all';
+    } else if (scopeVal === 'single') {
+      stageScope = stageVal || 'visual';
+    } else if (scopeVal === 'store') {
+      stageScope = 'store';
+    } else {
+      stageScope = scopeVal;
     }
 
     const sessionObj = {
@@ -1477,6 +1613,7 @@ const StockAuditModule = (() => {
 
     const newRec = DB.AuditSessions.insert(sessionObj);
     currentSessionId = newRec.id;
+    pinnedAuditingStage = stageScope !== 'all' ? stageScope : 'auto';
 
     closeModal('modal-audit-new-session');
     showToast('New stock audit session started!', 'success');
@@ -1528,6 +1665,12 @@ const StockAuditModule = (() => {
 
   function switchSession(sessId) {
     currentSessionId = sessId;
+    const sess = DB.AuditSessions.find(sessId);
+    if (sess && sess.stageScope && sess.stageScope !== 'all') {
+      pinnedAuditingStage = sess.stageScope;
+    } else {
+      pinnedAuditingStage = 'auto';
+    }
     render();
   }
 
@@ -1698,6 +1841,8 @@ const StockAuditModule = (() => {
     toggleRapidScan,
     updatePinnedRack,
     updateAuditingStage,
+    onAuditScopeChange,
+    onAuditStageChange,
     changePageVerified: (page) => { verifiedCurrentPage = page; render(); },
     changePageMissing: (page) => { missingCurrentPage = page; render(); }
   };

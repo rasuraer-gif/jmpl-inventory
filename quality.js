@@ -140,7 +140,7 @@ const QualityModule = (() => {
   }
 
   function pendingTab(batches) {
-    let filtered = batches;
+    let filtered = [...batches].sort((a, b) => ((Number(b.internalBatchNo) || 0) - (Number(a.internalBatchNo) || 0)) || (b.createdAt || '').localeCompare(a.createdAt || ''));
     if (pendingSearch) {
       const q = pendingSearch.toLowerCase();
       filtered = batches.filter(b => (b.batchNo || '').toLowerCase().includes(q));

@@ -19,6 +19,18 @@ const StoreModule = (() => {
     const stageRecords = DB.StageRecords.byStage ? DB.StageRecords.byStage('store') : DB.StageRecords.all().filter(r => r.stage === 'store');
     const sales = DB.Sales.all();
     const allBatches = DB.Batches.all();
+    const master = DB.Master.all();
+
+    const masterById = new Map();
+    const masterByJmrefNorm = new Map();
+    for (let i = 0; i < master.length; i++) {
+      const m = master[i];
+      if (m.id) masterById.set(m.id, m);
+      if (m.jmrefNo) {
+        const norm = String(m.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+        if (norm && !masterByJmrefNorm.has(norm)) masterByJmrefNorm.set(norm, m);
+      }
+    }
 
     const storeRecordsByBatchId = {};
     for (let i = 0; i < stageRecords.length; i++) {
@@ -35,14 +47,30 @@ const StoreModule = (() => {
       if (b.status !== 'completed' && b.currentStage !== 'store') continue;
       if (b.notes && (b.notes.includes('Closed via stock') || b.notes.includes('Zeroed via stock') || b.notes.includes('zeroing'))) continue;
 
-      if (b.partId) {
-        if (!batchesByPartId[b.partId]) batchesByPartId[b.partId] = [];
-        batchesByPartId[b.partId].push(b);
-      }
-      if (b.jmrefNo) {
+      let target = null;
+      if (b.partId && masterById.has(b.partId)) {
+        target = masterById.get(b.partId);
+      } else if (b.jmrefNo) {
         const bNorm = String(b.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
-        if (!batchesByJmref[bNorm]) batchesByJmref[bNorm] = [];
-        batchesByJmref[bNorm].push(b);
+        if (bNorm && masterByJmrefNorm.has(bNorm)) target = masterByJmrefNorm.get(bNorm);
+      }
+
+      if (target) {
+        if (!batchesByPartId[target.id]) batchesByPartId[target.id] = [];
+        batchesByPartId[target.id].push(b);
+        const norm = String(target.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+        if (!batchesByJmref[norm]) batchesByJmref[norm] = [];
+        batchesByJmref[norm].push(b);
+      } else {
+        if (b.partId) {
+          if (!batchesByPartId[b.partId]) batchesByPartId[b.partId] = [];
+          batchesByPartId[b.partId].push(b);
+        }
+        if (b.jmrefNo) {
+          const bNorm = String(b.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+          if (!batchesByJmref[bNorm]) batchesByJmref[bNorm] = [];
+          batchesByJmref[bNorm].push(b);
+        }
       }
     }
 
@@ -55,12 +83,27 @@ const StoreModule = (() => {
     for (let i = 0; i < sales.length; i++) {
       const s = sales[i];
       const qty = Number(s.qty) || 0;
-      if (s.partId) {
-        salesByPartId[s.partId] = (salesByPartId[s.partId] || 0) + qty;
-      }
-      if (s.jmrefNo) {
+
+      let target = null;
+      if (s.partId && masterById.has(s.partId)) {
+        target = masterById.get(s.partId);
+      } else if (s.jmrefNo) {
         const sNorm = String(s.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
-        salesByJmref[sNorm] = (salesByJmref[sNorm] || 0) + qty;
+        if (sNorm && masterByJmrefNorm.has(sNorm)) target = masterByJmrefNorm.get(sNorm);
+      }
+
+      if (target) {
+        salesByPartId[target.id] = (salesByPartId[target.id] || 0) + qty;
+        const norm = String(target.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+        salesByJmref[norm] = (salesByJmref[norm] || 0) + qty;
+      } else {
+        if (s.partId) {
+          salesByPartId[s.partId] = (salesByPartId[s.partId] || 0) + qty;
+        }
+        if (s.jmrefNo) {
+          const sNorm = String(s.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
+          salesByJmref[sNorm] = (salesByJmref[sNorm] || 0) + qty;
+        }
       }
     }
 
@@ -169,7 +212,10 @@ const StoreModule = (() => {
     const parts = DB.StoreInventory.allParts();
     const sales = DB.Sales.all();
     const thisMonth = new Date().toISOString().slice(0, 7);
-    const salesThisMonth = sales.filter(s => (s.saleDate || '').startsWith(thisMonth)).reduce((s, r) => s + (r.qty || 0), 0);
+    const salesThisMonth = sales.filter(s => {
+      const n = String(s.notes || '').toLowerCase();
+      return (s.saleDate || '').startsWith(thisMonth) && !n.includes('direct store stock reconciliation') && !n.includes('stock reconciliation');
+    }).reduce((s, r) => s + (r.qty || 0), 0);
     const totalStock = parts.reduce((s, p) => s + (p.available || 0), 0);
     const lowStock = parts.filter(p => p.available < 10 && p.available >= 0).length;
 
@@ -434,7 +480,7 @@ const StoreModule = (() => {
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
-        const wb = XLSX.read(e.target.result, { type: 'array', cellDates: true });
+        const wb = XLSX.read(e.target.result, { type: 'array', cellDates: false });
         const ws = wb.Sheets[wb.SheetNames[0]];
         const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
 
@@ -466,23 +512,36 @@ const StoreModule = (() => {
           if (typeof dateVal === 'number') {
             parsedDate = XLSX.SSF.format('yyyy-mm-dd', dateVal);
           } else if (dateVal instanceof Date) {
-            const y = dateVal.getFullYear();
-            const m = String(dateVal.getMonth() + 1).padStart(2, '0');
-            const d = String(dateVal.getDate()).padStart(2, '0');
+            // Buffer against timezone drift (e.g. 23:59:50 of Day-1 in IST)
+            const adjusted = new Date(dateVal.getTime() + 10 * 60 * 1000);
+            const y = adjusted.getFullYear();
+            const m = String(adjusted.getMonth() + 1).padStart(2, '0');
+            const d = String(adjusted.getDate()).padStart(2, '0');
             parsedDate = `${y}-${m}-${d}`;
           } else {
             const str = String(dateVal || '').trim();
-            // Match DD-MM-YYYY or D-M-YYYY with slashes or dashes
-            const match = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+            // Match DD-MM-YYYY or D-M-YYYY with slashes, dashes, or dots
+            const match = str.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
             if (match) {
               const d = match[1].padStart(2, '0');
               const m = match[2].padStart(2, '0');
               const y = match[3];
               parsedDate = `${y}-${m}-${d}`;
-            } else if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
-              parsedDate = str;
+            } else if (/^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}$/.test(str)) {
+              const parts = str.split(/[-/.]/);
+              parsedDate = `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
+            } else if (!isNaN(Number(str)) && Number(str) > 20000 && Number(str) < 70000) {
+              parsedDate = XLSX.SSF.format('yyyy-mm-dd', Number(str));
             } else {
-              parsedDate = new Date().toISOString().slice(0, 10);
+              const parsedTry = new Date(str);
+              if (!isNaN(parsedTry.getTime())) {
+                const y = parsedTry.getFullYear();
+                const m = String(parsedTry.getMonth() + 1).padStart(2, '0');
+                const d = String(parsedTry.getDate()).padStart(2, '0');
+                parsedDate = `${y}-${m}-${d}`;
+              } else {
+                parsedDate = new Date().toISOString().slice(0, 10);
+              }
             }
           }
 
@@ -831,7 +890,7 @@ const StoreModule = (() => {
       });
     });
 
-    batches.sort((a, b) => (b.completedAt || b.createdAt || '').localeCompare(a.completedAt || a.createdAt || ''));
+    batches.sort((a, b) => ((Number(b.internalBatchNo) || 0) - (Number(a.internalBatchNo) || 0)) || (b.completedAt || b.createdAt || '').localeCompare(a.completedAt || a.createdAt || ''));
     
     const totalItems = batches.length;
     const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
@@ -925,7 +984,12 @@ const StoreModule = (() => {
 
   // ── Sales History Tab ──────────────────────────────────────
   function salesTab() {
-    const sales = DB.Sales.all().sort((a, b) => b.saleDate.localeCompare(a.saleDate));
+    const sales = DB.Sales.all()
+      .filter(s => {
+        const n = String(s.notes || '').toLowerCase();
+        return !n.includes('direct store stock reconciliation') && !n.includes('stock reconciliation');
+      })
+      .sort((a, b) => b.saleDate.localeCompare(a.saleDate));
     const master = DB.Master.all();
 
     function render() {
@@ -1066,7 +1130,12 @@ const StoreModule = (() => {
     if (resetPage) {
       salesCurrentPage = 1;
     }
-    const sales = DB.Sales.all().sort((a, b) => b.saleDate.localeCompare(a.saleDate));
+    const sales = DB.Sales.all()
+      .filter(s => {
+        const n = String(s.notes || '').toLowerCase();
+        return !n.includes('direct store stock reconciliation') && !n.includes('stock reconciliation');
+      })
+      .sort((a, b) => b.saleDate.localeCompare(a.saleDate));
     const master = DB.Master.all();
     let s = sales;
     const sv = (document.getElementById('sales-filter-search') || {}).value || '';

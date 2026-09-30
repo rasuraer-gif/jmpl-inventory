@@ -113,12 +113,9 @@ const DB = (() => {
   }
 
   function handleUserResumed() {
-    const idleMs = Date.now() - _lastActiveTime;
     _lastActiveTime = Date.now();
-    if (idleMs > 2 * 60 * 1000) { // More than 2 minutes of inactivity
-      console.log(`[DB] Resumed after ${(idleMs / 1000).toFixed(0)}s idle. Refreshing network connection...`);
-      scheduleReconnect(true);
-    }
+    // Firestore's built-in web socket handles reconnecting with zero overhead.
+    // Do NOT drop and rebuild network connection on idle resume.
   }
 
   if (typeof window !== 'undefined') {
@@ -126,15 +123,9 @@ const DB = (() => {
       if (document.visibilityState === 'visible') handleUserResumed();
     });
     window.addEventListener('focus', handleUserResumed);
-    window.addEventListener('online', () => reconnect(false));
     ['click', 'keydown', 'touchstart'].forEach(evt => {
       window.addEventListener(evt, () => {
-        const now = Date.now();
-        if (now - _lastActiveTime > 2 * 60 * 1000) {
-          handleUserResumed();
-        } else {
-          _lastActiveTime = now;
-        }
+        _lastActiveTime = Date.now();
       }, { passive: true });
     });
 
@@ -149,8 +140,7 @@ const DB = (() => {
             }
           })
           .catch(err => {
-            console.warn("[DB] Heartbeat ping detected stale connection, refreshing...", err.message);
-            scheduleReconnect(true);
+            console.warn("[DB] Heartbeat ping notice:", err.message);
           });
       }
     }, 2.5 * 60 * 1000);
@@ -459,10 +449,28 @@ const DB = (() => {
       // guarantees zero IndexedDB transaction deadlocks, zero multi-tab conflicts, and instant startup.
       db = firestoreInstance;
 
-      // 3. Set up listeners for all collections in background
+      // 3. Set up listeners for all collections in background with optimized query filters
       const collections = Object.keys(cache);
+      const d60 = new Date();
+      d60.setDate(d60.getDate() - 60);
+      const cutoff60 = d60.toISOString().slice(0, 10);
+
       collections.forEach(table => {
         let query = db.collection(table);
+        if (table === 'batches') {
+          // Only listen in real-time to active batches (completed batches don't need real-time push)
+          query = query.where('status', '==', 'active');
+        } else if (table === 'stageRecords') {
+          // Only listen in real-time to records from the last 60 days
+          query = query.where('date', '>=', cutoff60);
+        } else if (table === 'lossTracker') {
+          query = query.where('date', '>=', cutoff60);
+        } else if (table === 'productionRecords') {
+          query = query.where('date', '>=', cutoff60);
+        } else if (table === 'sales') {
+          query = query.where('saleDate', '>=', cutoff60);
+        }
+
         let isInitial = true;
 
         query.onSnapshot(snapshot => {
@@ -472,7 +480,31 @@ const DB = (() => {
             snapshot.forEach(doc => {
               list.push({ id: doc.id, ...doc.data() });
             });
-            cache[table] = list;
+
+            if (['batches', 'stageRecords', 'lossTracker', 'productionRecords', 'sales'].includes(table)) {
+              // Merge queried window with existing local/cached data
+              const newMap = new Map(list.map(d => [d.id, d]));
+              const merged = [];
+              (cache[table] || []).forEach(item => {
+                if (newMap.has(item.id)) {
+                  merged.push(newMap.get(item.id));
+                  newMap.delete(item.id);
+                } else {
+                  if (table === 'batches' && item.status === 'active') {
+                    // Batches queried with where('status', '==', 'active') represent the authoritative active set.
+                    // If an item in local cache was previously 'active' but is absent from Firestore's active set,
+                    // it has transitioned to completed/non-active in Firestore while offline or on another device.
+                    item.status = 'completed';
+                  }
+                  merged.push(item);
+                }
+              });
+              newMap.forEach(item => merged.push(item));
+              cache[table] = merged;
+            } else {
+              cache[table] = list;
+            }
+
             rebuildIndexesForTable(table);
             saveLocal(table);
             if (['batches', 'recheckTracker', 'stageRecords', 'lossTracker'].includes(table)) {
@@ -511,9 +543,18 @@ const DB = (() => {
               }
               modifiedAny = true;
             } else if (change.type === 'removed') {
-              const idx = currentTable.findIndex(d => d.id === docId);
-              if (idx !== -1) {
-                currentTable.splice(idx, 1);
+              if (table === 'batches' && docData.status && docData.status !== 'active') {
+                // When an active batch transitions to completed/rejected, it leaves the status=='active' query.
+                // We keep it in cache and update its status rather than deleting it.
+                if (tableIdMap && tableIdMap.has(docId)) {
+                  const existing = tableIdMap.get(docId);
+                  Object.assign(existing, docData);
+                }
+              } else {
+                const idx = currentTable.findIndex(d => d.id === docId);
+                if (idx !== -1) {
+                  currentTable.splice(idx, 1);
+                }
               }
               modifiedAny = true;
             }
@@ -531,7 +572,6 @@ const DB = (() => {
           console.warn(`Firestore listener error on table "${table}":`, err.message);
           _connectionHealthy = false;
           triggerSyncStateChange('connection', true);
-          scheduleReconnect(true);
         });
       });
 
@@ -1774,8 +1814,8 @@ const DB = (() => {
     },
     byStage: (stage) => {
       const list = batchesByStageIndex.get(stage);
-      if (list) return [...list];
-      return getAll('batches').filter(r => r.currentStage === stage && r.status === 'active' && !r.isArchived && !(r.batchNo && (r.batchNo.includes('-REC-') || r.batchNo.includes('REC'))));
+      const res = list ? [...list] : getAll('batches').filter(r => r.currentStage === stage && r.status === 'active' && !r.isArchived && !(r.batchNo && (r.batchNo.includes('-REC-') || r.batchNo.includes('REC'))));
+      return res.sort((a, b) => ((Number(b.internalBatchNo) || 0) - (Number(a.internalBatchNo) || 0)) || (b.createdAt || '').localeCompare(a.createdAt || ''));
     },
     byStatus: (status) => getAll('batches').filter(r => r.status === status && !(r.batchNo && (r.batchNo.includes('-REC-') || r.batchNo.includes('REC')))),
 
@@ -2880,9 +2920,152 @@ const DB = (() => {
     return { added: batchesToAdd.length, deducted: salesToAdd.length };
   }
 
+  // ── On-Demand Historical Report Fetching ────────────────────
+  async function fetchHistoricalForReport(params = {}) {
+    if (!db) return;
+    const { from, to, jmref, reportKey } = params;
+
+    const d60 = new Date();
+    d60.setDate(d60.getDate() - 60);
+    const cutoff60 = d60.toISOString().slice(0, 10);
+
+    // If date range is older than cutoff60 or missing from memory, pull historical data on-demand
+    const needsHistorical = (from && from < cutoff60) || (to && to < cutoff60) || jmref;
+
+    try {
+      const promises = [];
+      const fetchedBatchIds = new Set();
+
+      // 1. Fetch Stage Records if date range is specified
+      if (from || to) {
+        let qSr = db.collection('stageRecords');
+        if (from) qSr = qSr.where('date', '>=', from);
+        if (to) qSr = qSr.where('date', '<=', to);
+        promises.push(
+          qSr.get().then(snap => {
+            const existingMap = idIndex.stageRecords || new Map();
+            let changed = false;
+            snap.forEach(doc => {
+              if (!existingMap.has(doc.id)) {
+                const data = { id: doc.id, ...doc.data() };
+                cache.stageRecords.push(data);
+                changed = true;
+              }
+              const d = doc.data();
+              if (d.batchId) fetchedBatchIds.add(d.batchId);
+            });
+            if (changed) {
+              rebuildIndexesForTable('stageRecords');
+              saveLocal('stageRecords');
+            }
+          }).catch(err => console.warn('[DB] Historical stageRecords fetch error:', err))
+        );
+
+        // Fetch historical sales if sales report or general date range
+        if (!reportKey || reportKey === 'sales' || reportKey === 'analytics') {
+          let qSales = db.collection('sales');
+          if (from) qSales = qSales.where('saleDate', '>=', from);
+          if (to) qSales = qSales.where('saleDate', '<=', to);
+          promises.push(
+            qSales.get().then(snap => {
+              const existingMap = idIndex.sales || new Map();
+              let changed = false;
+              snap.forEach(doc => {
+                if (!existingMap.has(doc.id)) {
+                  cache.sales.push({ id: doc.id, ...doc.data() });
+                  changed = true;
+                }
+              });
+              if (changed) {
+                rebuildIndexesForTable('sales');
+                saveLocal('sales');
+              }
+            }).catch(err => console.warn('[DB] Historical sales fetch error:', err))
+          );
+        }
+
+        // Fetch historical lossTracker if loss or scrap report
+        if (!reportKey || reportKey === 'qty-loss' || reportKey.includes('loss') || reportKey === 'daily-summary') {
+          let qLt = db.collection('lossTracker');
+          if (from) qLt = qLt.where('date', '>=', from);
+          if (to) qLt = qLt.where('date', '<=', to);
+          promises.push(
+            qLt.get().then(snap => {
+              const existingMap = idIndex.lossTracker || new Map();
+              let changed = false;
+              snap.forEach(doc => {
+                if (!existingMap.has(doc.id)) {
+                  cache.lossTracker.push({ id: doc.id, ...doc.data() });
+                  changed = true;
+                }
+              });
+              if (changed) {
+                rebuildIndexesForTable('lossTracker');
+                saveLocal('lossTracker');
+              }
+            }).catch(err => console.warn('[DB] Historical lossTracker fetch error:', err))
+          );
+        }
+
+        // Fetch batches in production date range
+        let qB = db.collection('batches');
+        if (from) qB = qB.where('productionDate', '>=', from);
+        if (to) qB = qB.where('productionDate', '<=', to);
+        promises.push(
+          qB.get().then(snap => {
+            const existingMap = idIndex.batches || new Map();
+            let changed = false;
+            snap.forEach(doc => {
+              if (!existingMap.has(doc.id)) {
+                cache.batches.push({ id: doc.id, ...doc.data() });
+                changed = true;
+              }
+            });
+            if (changed) {
+              rebuildIndexesForTable('batches');
+              saveLocal('batches');
+            }
+          }).catch(err => console.warn('[DB] Historical batches fetch error:', err))
+        );
+      }
+
+      // 2. If JMREF is filtered, also query batches by JMREF
+      if (jmref) {
+        const cleanJm = jmref.trim();
+        promises.push(
+          db.collection('batches').where('jmrefNo', '==', cleanJm).limit(100).get().then(snap => {
+            const existingMap = idIndex.batches || new Map();
+            let changed = false;
+            snap.forEach(doc => {
+              if (!existingMap.has(doc.id)) {
+                cache.batches.push({ id: doc.id, ...doc.data() });
+                changed = true;
+              }
+              fetchedBatchIds.add(doc.id);
+            });
+            if (changed) {
+              rebuildIndexesForTable('batches');
+              saveLocal('batches');
+            }
+          }).catch(err => console.warn('[DB] JMREF batches fetch error:', err))
+        );
+      }
+
+      await Promise.all(promises);
+
+      // 3. Whenever reports are pulled, pull required batches also for all referenced stage records
+      const missingBatchIds = [...fetchedBatchIds].filter(id => id && !idIndex.batches?.has(id));
+      if (missingBatchIds.length > 0 && typeof Batches.fetchByIds === 'function') {
+        await Batches.fetchByIds(missingBatchIds);
+      }
+    } catch (err) {
+      console.warn('[DB] fetchHistoricalForReport error:', err);
+    }
+  }
+
   return {
     initLocal, init, reconnect, isConnected: () => _connectionHealthy, isOnline, assertOnline, onSyncStateChange, onDataChange, genId, seedDefaults, clearTable,
-    insertAsync, updateAsync, removeAsync,
+    insertAsync, updateAsync, removeAsync, fetchHistoricalForReport,
     Users, Master, Subcontractors, Vendors, Operators, Inspectors,
     Batches, StageRecords, LossTracker, RejectionTracker,
     RecheckTracker, StockUploads, Sales, StoreInventory,

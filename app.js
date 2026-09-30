@@ -1530,6 +1530,22 @@ const App = (() => {
     const parent = getParentBatch(b);
     const children = getChildBatches(b);
 
+    const allBatchRecs = (DB.StageRecords.byBatch ? DB.StageRecords.byBatch(b.id) : []).slice();
+    const prodRecord = allBatchRecs.find(sr => sr.stage === 'production');
+    const originalBatchQty = prodRecord && (Number(prodRecord.inputQty) || Number(prodRecord.outputQty))
+      ? (Number(prodRecord.inputQty) || Number(prodRecord.outputQty))
+      : (allBatchRecs.length ? (Number(allBatchRecs[0].inputQty) || Number(allBatchRecs[0].outputQty) || 0) : 0);
+    const totalBatchReprocess = allBatchRecs.reduce((sum, sr) => sum + (Number(sr.reprocessQty) || 0), 0);
+
+    let currentQtyDisplay = 'Qty: ' + formatNum(b.initialQty);
+    if (b.initialQty === 0 && originalBatchQty > 0) {
+      if (totalBatchReprocess > 0) {
+        currentQtyDisplay = 'Current Qty: 0 | Initial: ' + formatNum(originalBatchQty) + ' (Moved to Reprocess: ' + formatNum(totalBatchReprocess) + ')';
+      } else {
+        currentQtyDisplay = 'Current Qty: 0 | Initial: ' + formatNum(originalBatchQty);
+      }
+    }
+
     let lineageHtml = '';
     if (!parent && !children.length) {
       lineageHtml = `<p class="text-sm text-muted">No lineage tracing available (this batch was not split or reprocessed).</p>`;
@@ -1556,7 +1572,7 @@ const App = (() => {
         <div class="tree-node active-node" style="padding:8px 12px; background:var(--accent-blue-light); border-left:4px solid var(--accent-blue); border-radius:4px;">
           <span style="font-size:11px;color:var(--accent-blue);font-weight:700;text-transform:uppercase;">Current Batch</span>
           <div style="font-weight:700;margin-top:2px;">${b.batchNo} (IB: ${b.internalBatchNo})</div>
-          <div class="text-sm text-muted">Qty: ${formatNum(b.initialQty)} | Stage: ${b.currentStage.toUpperCase()} | Status: ${b.status}</div>
+          <div class="text-sm text-muted">${currentQtyDisplay} | Stage: ${b.currentStage.toUpperCase()} | Status: ${b.status}</div>
         </div>
       `;
 
@@ -1589,15 +1605,17 @@ const App = (() => {
     const subcontractor = b.subcontractorId ? DB.Subcontractors.find(b.subcontractorId) : null;
     const operatorName = operator ? operator.name : (b.operatorName || '—');
     const subcontractorName = subcontractor ? subcontractor.name : '—';
+    const visualStageRec = allBatchRecs.find(sr => (sr.stage === 'visual' || sr.movedFrom === 'visual') && sr.inspectorName);
+    const visualInspectorName = visualStageRec ? visualStageRec.inspectorName : (b.inspectorName || '—');
 
     modal.innerHTML = `
-      <div class="modal modal-md" style="max-width: 720px; border-radius:16px;">
+      <div class="modal modal-md" style="max-width: 940px; border-radius:16px;">
         <div class="modal-header">
           <h3>🔍 Batch Genealogy & Details</h3>
           <button class="modal-close" onclick="document.getElementById('genealogy-modal-overlay').classList.add('hidden')">&#x2715;</button>
         </div>
         <div class="modal-body" style="padding:20px; max-height:80vh; overflow-y:auto;">
-          <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:20px;">
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:16px; margin-bottom:20px;">
             <div>
               <span class="text-xs text-muted" style="text-transform:uppercase;font-weight:600;">Batch Number</span>
               <div style="font-weight:700;font-size:16px;color:var(--primary);">${b.batchNo}</div>
@@ -1620,11 +1638,15 @@ const App = (() => {
             </div>
             <div>
               <span class="text-xs text-muted" style="text-transform:uppercase;font-weight:600;">Quantity</span>
-              <div class="font-semibold">${formatNum(b.initialQty)} units</div>
+              <div class="font-semibold">${b.initialQty > 0 ? `${formatNum(b.initialQty)} units` : (originalBatchQty > 0 ? `0 units (Initial: ${formatNum(originalBatchQty)}${totalBatchReprocess > 0 ? `, Reprocessed: ${formatNum(totalBatchReprocess)}` : ''})` : '0 units')}</div>
             </div>
             <div>
               <span class="text-xs text-muted" style="text-transform:uppercase;font-weight:600;">Operator / Subcontractor</span>
-              <div>${operatorName} ${subcontractorName !== '—' ? `(Sub: ${subcontractorName})` : ''}</div>
+              <div class="font-semibold">${operatorName} ${subcontractorName !== '—' ? `<span class="badge badge-amber" style="margin-left:4px;">Sub: ${subcontractorName}</span>` : ''}</div>
+            </div>
+            <div>
+              <span class="text-xs text-muted" style="text-transform:uppercase;font-weight:600;">Visual Inspector</span>
+              <div class="font-semibold">${visualInspectorName !== '—' ? `<span class="badge badge-teal" style="font-size:12.5px;">🔍 ${visualInspectorName}</span>` : '<span class="text-muted">—</span>'}</div>
             </div>
             <div>
               <span class="text-xs text-muted" style="text-transform:uppercase;font-weight:600;">Created / Completed</span>
@@ -1642,7 +1664,17 @@ const App = (() => {
             <div class="table-wrap">
               <table class="data-table" style="font-size:12px;">
                 <thead>
-                  <tr><th>Activity / Route</th><th>Input</th><th>Output</th><th>Loss</th><th>Changed By</th><th>Date & Time</th><th>Notes</th></tr>
+                  <tr>
+                    <th>Activity / Route</th>
+                    <th>Input</th>
+                    <th>Output</th>
+                    <th>Loss</th>
+                    <th>Reprocess</th>
+                    <th>Visual Inspector &amp; Operator Name</th>
+                    <th>Changed By</th>
+                    <th>Date &amp; Time</th>
+                    <th>Notes</th>
+                  </tr>
                 </thead>
                 <tbody>
                   ${(() => {
@@ -1661,7 +1693,12 @@ const App = (() => {
                     });
                     const allUsers = DB.Users.all();
                     return filteredRecs.map(r => {
-                      const displayLoss = (r.stage === 'store') ? 0 : Math.max(0, (r.inputQty || 0) - (r.outputQty || 0));
+                      const repQty = Number(r.reprocessQty || 0);
+                      const displayLoss = (r.stage === 'store') 
+                        ? 0 
+                        : (r.lossQty !== undefined && r.lossQty !== null 
+                            ? Number(r.lossQty) 
+                            : Math.max(0, (Number(r.inputQty) || 0) - (Number(r.outputQty) || 0) - repQty));
                       const stageNames = {
                         production: 'Production',
                         cryogenic: 'Cryogenic',
@@ -1700,6 +1737,42 @@ const App = (() => {
                         changedBy = r.operatorName;
                       }
 
+                      let inspectorOrOpDisplay = '—';
+                      if (r.stage === 'visual' || r.movedFrom === 'visual' || r.inspectorName) {
+                        const insp = r.inspectorName || (visualInspectorName !== '—' ? visualInspectorName : null);
+                        if (insp) {
+                          inspectorOrOpDisplay = `
+                            <div style="font-weight:600; color:var(--accent-teal);">🔍 ${insp} <span class="badge badge-teal" style="font-size:10px; font-weight:normal;">Inspector</span></div>
+                            ${(operatorName && operatorName !== '—') ? `<div class="text-xs text-muted" style="margin-top:2px;">⚙️ Op: ${operatorName}</div>` : ''}
+                          `;
+                        } else if (operatorName && operatorName !== '—') {
+                          inspectorOrOpDisplay = `<div class="text-xs text-muted">⚙️ Op: ${operatorName}</div>`;
+                        }
+                      } else if (r.stage === 'production') {
+                        const op = r.operatorName || (operatorName !== '—' ? operatorName : null);
+                        if (op) {
+                          inspectorOrOpDisplay = `
+                            <div style="font-weight:600; color:var(--primary);">⚙️ ${op} <span class="badge badge-blue" style="font-size:10px; font-weight:normal;">Operator</span></div>
+                          `;
+                        }
+                      } else if (r.vendorId) {
+                        const v = DB.Vendors.find(r.vendorId);
+                        const vName = v ? v.name : r.vendorId;
+                        inspectorOrOpDisplay = `
+                          <div style="font-weight:600; color:var(--accent-amber);">🏢 ${vName} <span class="badge badge-amber" style="font-size:10px; font-weight:normal;">Vendor</span></div>
+                          ${(operatorName && operatorName !== '—') ? `<div class="text-xs text-muted" style="margin-top:2px;">⚙️ Op: ${operatorName}</div>` : ''}
+                        `;
+                      } else if (r.operatorName || r.operatorId) {
+                        const op = r.operatorName || DB.Operators.find(r.operatorId)?.name;
+                        if (op) {
+                          inspectorOrOpDisplay = `
+                            <div style="font-weight:600; color:var(--primary);">⚙️ ${op} <span class="badge badge-blue" style="font-size:10px; font-weight:normal;">Operator</span></div>
+                          `;
+                        }
+                      } else if (operatorName && operatorName !== '—') {
+                        inspectorOrOpDisplay = `<div class="text-xs text-muted">⚙️ Op: ${operatorName}</div>`;
+                      }
+
                       let dateTimeDisplay = r.date || '—';
                       const timeRef = r.createdAt || r.recordedAt || r.timestamp;
                       if (dateTimeDisplay && dateTimeDisplay.includes('T') && dateTimeDisplay.length >= 16) {
@@ -1725,12 +1798,14 @@ const App = (() => {
                           <td class="font-semibold" style="white-space: nowrap; color: var(--primary);">${routeText}</td>
                           <td>${formatNum(r.inputQty)}</td>
                           <td>${formatNum(r.outputQty)}</td>
-                          <td class="text-danger">${formatNum(displayLoss)}</td>
+                          <td class="${displayLoss > 0 ? 'text-danger font-semibold' : 'text-muted'}">${displayLoss > 0 ? formatNum(displayLoss) : '0'}</td>
+                          <td class="${repQty > 0 ? 'text-warning font-semibold' : 'text-muted'}">${repQty > 0 ? formatNum(repQty) : '—'}</td>
+                          <td style="white-space: nowrap;">${inspectorOrOpDisplay}</td>
                           <td class="font-medium" style="white-space: nowrap; color: var(--text-main);">${changedBy}</td>
                           <td style="white-space: nowrap;">${dateTimeDisplay}</td>
                           <td class="text-muted" style="max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${r.notes||''}">${r.notes || '—'}</td>
                         </tr>`;
-                    }).join('') || '<tr><td colspan="7" class="text-center text-muted">No stage history recorded</td></tr>';
+                    }).join('') || '<tr><td colspan="9" class="text-center text-muted">No stage history recorded</td></tr>';
                   })()}
                 </tbody>
               </table>
@@ -2352,7 +2427,8 @@ function renderDashboard() {
     const d = b.productionDate || b.createdAt;
     if (d) uniqueMonths.add(d.slice(0, 7));
 
-    if (b.status === 'active') {
+    const isRec = b.batchNo && (b.batchNo.includes('-REC-') || b.batchNo.includes('REC'));
+    if (b.status === 'active' && !b.isArchived && !isRec) {
       active++;
     } else if (b.status === 'completed') {
       if ((b.completedAt || b.createdAt || '').slice(0, 7) === thisMonth) {
@@ -2374,10 +2450,37 @@ function renderDashboard() {
   }
 
   let totalLoss = 0;
+  let totalLossValue = 0;
+  const partPriceMap = new Map();
+  master.forEach(p => {
+    const pr = Number(p.salePrice !== undefined && p.salePrice !== null ? p.salePrice : (p.standardCost || 0));
+    if (p.jmrefNo) partPriceMap.set(String(p.jmrefNo).trim().toLowerCase(), pr);
+    if (p.partNo) partPriceMap.set(String(p.partNo).trim().toLowerCase(), pr);
+    if (p.id) partPriceMap.set(String(p.id), pr);
+  });
+  const batchPriceMap = new Map();
+  batches.forEach(b => {
+    let pr = 0;
+    if (b.partId && partPriceMap.has(String(b.partId))) pr = partPriceMap.get(String(b.partId));
+    else if (b.jmrefNo && partPriceMap.has(String(b.jmrefNo).trim().toLowerCase())) pr = partPriceMap.get(String(b.jmrefNo).trim().toLowerCase());
+    else if (b.partNo && partPriceMap.has(String(b.partNo).trim().toLowerCase())) pr = partPriceMap.get(String(b.partNo).trim().toLowerCase());
+    if (pr) batchPriceMap.set(String(b.id), pr);
+  });
+
   for (let i = 0; i < losses.length; i++) {
     const l = losses[i];
     if ((l.date || l.createdAt || '').slice(0, 7) === thisMonth) {
-      totalLoss += (l.lossQty || 0);
+      const q = (l.lossQty || 0);
+      totalLoss += q;
+      let unitPrice = 0;
+      if (l.jmrefNo && partPriceMap.has(String(l.jmrefNo).trim().toLowerCase())) {
+        unitPrice = partPriceMap.get(String(l.jmrefNo).trim().toLowerCase());
+      } else if (l.partNo && partPriceMap.has(String(l.partNo).trim().toLowerCase())) {
+        unitPrice = partPriceMap.get(String(l.partNo).trim().toLowerCase());
+      } else if (l.batchId && batchPriceMap.has(String(l.batchId))) {
+        unitPrice = batchPriceMap.get(String(l.batchId));
+      }
+      totalLossValue += q * unitPrice;
     }
   }
 
@@ -2388,6 +2491,8 @@ function renderDashboard() {
   let salesThisMonth = 0;
   for (let i = 0; i < sales.length; i++) {
     const s = sales[i];
+    const n = String(s.notes || '').toLowerCase();
+    if (n.includes('direct store stock reconciliation') || n.includes('stock reconciliation')) continue;
     if ((s.saleDate || '').startsWith(thisMonth)) {
       salesThisMonth += (s.qty || 0);
     }
@@ -2872,7 +2977,7 @@ function renderDashboard() {
           <div style="font-size:22px;margin-bottom:8px;">📉</div>
           <div class="stat-label">Total Loss</div>
           <div class="stat-value red" style="font-size:22px;">${formatNum(totalLoss)}</div>
-          <div class="stat-sub">loss across all stages</div>
+          <div class="stat-sub">loss across stages${totalLossValue > 0 ? ` (₹${formatNum(Math.round(totalLossValue))})` : ''}</div>
         </div>
         <div class="stat-card red">
           <div style="font-size:22px;margin-bottom:8px;">🚨</div>

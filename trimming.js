@@ -75,7 +75,7 @@ const TrimmingModule = (() => {
 
   function pendingTab(batches) {
     const vendors = DB.Vendors.all();
-    let filtered = batches;
+    let filtered = [...batches].sort((a, b) => ((Number(b.internalBatchNo) || 0) - (Number(a.internalBatchNo) || 0)) || (b.createdAt || '').localeCompare(a.createdAt || ''));
     if (vendorFilter) {
       if (vendorFilter === 'inhouse') {
         filtered = filtered.filter(b => {

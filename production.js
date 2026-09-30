@@ -73,6 +73,7 @@ const ProductionModule = (() => {
 
   function activeBatchesTab() {
     let batches = DB.Batches.byStage('production');
+    batches.sort((a, b) => ((Number(b.internalBatchNo) || 0) - (Number(a.internalBatchNo) || 0)) || (b.createdAt || '').localeCompare(a.createdAt || ''));
     if (pendingSearch) {
       const q = pendingSearch.toLowerCase();
       batches = batches.filter(b => (b.batchNo || '').toLowerCase().includes(q));
@@ -1442,8 +1443,8 @@ const ProductionModule = (() => {
     document.getElementById('edit-batch-date').value = b.productionDate || b.createdAt.slice(0, 10);
     document.getElementById('edit-batch-trno').value = b.trNo || '';
     document.getElementById('edit-batch-shift').value = b.shift || 'day';
-    document.getElementById('edit-batch-press-no').value = b.pressNo || '';
-    document.getElementById('edit-batch-lifts').value = b.lifts || 0;
+    const prodRec = (typeof DB !== 'undefined' && DB.ProductionRecords) ? DB.ProductionRecords.byBatch(b.id)[0] : null;
+    document.getElementById('edit-batch-lifts').value = (b.lifts !== undefined && b.lifts !== null) ? b.lifts : (prodRec ? (prodRec.noOfLifts || 0) : 0);
     document.getElementById('edit-batch-qty').value = b.initialQty || 0;
     document.getElementById('edit-batch-notes').value = b.notes || '';
 
@@ -1558,6 +1559,18 @@ const ProductionModule = (() => {
       lifts,
       notes
     });
+
+    const editProdRec = (typeof DB !== 'undefined' && DB.ProductionRecords) ? DB.ProductionRecords.byBatch(batchId)[0] : null;
+    if (editProdRec) {
+      DB.ProductionRecords.update(editProdRec.id, {
+        noOfLifts: lifts,
+        operatorId: opId || null,
+        date: prodDate,
+        shift,
+        trNo,
+        pressNo
+      });
+    }
 
     showToast('Batch details updated successfully', 'success');
     document.getElementById('prod-edit-batch-modal').classList.add('hidden');

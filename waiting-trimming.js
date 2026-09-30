@@ -84,10 +84,10 @@ const WaitingTrimmingModule = (() => {
   }
 
   function pendingTab(batches, lastRecordMap = null) {
-    let filtered = batches;
+    let filtered = [...batches].sort((a, b) => ((Number(b.internalBatchNo) || 0) - (Number(a.internalBatchNo) || 0)) || (b.createdAt || '').localeCompare(a.createdAt || ''));
     if (pendingSearch) {
       const q = pendingSearch.toLowerCase();
-      filtered = batches.filter(b => (b.batchNo || '').toLowerCase().includes(q));
+      filtered = filtered.filter(b => (b.batchNo || '').toLowerCase().includes(q));
     }
     if (!filtered.length && !pendingSearch) return '<div class="card card-body"><div class="empty-state"><div class="empty-icon">⏳</div><p>No batches waiting for trimming</p></div></div>';
 
