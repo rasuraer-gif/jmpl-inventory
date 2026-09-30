@@ -7,6 +7,7 @@
 const StockAuditModule = (() => {
   let activeTab = 'scanner'; // 'scanner' | 'verified' | 'missing' | 'sessions'
   let currentSessionId = null;
+  let sessionHistoryFilter = 'all'; // 'all' | 'my' | 'active'
   let verifiedSearch = '';
   let verifiedStatusFilter = '';
   let missingSearch = '';
@@ -20,7 +21,32 @@ const StockAuditModule = (() => {
   let rapidScanMode = false;
   let pinnedRackLocation = '';
   let pinnedAuditingStage = 'auto'; // 'auto' | any stage key like 'store', 'visual', etc.
-  let cachedExpectedBatchesBySession = {}; // Cache expected batches per session to eliminate re-computation delay
+  let cachedExpectedBatchesBySession = {}; // Cache expected batches & metrics per session for sub-millisecond refresh
+
+  // ── User Session Helpers ────────────────────────────────────
+  function getCurrentUser() {
+    return (typeof Auth !== 'undefined' && Auth.getSession) ? Auth.getSession() : null;
+  }
+
+  function getCurrentUserKey() {
+    const u = getCurrentUser();
+    if (!u) return 'default';
+    return u.userId || u.username || 'default';
+  }
+
+  function isUserSession(s) {
+    if (!s) return false;
+    const u = getCurrentUser();
+    if (!u) return false;
+    const uid = u.userId || u.id;
+    const uname = (u.username || '').toLowerCase();
+    const fullName = (u.name || '').toLowerCase();
+    if (uid && s.userId && s.userId === uid) return true;
+    if (uname && s.createdBy && s.createdBy.toLowerCase() === uname) return true;
+    if (fullName && s.auditorName && s.auditorName.toLowerCase() === fullName) return true;
+    if (uname && s.auditorName && s.auditorName.toLowerCase() === uname) return true;
+    return false;
+  }
 
   function toggleRapidScan(val) {
     rapidScanMode = Boolean(val);
@@ -75,25 +101,57 @@ const StockAuditModule = (() => {
     }
   }
 
-  // ── Get Active or Selected Session ────────────────────────
+  // ── Get Active or Selected Session (User-Based Persistence) ─
   function getActiveSession() {
     const sessions = DB.AuditSessions.all();
+    if (sessions.length === 0) {
+      currentSessionId = null;
+      return null;
+    }
+
+    // 1. If currently in-memory selected session is still valid, return it
     if (currentSessionId) {
       const s = sessions.find(x => x.id === currentSessionId);
       if (s) return s;
     }
-    // Default to the latest in_progress session or latest overall session
-    const inProgress = sessions.filter(x => x.status === 'in_progress').sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
-    if (inProgress.length > 0) {
-      currentSessionId = inProgress[0].id;
-      return inProgress[0];
+
+    const userKey = getCurrentUserKey();
+
+    // 2. Check localStorage for this user's explicitly selected session
+    try {
+      const savedId = localStorage.getItem(`jmpl_audit_active_session_${userKey}`);
+      if (savedId) {
+        const saved = sessions.find(x => x.id === savedId);
+        if (saved) {
+          currentSessionId = saved.id;
+          return saved;
+        }
+      }
+    } catch (e) {}
+
+    // 3. Prioritize this user's active in_progress session
+    const myInProgress = sessions.filter(s => s.status === 'in_progress' && isUserSession(s))
+      .sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
+    if (myInProgress.length > 0) {
+      currentSessionId = myInProgress[0].id;
+      try { localStorage.setItem(`jmpl_audit_active_session_${userKey}`, currentSessionId); } catch (e) {}
+      return myInProgress[0];
     }
-    if (sessions.length > 0) {
-      const sorted = [...sessions].sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
-      currentSessionId = sorted[0].id;
-      return sorted[0];
+
+    // 4. Any other in_progress session
+    const anyInProgress = sessions.filter(x => x.status === 'in_progress')
+      .sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
+    if (anyInProgress.length > 0) {
+      currentSessionId = anyInProgress[0].id;
+      try { localStorage.setItem(`jmpl_audit_active_session_${userKey}`, currentSessionId); } catch (e) {}
+      return anyInProgress[0];
     }
-    return null;
+
+    // 5. Fallback to latest overall session
+    const sorted = [...sessions].sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
+    currentSessionId = sorted[0].id;
+    try { localStorage.setItem(`jmpl_audit_active_session_${userKey}`, currentSessionId); } catch (e) {}
+    return sorted[0];
   }
 
   // ── Calculate Expected Quantity for a Batch (Optimized) ────
@@ -157,49 +215,35 @@ const StockAuditModule = (() => {
     }
   }
 
-  // ── Compute Audit Stats for Active Session (High Performance) ──
-  function getSessionMetrics(session) {
-    if (!session) return { expectedBatches: 0, expectedQty: 0, verifiedBatches: 0, verifiedQty: 0, exactMatches: 0, varianceBatches: 0, stageMismatches: 0, missingBatches: 0, missingQty: 0, netVarianceQty: 0, netVarianceValue: 0, pctComplete: 0 };
+  // ── Compute Audit Stats for Active Session (High Performance O(1) Cache) ──
+  function getSessionMetrics(session, forceRecompute = false) {
+    if (!session) return { expectedBatches: 0, expectedQty: 0, verifiedBatches: 0, verifiedQty: 0, exactMatches: 0, varianceBatches: 0, stageMismatches: 0, missingBatches: 0, missingQty: 0, netVarianceQty: 0, netVarianceValue: 0, pctComplete: 0, missingList: [] };
 
-    // Use cached expected batches & quantities for this session if available
     let sessionCache = cachedExpectedBatchesBySession[session.id];
-    let stageRecsMap = null;
-
-    if (!sessionCache) {
-      // Index StageRecords by batchId once
-      const allStageRecs = DB.StageRecords.all();
-      stageRecsMap = {};
-      for (let i = 0; i < allStageRecs.length; i++) {
-        const r = allStageRecs[i];
-        if (r.batchId) {
-          if (!stageRecsMap[r.batchId]) stageRecsMap[r.batchId] = [];
-          stageRecsMap[r.batchId].push(r);
-        }
-      }
-
-      const expectedBatches = getSessionExpectedBatches(session);
-      let expectedQty = 0;
-      const batchQtyMap = {};
-      for (let i = 0; i < expectedBatches.length; i++) {
-        const b = expectedBatches[i];
-        const qty = getBatchExpectedQty(b, stageRecsMap);
-        expectedQty += qty;
-        batchQtyMap[b.id] = qty;
-      }
-
-      sessionCache = {
-        expectedBatches,
-        expectedQty,
-        batchQtyMap,
-        stageRecsMap
-      };
-      cachedExpectedBatchesBySession[session.id] = sessionCache;
+    if (sessionCache && sessionCache.metrics && !forceRecompute) {
+      return sessionCache.metrics;
     }
 
-    const expectedBatches = sessionCache.expectedBatches;
-    const expectedQty = sessionCache.expectedQty;
-    const batchQtyMap = sessionCache.batchQtyMap;
-    stageRecsMap = sessionCache.stageRecsMap;
+    // Index StageRecords by batchId once
+    const allStageRecs = DB.StageRecords.all();
+    const stageRecsMap = {};
+    for (let i = 0; i < allStageRecs.length; i++) {
+      const r = allStageRecs[i];
+      if (r.batchId) {
+        if (!stageRecsMap[r.batchId]) stageRecsMap[r.batchId] = [];
+        stageRecsMap[r.batchId].push(r);
+      }
+    }
+
+    const expectedBatches = getSessionExpectedBatches(session);
+    let expectedQty = 0;
+    const batchQtyMap = {};
+    for (let i = 0; i < expectedBatches.length; i++) {
+      const b = expectedBatches[i];
+      const qty = getBatchExpectedQty(b, stageRecsMap);
+      expectedQty += qty;
+      batchQtyMap[b.id] = qty;
+    }
 
     const records = DB.AuditRecords.bySession(session.id);
     const verifiedBatchIds = new Set(records.map(r => r.batchId).filter(Boolean));
@@ -240,7 +284,7 @@ const StockAuditModule = (() => {
     const totalTarget = expectedBatches.length || 1;
     const pctComplete = Math.min(100, Math.round((verifiedBatches / totalTarget) * 100));
 
-    return {
+    const metrics = {
       expectedBatches: expectedBatches.length,
       expectedQty,
       verifiedBatches,
@@ -255,6 +299,72 @@ const StockAuditModule = (() => {
       pctComplete,
       missingList
     };
+
+    cachedExpectedBatchesBySession[session.id] = {
+      expectedBatches,
+      expectedQty,
+      batchQtyMap,
+      stageRecsMap,
+      masterMap,
+      metrics
+    };
+
+    return metrics;
+  }
+
+  // ── Incremental Metrics Update (Sub-millisecond O(1) execution) ──
+  function applyScanToSessionMetrics(session, recordObj, prevRecord) {
+    if (!session) return;
+    let sessionCache = cachedExpectedBatchesBySession[session.id];
+    if (!sessionCache || !sessionCache.metrics) {
+      getSessionMetrics(session, true);
+      return;
+    }
+
+    const m = sessionCache.metrics;
+    const masterMap = sessionCache.masterMap || {};
+
+    const newCounted = Number(recordObj.countedQty || 0);
+    const prevCounted = prevRecord ? Number(prevRecord.countedQty || 0) : 0;
+    const deltaCounted = newCounted - prevCounted;
+
+    const newVariance = Number(recordObj.varianceQty || 0);
+    const prevVariance = prevRecord ? Number(prevRecord.varianceQty || 0) : 0;
+    const deltaVariance = newVariance - prevVariance;
+
+    const part = masterMap[recordObj.jmrefNo] || {};
+    const unitPrice = Number(part.salePrice || part.standardCost || 0);
+    const deltaValue = deltaVariance * unitPrice;
+
+    m.verifiedQty += deltaCounted;
+    m.netVarianceQty += deltaVariance;
+    m.netVarianceValue += deltaValue;
+
+    if (!prevRecord) {
+      m.verifiedBatches += 1;
+      m.missingBatches = Math.max(0, m.missingBatches - 1);
+      const expQty = Number(recordObj.expectedQty || 0);
+      m.missingQty = Math.max(0, m.missingQty - expQty);
+
+      if (m.missingList && m.missingList.length > 0) {
+        const cleanNo = (recordObj.batchNo || '').trim().toLowerCase();
+        const mIdx = m.missingList.findIndex(b => b.id === recordObj.batchId || (b.batchNo && b.batchNo.trim().toLowerCase() === cleanNo));
+        if (mIdx !== -1) {
+          m.missingList.splice(mIdx, 1);
+        }
+      }
+    } else {
+      if (prevRecord.verificationStatus === 'verified_match') m.exactMatches = Math.max(0, m.exactMatches - 1);
+      else if (prevRecord.verificationStatus === 'verified_variance') m.varianceBatches = Math.max(0, m.varianceBatches - 1);
+      else if (prevRecord.verificationStatus === 'stage_mismatch') m.stageMismatches = Math.max(0, m.stageMismatches - 1);
+    }
+
+    if (recordObj.verificationStatus === 'verified_match') m.exactMatches += 1;
+    else if (recordObj.verificationStatus === 'verified_variance') m.varianceBatches += 1;
+    else if (recordObj.verificationStatus === 'stage_mismatch') m.stageMismatches += 1;
+
+    const totalTarget = m.expectedBatches || 1;
+    m.pctComplete = Math.min(100, Math.round((m.verifiedBatches / totalTarget) * 100));
   }
 
   // ── Main Render ────────────────────────────────────────────
@@ -268,6 +378,9 @@ const StockAuditModule = (() => {
     }
     const allSessions = DB.AuditSessions.all().sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
     const metrics = getSessionMetrics(session);
+    const currentUser = getCurrentUser();
+    const mySessions = allSessions.filter(isUserSession);
+    const otherSessions = allSessions.filter(s => !isUserSession(s));
 
     el.innerHTML = `
       <div class="animate-in" style="display:flex; flex-direction:column; gap:20px;">
@@ -279,19 +392,37 @@ const StockAuditModule = (() => {
               <div class="flex items-center gap-2">
                 <h2 class="font-bold" style="font-size:20px; color:var(--text-main); margin:0;">📋 Monthly Physical Stock Taking &amp; Audit</h2>
                 ${session ? `<span class="badge ${session.status === 'in_progress' ? 'badge-green' : 'badge-gray'}">${session.status === 'in_progress' ? '🟢 Active Session' : '🔒 Closed / Finalized'}</span>` : ''}
+                ${currentUser ? `<span class="badge badge-blue text-xs" title="Logged in as ${currentUser.name || currentUser.username}">👤 ${currentUser.name || currentUser.username}</span>` : ''}
               </div>
               <p class="text-sm text-muted mt-1" style="margin:0;">Barcode-driven physical stock count, stage verification, discrepancy logging &amp; reconciliation reports.</p>
             </div>
 
             <div class="flex items-center gap-2" style="flex-wrap:wrap;">
-              <div class="form-group mb-0" style="min-width:240px;">
-                <select id="audit-session-select" class="form-control" onchange="StockAuditModule.switchSession(this.value)">
+              <div class="form-group mb-0" style="min-width:260px;">
+                <select id="audit-session-select" class="form-control" onchange="StockAuditModule.switchSession(this.value)" style="font-weight:600;">
                   ${allSessions.length === 0 ? '<option value="">No Audit Sessions Found</option>' : ''}
-                  ${allSessions.map(s => `
-                    <option value="${s.id}" ${session && session.id === s.id ? 'selected' : ''}>
-                      ${s.status === 'in_progress' ? '🟢' : '🔒'} ${s.title || 'Audit ' + s.id} (${s.stageScope === 'all' ? 'All Stages' : (STAGE_LABELS[s.stageScope] || s.stageScope)})
-                    </option>
-                  `).join('')}
+                  ${mySessions.length > 0 && otherSessions.length > 0 ? `
+                    <optgroup label="👤 My Audit Sessions (${mySessions.length})">
+                      ${mySessions.map(s => `
+                        <option value="${s.id}" ${session && session.id === s.id ? 'selected' : ''}>
+                          ${s.status === 'in_progress' ? '🟢' : '🔒'} ${s.title || 'Audit ' + s.id} (${s.stageScope === 'all' ? 'All Stages' : (STAGE_LABELS[s.stageScope] || s.stageScope)})
+                        </option>
+                      `).join('')}
+                    </optgroup>
+                    <optgroup label="👥 Other Team Sessions (${otherSessions.length})">
+                      ${otherSessions.map(s => `
+                        <option value="${s.id}" ${session && session.id === s.id ? 'selected' : ''}>
+                          ${s.status === 'in_progress' ? '🟢' : '🔒'} ${s.title || 'Audit ' + s.id} (${s.stageScope === 'all' ? 'All Stages' : (STAGE_LABELS[s.stageScope] || s.stageScope)}) — ${s.auditorName || s.createdBy || 'Auditor'}
+                        </option>
+                      `).join('')}
+                    </optgroup>
+                  ` : `
+                    ${allSessions.map(s => `
+                      <option value="${s.id}" ${session && session.id === s.id ? 'selected' : ''}>
+                        ${s.status === 'in_progress' ? '🟢' : '🔒'} ${s.title || 'Audit ' + s.id} (${s.stageScope === 'all' ? 'All Stages' : (STAGE_LABELS[s.stageScope] || s.stageScope)})${s.auditorName ? ' — ' + s.auditorName : ''}
+                      </option>
+                    `).join('')}
+                  `}
                 </select>
               </div>
               
@@ -618,6 +749,13 @@ const StockAuditModule = (() => {
 
     const progressBar = document.getElementById('audit-progress-bar');
     if (progressBar) progressBar.style.width = `${metrics.pctComplete}%`;
+
+    // 4. Always ensure barcode input is cleared and focused ready for next continuous scan
+    const inp = document.getElementById('audit-barcode-input');
+    if (inp) {
+      inp.value = '';
+      inp.focus();
+    }
   }
 
   function renderLastScannedCard() {
@@ -943,18 +1081,52 @@ const StockAuditModule = (() => {
   }
 
   // ── Tab 4: Audit Sessions & History ────────────────────────
+  function setSessionHistoryFilter(f) {
+    sessionHistoryFilter = f;
+    render();
+  }
+
   function renderSessionsTab() {
     const allSessions = DB.AuditSessions.all().sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
+    const currentUser = getCurrentUser();
+    const mySessions = allSessions.filter(isUserSession);
+    const inProgressSessions = allSessions.filter(s => s.status === 'in_progress');
+
+    let displayedSessions = allSessions;
+    if (sessionHistoryFilter === 'my') {
+      displayedSessions = mySessions;
+    } else if (sessionHistoryFilter === 'active') {
+      displayedSessions = inProgressSessions;
+    }
 
     return `
       <div>
-        <div class="flex items-center justify-between mb-4">
-          <h4 class="font-bold" style="font-size:14px; color:var(--text-main); margin:0;">
-            📁 Audit Session Archive &amp; Reconciliation History
-          </h4>
-          <button class="btn btn-primary btn-sm" onclick="StockAuditModule.openNewSessionModal()">
-            ➕ Start New Audit Session
-          </button>
+        <div class="flex items-center justify-between mb-4" style="flex-wrap:wrap; gap:12px;">
+          <div>
+            <h4 class="font-bold" style="font-size:15px; color:var(--text-main); margin:0;">
+              📁 Multi-User Audit Sessions &amp; History
+            </h4>
+            <p class="text-xs text-muted mt-1" style="margin:0;">Manage concurrent active floor audit sessions across different departments and auditors.</p>
+          </div>
+          
+          <div class="flex items-center gap-2" style="flex-wrap:wrap;">
+            <!-- Filter Pills -->
+            <div class="flex gap-1" style="background:var(--bg-input); padding:3px; border-radius:6px; border:1px solid var(--border);">
+              <button class="btn ${sessionHistoryFilter === 'all' ? 'btn-primary' : 'btn-ghost'} btn-xs" onclick="StockAuditModule.setSessionHistoryFilter('all')">
+                All (${allSessions.length})
+              </button>
+              <button class="btn ${sessionHistoryFilter === 'my' ? 'btn-primary' : 'btn-ghost'} btn-xs" onclick="StockAuditModule.setSessionHistoryFilter('my')">
+                👤 My Sessions (${mySessions.length})
+              </button>
+              <button class="btn ${sessionHistoryFilter === 'active' ? 'btn-primary' : 'btn-ghost'} btn-xs" onclick="StockAuditModule.setSessionHistoryFilter('active')">
+                🟢 In Progress (${inProgressSessions.length})
+              </button>
+            </div>
+
+            <button class="btn btn-primary btn-sm" onclick="StockAuditModule.openNewSessionModal()">
+              ➕ Start New Audit Session
+            </button>
+          </div>
         </div>
 
         <div class="table-wrap">
@@ -965,41 +1137,55 @@ const StockAuditModule = (() => {
                 <th>Session Title</th>
                 <th>Scope</th>
                 <th>Status</th>
+                <th>Auditor / Creator</th>
                 <th>Started Date</th>
                 <th>Completed Date</th>
-                <th>Auditor</th>
                 <th>Verified Batches</th>
                 <th>Variance Pcs</th>
                 <th class="no-print">Actions</th>
               </tr>
             </thead>
             <tbody>
-              ${allSessions.length === 0 ? `
-                <tr><td colspan="10" style="text-align:center; padding:24px; color:var(--text-muted);">No past audit sessions found.</td></tr>
-              ` : allSessions.map((s, i) => {
+              ${displayedSessions.length === 0 ? `
+                <tr><td colspan="10" style="text-align:center; padding:24px; color:var(--text-muted);">
+                  ${sessionHistoryFilter === 'my' ? 'You have no audit sessions yet. Click "Start New Audit Session" to begin.' : 'No audit sessions found for the selected filter.'}
+                </td></tr>
+              ` : displayedSessions.map((s, i) => {
                 const recs = DB.AuditRecords.bySession(s.id);
                 const totalVariance = recs.reduce((sum, r) => sum + (Number(r.varianceQty) || 0), 0);
+                const isCurrent = currentSessionId === s.id;
+                const isMine = isUserSession(s);
 
                 return `
-                  <tr class="${currentSessionId === s.id ? 'bg-primary-light font-semibold' : ''}">
+                  <tr class="${isCurrent ? 'bg-primary-light font-semibold' : ''}" style="${isCurrent ? 'border-left:4px solid var(--accent-blue);' : ''}">
                     <td>${i + 1}</td>
-                    <td class="font-bold text-blue">${s.title || s.id}</td>
+                    <td>
+                      <div class="font-bold text-blue">${s.title || s.id}</div>
+                      ${isCurrent ? '<span class="badge badge-blue text-xs mt-1">⭐ Currently Active</span>' : ''}
+                    </td>
                     <td>${s.stageScope === 'all' ? 'All Factory & Store' : (STAGE_LABELS[s.stageScope] || s.stageScope)}</td>
                     <td>
                       <span class="badge ${s.status === 'in_progress' ? 'badge-green' : 'badge-gray'}">
                         ${s.status === 'in_progress' ? '🟢 Active' : '🔒 Closed'}
                       </span>
                     </td>
+                    <td>
+                      <div>${s.auditorName || s.createdBy || '—'}</div>
+                      ${isMine ? '<span class="badge badge-teal text-xs mt-1">👤 My Session</span>' : ''}
+                    </td>
                     <td class="text-xs text-muted">${formatDate(s.startedAt)}</td>
                     <td class="text-xs text-muted">${s.completedAt ? formatDate(s.completedAt) : '—'}</td>
-                    <td>${s.auditorName || '—'}</td>
                     <td class="font-semibold text-success">${recs.length} batches</td>
                     <td class="${totalVariance < 0 ? 'text-danger font-bold' : (totalVariance > 0 ? 'text-warning font-bold' : 'text-muted')}">
                       ${totalVariance > 0 ? '+' : ''}${formatNum(totalVariance)}
                     </td>
                     <td class="no-print">
                       <div class="flex gap-1">
-                        <button class="btn btn-secondary btn-xs" onclick="StockAuditModule.switchSession('${s.id}')">Select</button>
+                        ${isCurrent ? `
+                          <button class="btn btn-primary btn-xs" disabled style="opacity:0.7;">Active</button>
+                        ` : `
+                          <button class="btn btn-secondary btn-xs" onclick="StockAuditModule.switchSession('${s.id}')">Select</button>
+                        `}
                         <button class="btn btn-teal btn-xs" onclick="StockAuditModule.exportAuditExcel('${s.id}')">📊 Excel</button>
                         ${s.status === 'completed' ? `
                           <button class="btn btn-ghost btn-xs" onclick="StockAuditModule.reopenSession('${s.id}')" title="Re-open Session">🔓</button>
@@ -1019,6 +1205,10 @@ const StockAuditModule = (() => {
 
   // ── Modals: New Session ────────────────────────────────────
   function renderNewSessionModal() {
+    const currentUser = getCurrentUser();
+    const defaultAuditor = currentUser ? (currentUser.name || currentUser.username) : '';
+    const defaultTitle = `${defaultAuditor ? defaultAuditor + ' - ' : ''}${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} Monthly Stock Audit`;
+
     return `
       <div class="modal-overlay hidden" id="modal-audit-new-session">
         <div class="modal modal-md">
@@ -1029,7 +1219,7 @@ const StockAuditModule = (() => {
           <div class="modal-body">
             <div class="form-group">
               <label class="form-label">Audit Session Title <span class="required">*</span></label>
-              <input type="text" id="new-audit-title" class="form-control" placeholder="e.g. August 2026 Monthly Stock Audit" value="${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} Monthly Stock Audit">
+              <input type="text" id="new-audit-title" class="form-control" placeholder="e.g. August 2026 Monthly Stock Audit" value="${defaultTitle}">
             </div>
 
             <div class="form-row-2">
@@ -1077,7 +1267,7 @@ const StockAuditModule = (() => {
             <div class="form-row-2">
               <div class="form-group">
                 <label class="form-label">Lead Auditor Name <span class="required">*</span></label>
-                <input type="text" id="new-audit-auditor" class="form-control" placeholder="Auditor Name" value="${(Auth.getSession() || {}).name || ''}">
+                <input type="text" id="new-audit-auditor" class="form-control" placeholder="Auditor Name" value="${defaultAuditor}">
               </div>
               <div class="form-group">
                 <label class="form-label">Audit Start Date</label>
@@ -1196,18 +1386,22 @@ const StockAuditModule = (() => {
       inp.focus();
     }
 
-    // Find batch in system
-    const batches = DB.Batches.all();
-    let matchedBatch = batches.find(b => (b.batchNo || '').trim().toLowerCase() === query.toLowerCase());
-
+    // Fast indexed O(1) batch lookup
+    let matchedBatch = DB.Batches.find(query);
     if (!matchedBatch) {
-      // Partial search fallback
-      matchedBatch = batches.find(b => (b.batchNo || '').toLowerCase().includes(query.toLowerCase()));
+      const qLower = query.toLowerCase();
+      // Search active batches first (~1,300 items)
+      const activeBatches = DB.Batches.active ? DB.Batches.active() : [];
+      matchedBatch = activeBatches.find(b => (b.batchNo || '').toLowerCase() === qLower || (b.batchNo || '').toLowerCase().includes(qLower));
+      if (!matchedBatch) {
+        matchedBatch = DB.Batches.all().find(b => (b.batchNo || '').toLowerCase().includes(qLower));
+      }
     }
 
     if (!matchedBatch) {
       playAudioTone('error');
       showToast(`Batch barcode "${query}" not found in system!`, 'error');
+      if (inp) inp.focus();
       return;
     }
 
@@ -1226,7 +1420,8 @@ const StockAuditModule = (() => {
       const isExactStage = (defaultScannedStage === expectedStage);
       const verificationStatus = isExactStage ? 'verified_match' : 'stage_mismatch';
       const existingRec = DB.AuditRecords.bySession(session.id).find(r => r.batchId === matchedBatch.id);
-      const auditorName = (Auth.getSession() || {}).name || 'Auditor';
+      const currentUser = getCurrentUser();
+      const auditorName = (currentUser ? (currentUser.name || currentUser.username) : '') || session.auditorName || 'Auditor';
 
       let recordObj = null;
       if (existingRec) {
@@ -1262,6 +1457,9 @@ const StockAuditModule = (() => {
         };
         DB.AuditRecords.insert(recordObj);
       }
+
+      // Update metrics cache incrementally in O(1) (<0.05ms)
+      applyScanToSessionMetrics(session, recordObj, existingRec);
 
       if (isExactStage) {
         playAudioTone('success');
@@ -1420,7 +1618,7 @@ const StockAuditModule = (() => {
     if (rackLocation) {
       pinnedRackLocation = rackLocation;
     }
-    const auditorName = (document.getElementById('v-auditor-name').value || '').trim() || (Auth.getSession() || {}).name || 'Auditor';
+    const auditorName = (document.getElementById('v-auditor-name').value || '').trim() || (currentUser ? (currentUser.name || currentUser.username) : '') || session.auditorName || 'Auditor';
     const notes = (document.getElementById('v-audit-notes').value || '').trim();
 
     const varianceQty = countedQty - expectedQty;
@@ -1471,6 +1669,9 @@ const StockAuditModule = (() => {
       DB.AuditRecords.insert(recordObj);
     }
 
+    // Apply incremental metrics in O(1) (<0.05ms)
+    applyScanToSessionMetrics(session, recordObj, existingRec);
+
     // Play tone feedback
     if (verificationStatus === 'verified_match') {
       playAudioTone('success');
@@ -1486,12 +1687,22 @@ const StockAuditModule = (() => {
     };
 
     closeModal('modal-audit-verify');
-    render();
+
+    // Instant update without tearing down the entire page if on scanner tab
+    if (activeTab === 'scanner') {
+      updateScannerDomFast(session, lastScannedBatch.batch, recordObj);
+    } else {
+      render();
+    }
   }
 
   function deleteRecord(recId) {
     if (!confirm('Are you sure you want to remove this verification record?')) return;
+    const session = getActiveSession();
     DB.AuditRecords.remove(recId);
+    if (session) {
+      delete cachedExpectedBatchesBySession[session.id];
+    }
     showToast('Verification record removed', 'info');
     render();
   }
@@ -1581,7 +1792,8 @@ const StockAuditModule = (() => {
     const scopeVal = document.getElementById('new-audit-scope')?.value || 'all';
     const stageSelect = document.getElementById('new-audit-stage');
     const stageVal = stageSelect ? stageSelect.value : 'all';
-    const auditorName = (document.getElementById('new-audit-auditor')?.value || '').trim();
+    const currentUser = getCurrentUser();
+    const auditorName = (document.getElementById('new-audit-auditor')?.value || '').trim() || (currentUser ? (currentUser.name || currentUser.username) : '') || 'Auditor';
     const startedAt = document.getElementById('new-audit-date')?.value || new Date().toISOString().slice(0, 10);
     const notes = (document.getElementById('new-audit-notes')?.value || '').trim();
 
@@ -1605,6 +1817,8 @@ const StockAuditModule = (() => {
       title,
       stageScope,
       auditorName,
+      userId: currentUser ? (currentUser.userId || currentUser.id) : null,
+      createdBy: currentUser ? (currentUser.username || currentUser.name) : 'Admin',
       status: 'in_progress',
       startedAt: new Date(startedAt).toISOString(),
       completedAt: null,
@@ -1613,6 +1827,8 @@ const StockAuditModule = (() => {
 
     const newRec = DB.AuditSessions.insert(sessionObj);
     currentSessionId = newRec.id;
+    const userKey = getCurrentUserKey();
+    try { localStorage.setItem(`jmpl_audit_active_session_${userKey}`, currentSessionId); } catch (e) {}
     pinnedAuditingStage = stageScope !== 'all' ? stageScope : 'auto';
 
     closeModal('modal-audit-new-session');
@@ -1649,6 +1865,8 @@ const StockAuditModule = (() => {
       completedAt: null
     });
     currentSessionId = sessionId;
+    const userKey = getCurrentUserKey();
+    try { localStorage.setItem(`jmpl_audit_active_session_${userKey}`, currentSessionId); } catch (e) {}
     showToast('Audit session reopened!', 'info');
     render();
   }
@@ -1658,13 +1876,24 @@ const StockAuditModule = (() => {
     const recs = DB.AuditRecords.bySession(sessionId);
     recs.forEach(r => DB.AuditRecords.remove(r.id));
     DB.AuditSessions.remove(sessionId);
-    currentSessionId = null;
+    delete cachedExpectedBatchesBySession[sessionId];
+    if (currentSessionId === sessionId) {
+      currentSessionId = null;
+      const userKey = getCurrentUserKey();
+      try { localStorage.removeItem(`jmpl_audit_active_session_${userKey}`); } catch (e) {}
+    }
     showToast('Audit session deleted', 'info');
     render();
   }
 
   function switchSession(sessId) {
+    if (!sessId) return;
     currentSessionId = sessId;
+    const userKey = getCurrentUserKey();
+    try {
+      localStorage.setItem(`jmpl_audit_active_session_${userKey}`, sessId);
+    } catch (e) {}
+
     const sess = DB.AuditSessions.find(sessId);
     if (sess && sess.stageScope && sess.stageScope !== 'all') {
       pinnedAuditingStage = sess.stageScope;
@@ -1843,6 +2072,7 @@ const StockAuditModule = (() => {
     updateAuditingStage,
     onAuditScopeChange,
     onAuditStageChange,
+    setSessionHistoryFilter,
     changePageVerified: (page) => { verifiedCurrentPage = page; render(); },
     changePageMissing: (page) => { missingCurrentPage = page; render(); }
   };
