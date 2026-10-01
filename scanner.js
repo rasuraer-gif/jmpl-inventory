@@ -55,6 +55,34 @@ const Scanner = (() => {
       .scanner-reticle-tr { top: 10px; right: 10px; border-width: 3px 3px 0 0; border-top-right-radius: 6px; }
       .scanner-reticle-bl { bottom: 10px; left: 10px; border-width: 0 0 3px 3px; border-bottom-left-radius: 6px; }
       .scanner-reticle-br { bottom: 10px; right: 10px; border-width: 0 3px 3px 0; border-bottom-right-radius: 6px; }
+
+      /* Mobile fix: Force video to render visibly at 100% without collapse or blanking */
+      #scanner-qr-reader {
+        width: 100% !important;
+        max-width: 340px !important;
+        height: 280px !important;
+        min-height: 260px !important;
+        position: relative !important;
+        overflow: hidden !important;
+        border-radius: 12px !important;
+        background: #000 !important;
+        margin: 0 auto !important;
+        display: block !important;
+      }
+      #scanner-qr-reader video {
+        width: 100% !important;
+        height: 100% !important;
+        object-fit: cover !important;
+        display: block !important;
+        border-radius: 12px !important;
+        margin: 0 auto !important;
+      }
+      #scanner-qr-reader canvas {
+        display: none !important;
+      }
+      #scanner-qr-reader #qr-shaded-region {
+        border-radius: 12px !important;
+      }
     `;
     document.head.appendChild(style);
   }
@@ -358,35 +386,26 @@ const Scanner = (() => {
     const qrRegion = document.getElementById('scanner-qr-reader');
     if (!qrRegion) return false;
 
-    // Optimized scanning configuration:
-    // - 25 FPS for rapid real-time frame scanning
-    // - Wide 85% dynamic scan box (no need to center QR perfectly)
-    // - 720p sweet-spot resolution (sharp enough for tiny QR, 4x faster than 1080p)
+    // Mobile-optimized scanning configuration:
+    // - 15 FPS: Smooth, real-time scanning without overheating mobile phone CPU/GPU
+    // - Dynamic qrbox scaled to current container dimensions with safe fallback
+    // - DO NOT set aspectRatio: 1.0 (WebKit on iOS & Android Chrome drops stream on aspectRatio applyConstraints)
+    // - DO NOT set restrictive landscape width/height constraints (conflicts with mobile portrait orientation)
     const config = {
-      fps: 25,
+      fps: 15,
       qrbox: (viewfinderWidth, viewfinderHeight) => {
-        const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
-        const qrEdge = Math.floor(minEdge * 0.85);
+        const minEdge = Math.min(viewfinderWidth || 280, viewfinderHeight || 280);
+        const size = Math.max(160, Math.floor(minEdge * 0.75));
         return {
-          width: Math.max(180, Math.min(qrEdge, 340)),
-          height: Math.max(180, Math.min(qrEdge, 340))
+          width: size,
+          height: size
         };
       },
-      aspectRatio: 1.0,
-      disableFlip: false,
-      videoConstraints: typeof cameraIdOrConstraints === 'object' ? {
-        ...cameraIdOrConstraints,
-        width: { ideal: 1280, max: 1920 },
-        height: { ideal: 720, max: 1080 }
-      } : {
-        deviceId: { exact: cameraIdOrConstraints },
-        width: { ideal: 1280, max: 1920 },
-        height: { ideal: 720, max: 1080 }
-      }
+      disableFlip: false
     };
 
     try {
-      setStatus("Starting high-speed camera...", "var(--primary)");
+      setStatus("Starting camera...", "var(--primary)");
       await html5QrcodeScanner.start(
         cameraIdOrConstraints,
         config,
@@ -394,7 +413,34 @@ const Scanner = (() => {
         (errorMessage) => {}
       );
 
-      // Hardware auto-focus & exposure lock for instant clarity
+      // CRITICAL FIX FOR IPHONE (iOS Safari / WKWebView) & ANDROID:
+      // Force video element attributes and start playback to prevent blank / black video
+      const video = document.querySelector('#scanner-qr-reader video');
+      if (video) {
+        video.setAttribute('playsinline', 'true');
+        video.setAttribute('webkit-playsinline', 'true');
+        video.setAttribute('muted', 'true');
+        video.muted = true;
+        video.playsInline = true;
+        video.style.width = '100%';
+        video.style.height = '100%';
+        video.style.objectFit = 'cover';
+        video.style.display = 'block';
+
+        const tryPlay = () => {
+          if (video.paused) {
+            video.play().catch(e => console.warn("Video play retry:", e));
+          }
+        };
+        tryPlay();
+        video.addEventListener('loadedmetadata', tryPlay);
+        video.addEventListener('canplay', tryPlay);
+        video.addEventListener('playing', () => {
+          setStatus("Point camera at barcode or QR code", "var(--text-secondary)");
+        });
+      }
+
+      // Safe continuous focus application (only if supported and does not throw)
       try {
         const track = html5QrcodeScanner.getRunningTrack();
         if (track && typeof track.applyConstraints === 'function') {
@@ -402,12 +448,6 @@ const Scanner = (() => {
           const adv = {};
           if (caps.focusMode && (caps.focusMode.includes('continuous') || caps.focusMode.includes('macro'))) {
             adv.focusMode = caps.focusMode.includes('continuous') ? 'continuous' : 'macro';
-          }
-          if (caps.exposureMode && caps.exposureMode.includes('continuous')) {
-            adv.exposureMode = 'continuous';
-          }
-          if (caps.whiteBalanceMode && caps.whiteBalanceMode.includes('continuous')) {
-            adv.whiteBalanceMode = 'continuous';
           }
           if (Object.keys(adv).length > 0) {
             await track.applyConstraints({ advanced: [adv] }).catch(() => {});
@@ -417,7 +457,7 @@ const Scanner = (() => {
 
       attachViewfinderOverlay(qrRegion);
       startTurboEngine();
-      setStatus("Point camera at QR code", "var(--text-secondary)");
+      setStatus("Point camera at barcode or QR code", "var(--text-secondary)");
       updateControlButtons();
       resetInactivityTimer();
       return true;
@@ -458,14 +498,14 @@ const Scanner = (() => {
           <div class="modal-header" style="padding: 12px 16px; border-bottom: 1px solid var(--border);">
             <div style="display: flex; align-items: center; gap: 8px;">
               <span style="font-size: 20px;">📷</span>
-              <h3 style="margin: 0; font-size: 16px;">Scan QR Code</h3>
-              <span style="font-size: 10px; background: rgba(16,185,129,0.15); color: #10b981; padding: 2px 6px; border-radius: 4px; font-weight: 700; margin-left: 4px;">FAST</span>
+              <h3 style="margin: 0; font-size: 16px;">Scan Barcode / QR Code</h3>
+              <span style="font-size: 10px; background: rgba(16,185,129,0.15); color: #10b981; padding: 2px 6px; border-radius: 4px; font-weight: 700; margin-left: 4px;">LIVE</span>
             </div>
             <button class="modal-close" onclick="Scanner.stop()" title="Close scanner" style="font-size: 18px;">✕</button>
           </div>
           
           <div class="modal-body" style="padding: 16px; display: flex; flex-direction: column; align-items: center; justify-content: center;">
-            <div id="scanner-qr-reader" style="width: 100%; max-width: 320px; aspect-ratio: 1; border-radius: 12px; overflow: hidden; background: #000; border: 2px solid var(--border); position: relative; display: flex; align-items: center; justify-content: center;"></div>
+            <div id="scanner-qr-reader" style="width: 100%; max-width: 320px; height: 280px; min-height: 260px; border-radius: 12px; overflow: hidden; background: #000; border: 2px solid var(--border); position: relative; margin: 0 auto;"></div>
             
             <p id="scanner-status-text" style="font-size: 12px; color: var(--text-secondary); margin-top: 10px; margin-bottom: 6px; text-align: center; min-height: 18px; line-height: 1.4;">
               Initializing camera...
@@ -521,6 +561,9 @@ const Scanner = (() => {
 
     modal.classList.remove('hidden');
 
+    // Wait 60ms for modal DOM display/paint so client dimensions are fully computed
+    await new Promise(res => setTimeout(res, 60));
+
     // Reset manual input
     const manualInp = document.getElementById('scanner-manual-input');
     if (manualInp) {
@@ -542,17 +585,22 @@ const Scanner = (() => {
     modal.onclick = () => resetInactivityTimer();
     modal.ontouchstart = () => resetInactivityTimer();
 
-    // Instantiate with QR_CODE ONLY filter and native BarcodeDetector enabled
+    // Support both 2D QR codes and 1D factory barcodes
     const supportedFormats = typeof Html5QrcodeSupportedFormats !== 'undefined'
-      ? [Html5QrcodeSupportedFormats.QR_CODE]
+      ? [
+          Html5QrcodeSupportedFormats.QR_CODE,
+          Html5QrcodeSupportedFormats.CODE_128,
+          Html5QrcodeSupportedFormats.CODE_39,
+          Html5QrcodeSupportedFormats.DATA_MATRIX,
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.EAN_8,
+          Html5QrcodeSupportedFormats.UPC_A
+        ]
       : undefined;
 
     html5QrcodeScanner = new Html5Qrcode("scanner-qr-reader", {
       formatsToSupport: supportedFormats,
       useBarCodeDetectorIfSupported: true,
-      experimentalFeatures: {
-        useBarCodeDetectorIfSupported: true
-      },
       verbose: false
     });
 
@@ -561,37 +609,50 @@ const Scanner = (() => {
 
     let started = false;
 
-    // Fast Mobile-First Launch:
-    // Directly request environment camera constraints immediately (< 200ms) without
-    // waiting for slow device enumeration.
+    // 1. Mobile back camera direct launch (works best on iOS Safari & Android Chrome)
     try {
-      started = await startCamera({ facingMode: { ideal: "environment" } });
+      started = await startCamera({ facingMode: "environment" });
     } catch(e) {
-      console.warn("Direct environment launch failed, falling back to enumeration...", e);
+      console.warn("Direct environment launch failed, trying fallback...", e);
     }
 
-    // Asynchronously enumerate cameras in the background to enable the Flip button
+    // 2. Ideal environment constraint fallback
+    if (!started) {
+      try {
+        started = await startCamera({ facingMode: { ideal: "environment" } });
+      } catch(e) {}
+    }
+
+    // 3. Try enumerated cameras
+    if (!started) {
+      try {
+        const devices = await Html5Qrcode.getCameras();
+        if (devices && devices.length > 0) {
+          _availableCameras = devices;
+          const backIdx = devices.findIndex(c => {
+            const l = (c.label || '').toLowerCase();
+            return l.includes('back') || l.includes('rear') || l.includes('environment');
+          });
+          _currentCameraIndex = backIdx !== -1 ? backIdx : (devices.length > 1 ? devices.length - 1 : 0);
+          started = await startCamera(_availableCameras[_currentCameraIndex].id);
+        }
+      } catch(e) {}
+    }
+
+    // 4. Try front / any camera
+    if (!started) {
+      try {
+        started = await startCamera({ facingMode: "user" });
+      } catch(e) {}
+    }
+
+    // Populate camera list in background to enable Flip Camera button if multiple exist
     Html5Qrcode.getCameras().then(devices => {
       if (devices && devices.length > 0) {
         _availableCameras = devices;
-        const backIdx = devices.findIndex(c => {
-          const l = (c.label || '').toLowerCase();
-          return l.includes('back') || l.includes('rear') || l.includes('environment');
-        });
-        _currentCameraIndex = backIdx !== -1 ? backIdx : (devices.length > 1 ? devices.length - 1 : 0);
         updateControlButtons();
       }
     }).catch(() => {});
-
-    // If direct environment constraint failed, try enumerated back camera
-    if (!started && _availableCameras.length > 0) {
-      started = await startCamera(_availableCameras[_currentCameraIndex].id);
-    }
-
-    // Fallback: user/front facing camera
-    if (!started) {
-      started = await startCamera({ facingMode: "user" });
-    }
 
     // If live camera still couldn't start (permissions / insecure context)
     if (!started) {
@@ -666,7 +727,7 @@ const Scanner = (() => {
     inputElement.value = '';
 
     setStatus("Decoding photo...", "var(--primary)");
-    if (typeof showToast === 'function') showToast('Reading QR code from photo...', 'info');
+    if (typeof showToast === 'function') showToast('Reading barcode / QR from photo...', 'info');
 
     let scannerInstance = html5QrcodeScanner;
     let createdTemporary = false;
@@ -680,7 +741,15 @@ const Scanner = (() => {
         document.body.appendChild(headless);
       }
       const supportedFormats = typeof Html5QrcodeSupportedFormats !== 'undefined'
-        ? [Html5QrcodeSupportedFormats.QR_CODE]
+        ? [
+            Html5QrcodeSupportedFormats.QR_CODE,
+            Html5QrcodeSupportedFormats.CODE_128,
+            Html5QrcodeSupportedFormats.CODE_39,
+            Html5QrcodeSupportedFormats.DATA_MATRIX,
+            Html5QrcodeSupportedFormats.EAN_13,
+            Html5QrcodeSupportedFormats.EAN_8,
+            Html5QrcodeSupportedFormats.UPC_A
+          ]
         : undefined;
 
       scannerInstance = new Html5Qrcode('scanner-headless-reader', {
@@ -700,9 +769,9 @@ const Scanner = (() => {
       }
     } catch(err) {
       console.warn("File scan error:", err);
-      setStatus("No QR code found in photo", "#f43f5e");
+      setStatus("No barcode or QR code found in photo", "#f43f5e");
       if (typeof showToast === 'function') {
-        showToast('No QR code detected. Please capture a clear, close-up photo of the sticker.', 'warning');
+        showToast('No code detected. Please capture a clear, close-up photo of the sticker.', 'warning');
       }
     } finally {
       if (createdTemporary && scannerInstance) {
