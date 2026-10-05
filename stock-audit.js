@@ -373,6 +373,9 @@ const StockAuditModule = (() => {
     if (!el) return;
 
     const session = getActiveSession();
+    if (session && typeof DB !== 'undefined' && DB.AuditRecords && typeof DB.AuditRecords.fetchBySession === 'function') {
+      DB.AuditRecords.fetchBySession(session.id);
+    }
     if (session && session.stageScope && session.stageScope !== 'all') {
       pinnedAuditingStage = session.stageScope;
     }
@@ -1831,6 +1834,10 @@ const StockAuditModule = (() => {
     try { localStorage.setItem(`jmpl_audit_active_session_${userKey}`, currentSessionId); } catch (e) {}
     pinnedAuditingStage = stageScope !== 'all' ? stageScope : 'auto';
 
+    if (typeof DB !== 'undefined' && DB.AuditRecords && typeof DB.AuditRecords.fetchBySession === 'function') {
+      DB.AuditRecords.fetchBySession(currentSessionId);
+    }
+
     closeModal('modal-audit-new-session');
     showToast('New stock audit session started!', 'success');
     render();
@@ -1900,7 +1907,14 @@ const StockAuditModule = (() => {
     } else {
       pinnedAuditingStage = 'auto';
     }
-    render();
+
+    if (typeof DB !== 'undefined' && DB.AuditRecords && typeof DB.AuditRecords.fetchBySession === 'function') {
+      DB.AuditRecords.fetchBySession(sessId).then(() => {
+        render();
+      }).catch(() => render());
+    } else {
+      render();
+    }
   }
 
   function switchTab(tabKey) {

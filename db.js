@@ -393,6 +393,154 @@ const DB = (() => {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
   }
 
+  // Smart Master Data Caching: TTL 12 hours. Prevents thousands of unnecessary Firestore reads on page reloads.
+  async function syncMasterDataIfStale(force = false) {
+    if (!db) return;
+    const now = Date.now();
+    const lastSync = localStorage.getItem('jmpl_master_cache_time');
+    if (!force && lastSync && (now - Number(lastSync) < 12 * 60 * 60 * 1000) && cache.master && cache.master.length > 0) {
+      console.log("[DB] Master reference data served from local cache (0 DB reads).");
+      return;
+    }
+
+    try {
+      console.log("[DB] Syncing master reference data from cloud Firestore...");
+      const masterTables = ['master', 'vendors', 'subcontractors', 'operators', 'inspectors', 'users', 'moulds'];
+      const results = await Promise.all(masterTables.map(t => db.collection(t).get().catch(err => {
+        console.warn(`[DB] Master fetch error on ${t}:`, err);
+        return null;
+      })));
+      
+      results.forEach((snap, idx) => {
+        if (snap && snap.docs) {
+          const t = masterTables[idx];
+          cache[t] = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          rebuildIndexesForTable(t);
+          saveLocal(t);
+        }
+      });
+      localStorage.setItem('jmpl_master_cache_time', String(now));
+      console.log("[DB] Master reference data cached successfully.");
+    } catch(err) {
+      console.warn("[DB] Master data sync warning:", err);
+    }
+  }
+
+  function refreshMasterData() {
+    localStorage.removeItem('jmpl_master_cache_time');
+    return syncMasterDataIfStale(true);
+  }
+
+  // On-Demand Module Loader: Loads heavy and module-specific collections strictly when needed.
+  const _loadedModules = new Set();
+  async function ensureModuleLoaded(moduleId) {
+    if (!db || _loadedModules.has(moduleId)) return;
+
+    try {
+      if (moduleId === 'mould-tracking') {
+        _loadedModules.add(moduleId);
+        const [mSnap, mmSnap, mmtSnap] = await Promise.all([
+          db.collection('moulds').get().catch(() => null),
+          db.collection('mouldMovements').orderBy('date', 'desc').limit(200).get().catch(() => null),
+          db.collection('mouldMaintenance').orderBy('date', 'desc').limit(100).get().catch(() => null)
+        ]);
+        if (mSnap && mSnap.docs) {
+          cache.moulds = mSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+          rebuildIndexesForTable('moulds');
+          saveLocal('moulds');
+        }
+        if (mmSnap && mmSnap.docs) {
+          cache.mouldMovements = mmSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+          rebuildIndexesForTable('mouldMovements');
+          saveLocal('mouldMovements');
+        }
+        if (mmtSnap && mmtSnap.docs) {
+          cache.mouldMaintenance = mmtSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+          rebuildIndexesForTable('mouldMaintenance');
+          saveLocal('mouldMaintenance');
+        }
+        triggerDataChange('moulds');
+      } else if (moduleId === 'delivery-challan') {
+        _loadedModules.add(moduleId);
+        const d30 = new Date();
+        d30.setDate(d30.getDate() - 30);
+        const cutoff = d30.toISOString().slice(0, 10);
+        const snap = await db.collection('deliveryChallans').where('challanDate', '>=', cutoff).get().catch(() => null);
+        if (snap && snap.docs) {
+          cache.deliveryChallans = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          rebuildIndexesForTable('deliveryChallans');
+          saveLocal('deliveryChallans');
+          triggerDataChange('deliveryChallans');
+        }
+      } else if (moduleId === 'monthly-plan') {
+        _loadedModules.add(moduleId);
+        const snap = await db.collection('monthlyPlans').get().catch(() => null);
+        if (snap && snap.docs) {
+          cache.monthlyPlans = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          rebuildIndexesForTable('monthlyPlans');
+          saveLocal('monthlyPlans');
+          triggerDataChange('monthlyPlans');
+        }
+      } else if (moduleId === 'prod-sched') {
+        _loadedModules.add(moduleId);
+        const snap = await db.collection('productionSchedules').get().catch(() => null);
+        if (snap && snap.docs) {
+          cache.productionSchedules = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          rebuildIndexesForTable('productionSchedules');
+          saveLocal('productionSchedules');
+          triggerDataChange('productionSchedules');
+        }
+      } else if (moduleId === 'task-tracking') {
+        _loadedModules.add(moduleId);
+        const snap = await db.collection('tasks').get().catch(() => null);
+        if (snap && snap.docs) {
+          cache.tasks = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          rebuildIndexesForTable('tasks');
+          saveLocal('tasks');
+          triggerDataChange('tasks');
+        }
+      } else if (moduleId === 'stock-audit') {
+        _loadedModules.add(moduleId);
+        const snap = await db.collection('auditSessions').orderBy('startedAt', 'desc').limit(30).get().catch(() => null);
+        if (snap && snap.docs) {
+          cache.auditSessions = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          rebuildIndexesForTable('auditSessions');
+          saveLocal('auditSessions');
+          triggerDataChange('auditSessions');
+        }
+      } else if (moduleId === 'stock') {
+        _loadedModules.add(moduleId);
+        const snap = await db.collection('stockUploads').orderBy('uploadedAt', 'desc').limit(50).get().catch(() => null);
+        if (snap && snap.docs) {
+          cache.stockUploads = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          rebuildIndexesForTable('stockUploads');
+          saveLocal('stockUploads');
+          triggerDataChange('stockUploads');
+        }
+      } else if (moduleId === 'print-batch') {
+        _loadedModules.add(moduleId);
+        const snap = await db.collection('printHistory').orderBy('printedAt', 'desc').limit(100).get().catch(() => null);
+        if (snap && snap.docs) {
+          cache.printHistory = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          rebuildIndexesForTable('printHistory');
+          saveLocal('printHistory');
+          triggerDataChange('printHistory');
+        }
+      } else if (moduleId === 'admin') {
+        _loadedModules.add(moduleId);
+        const snap = await db.collection('auditLogs').orderBy('timestamp', 'desc').limit(200).get().catch(() => null);
+        if (snap && snap.docs) {
+          cache.auditLogs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          rebuildIndexesForTable('auditLogs');
+          saveLocal('auditLogs');
+          triggerDataChange('auditLogs');
+        }
+      }
+    } catch(e) {
+      console.warn(`[DB] Error loading module ${moduleId}:`, e);
+    }
+  }
+
   // Initialize Firebase and setup sync listeners
   async function init() {
     initLocal();
@@ -449,26 +597,41 @@ const DB = (() => {
       // guarantees zero IndexedDB transaction deadlocks, zero multi-tab conflicts, and instant startup.
       db = firestoreInstance;
 
-      // 3. Set up listeners for all collections in background with optimized query filters
-      const collections = Object.keys(cache);
-      const d60 = new Date();
-      d60.setDate(d60.getDate() - 60);
-      const cutoff60 = d60.toISOString().slice(0, 10);
+      // 3. Set up listeners ONLY for core shopfloor operational tables with a lean sliding window.
+      // Heavy tables and module-specific tables (auditRecords, challans, plans, logs) are loaded on-demand.
+      // Master tables are cached with a 12-hour TTL and fetched once, saving thousands of reads per load.
+      const CORE_REALTIME_TABLES = ['batches', 'stageRecords', 'lossTracker', 'productionRecords', 'sales', 'rejectionTracker', 'recheckTracker'];
+      
+      const now = new Date();
+      const d7 = new Date(now);
+      d7.setDate(d7.getDate() - 7);
+      const cutoff7 = d7.toISOString().slice(0, 10);
 
-      collections.forEach(table => {
+      const d14 = new Date(now);
+      d14.setDate(d14.getDate() - 14);
+      const cutoff14 = d14.toISOString().slice(0, 10);
+
+      // Refresh master data if local cache is empty or older than 12 hours (0 DB reads on fresh reload)
+      syncMasterDataIfStale();
+
+      CORE_REALTIME_TABLES.forEach(table => {
         let query = db.collection(table);
         if (table === 'batches') {
           // Only listen in real-time to active batches (completed batches don't need real-time push)
           query = query.where('status', '==', 'active');
         } else if (table === 'stageRecords') {
-          // Only listen in real-time to records from the last 60 days
-          query = query.where('date', '>=', cutoff60);
+          // Only listen in real-time to active operational window (last 7 days)
+          query = query.where('date', '>=', cutoff7);
         } else if (table === 'lossTracker') {
-          query = query.where('date', '>=', cutoff60);
+          query = query.where('date', '>=', cutoff7);
         } else if (table === 'productionRecords') {
-          query = query.where('date', '>=', cutoff60);
+          query = query.where('date', '>=', cutoff7);
         } else if (table === 'sales') {
-          query = query.where('saleDate', '>=', cutoff60);
+          query = query.where('saleDate', '>=', cutoff14);
+        } else if (table === 'rejectionTracker') {
+          query = query.where('date', '>=', cutoff14);
+        } else if (table === 'recheckTracker') {
+          query = query.where('date', '>=', cutoff14);
         }
 
         let isInitial = true;
@@ -481,7 +644,7 @@ const DB = (() => {
               list.push({ id: doc.id, ...doc.data() });
             });
 
-            if (['batches', 'stageRecords', 'lossTracker', 'productionRecords', 'sales'].includes(table)) {
+            if (CORE_REALTIME_TABLES.includes(table)) {
               // Merge queried window with existing local/cached data
               const newMap = new Map(list.map(d => [d.id, d]));
               const merged = [];
@@ -1203,29 +1366,20 @@ const DB = (() => {
 
     const timeoutPromise = new Promise((_, reject) => {
       setTimeout(() => {
-        if (!opFinished) reject(new Error('Cloud sync timeout (7s)'));
-      }, 7000);
+        if (!opFinished) reject(new Error('Cloud sync timeout (25s)'));
+      }, 25000);
     });
 
     return Promise.race([opPromise, timeoutPromise]).catch(err => {
-      console.warn(`[DB] Sync delayed on ${table}/${id} (${err.message}). Auto-reconnecting...`);
+      console.warn(`[DB] Cloud sync delayed on ${table}/${id} (${err.message}). Firestore will persist in background.`);
       _connectionHealthy = false;
       triggerSyncStateChange(table, true);
-
-      // Reconnect and retry write once
-      return reconnect(true).then(() => {
-        return executeOp();
-      }).then(() => {
+      // Let Firestore's background pipeline retry safely without tearing down active network listeners
+      return executeOp().then(() => {
         _connectionHealthy = true;
         triggerSyncStateChange(table, false);
       }).catch(retryErr => {
-        console.error(`[DB] Cloud sync failed after reconnect on ${table}/${id}:`, retryErr);
-        _connectionHealthy = false;
-        triggerSyncStateChange(table, false);
-        if (typeof showToast === 'function') {
-          showToast(`Cloud write failed for ${table}: ${retryErr.message || 'Connection lost'}`, 'error');
-        }
-        throw retryErr;
+        console.warn(`[DB] Cloud sync background queue on ${table}/${id}:`, retryErr.message);
       });
     });
   }
@@ -2637,10 +2791,55 @@ const DB = (() => {
     remove: (id) => remove('auditSessions', id)
   };
 
+  let _activeAuditSessionListener = null;
+  let _activeAuditSessionId = null;
+
   const AuditRecords = {
     all: () => getAll('auditRecords'),
     find: (id) => findById('auditRecords', id),
     bySession: (sessionId) => getAll('auditRecords').filter(r => r.sessionId === sessionId),
+    fetchBySession: async (sessionId) => {
+      if (!sessionId) return [];
+      if (_activeAuditSessionId === sessionId && _activeAuditSessionListener) {
+        return AuditRecords.bySession(sessionId);
+      }
+      if (_activeAuditSessionListener) {
+        try { _activeAuditSessionListener(); } catch(e) {}
+        _activeAuditSessionListener = null;
+        _activeAuditSessionId = null;
+      }
+      if (!db) {
+        return AuditRecords.bySession(sessionId);
+      }
+      try {
+        _activeAuditSessionId = sessionId;
+        const q = db.collection('auditRecords').where('sessionId', '==', sessionId);
+        _activeAuditSessionListener = q.onSnapshot(snap => {
+          const list = [];
+          snap.forEach(doc => {
+            list.push({ id: doc.id, ...doc.data() });
+          });
+          const otherRecords = (cache.auditRecords || []).filter(r => r.sessionId !== sessionId);
+          cache.auditRecords = [...otherRecords, ...list];
+          rebuildIndexesForTable('auditRecords');
+          saveLocal('auditRecords');
+          triggerDataChange('auditRecords');
+        }, err => {
+          console.warn("[DB] AuditRecords session listener error:", err);
+        });
+        return AuditRecords.bySession(sessionId);
+      } catch(err) {
+        console.warn("[DB] fetchBySession error:", err);
+        return AuditRecords.bySession(sessionId);
+      }
+    },
+    stopSessionListener: () => {
+      if (_activeAuditSessionListener) {
+        try { _activeAuditSessionListener(); } catch(e) {}
+        _activeAuditSessionListener = null;
+        _activeAuditSessionId = null;
+      }
+    },
     insert: (r) => insert('auditRecords', r),
     update: (id, c) => update('auditRecords', id, c),
     remove: (id) => remove('auditRecords', id)
@@ -3065,7 +3264,7 @@ const DB = (() => {
 
   return {
     initLocal, init, reconnect, isConnected: () => _connectionHealthy, isOnline, assertOnline, onSyncStateChange, onDataChange, genId, seedDefaults, clearTable,
-    insertAsync, updateAsync, removeAsync, fetchHistoricalForReport,
+    insertAsync, updateAsync, removeAsync, fetchHistoricalForReport, ensureModuleLoaded, refreshMasterData,
     Users, Master, Subcontractors, Vendors, Operators, Inspectors,
     Batches, StageRecords, LossTracker, RejectionTracker,
     RecheckTracker, StockUploads, Sales, StoreInventory,

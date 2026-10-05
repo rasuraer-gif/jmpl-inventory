@@ -784,7 +784,20 @@ const App = (() => {
       showToast('You do not have permission to access this module', 'error'); return;
     }
 
+    const prevModule = currentModule;
     currentModule = moduleId;
+
+    // Teardown module-specific listeners if leaving
+    if (prevModule === 'stock-audit' && moduleId !== 'stock-audit') {
+      if (typeof DB !== 'undefined' && DB.AuditRecords && typeof DB.AuditRecords.stopSessionListener === 'function') {
+        DB.AuditRecords.stopSessionListener();
+      }
+    }
+
+    // Trigger on-demand background fetch for module-specific data if not yet loaded
+    if (typeof DB !== 'undefined' && typeof DB.ensureModuleLoaded === 'function') {
+      DB.ensureModuleLoaded(moduleId).catch(console.warn);
+    }
 
     // Update active nav
     document.querySelectorAll('.nav-item[data-module]').forEach(el => {
