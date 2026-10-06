@@ -174,6 +174,19 @@ const DeliveryChallanModule = (() => {
   function switchTab(tab) {
     activeTab = tab;
     render();
+    if (tab === 'history' && typeof DB !== 'undefined') {
+      const fetchFn = (DB.DeliveryChallans && typeof DB.DeliveryChallans.fetchFromCloud === 'function')
+        ? DB.DeliveryChallans.fetchFromCloud
+        : (typeof DB.ensureModuleLoaded === 'function' ? () => DB.ensureModuleLoaded('delivery-challan', true) : null);
+      if (fetchFn) {
+        fetchFn().then(() => {
+          if (activeTab === 'history') {
+            const el = document.getElementById('dc-module-content');
+            if (el) el.innerHTML = renderHistoryTab();
+          }
+        }).catch(console.warn);
+      }
+    }
   }
 
   function renderCreateTab() {
@@ -269,8 +282,28 @@ const DeliveryChallanModule = (() => {
     `;
   }
 
+  let _dcHistoryFetchAttempted = false;
   function renderHistoryTab() {
     let list = DB.DeliveryChallans.all();
+
+    // If local memory list is empty, trigger a background fetch once
+    if ((!list || list.length === 0) && !_dcHistoryFetchAttempted && typeof DB !== 'undefined') {
+      _dcHistoryFetchAttempted = true;
+      const fetchFn = (DB.DeliveryChallans && typeof DB.DeliveryChallans.fetchFromCloud === 'function')
+        ? DB.DeliveryChallans.fetchFromCloud
+        : (typeof DB.ensureModuleLoaded === 'function' ? () => DB.ensureModuleLoaded('delivery-challan', true) : null);
+      if (fetchFn) {
+        fetchFn().then(() => {
+          if (activeTab === 'history') {
+            const el = document.getElementById('dc-module-content');
+            if (el) el.innerHTML = renderHistoryTab();
+          }
+        }).finally(() => {
+          setTimeout(() => { _dcHistoryFetchAttempted = false; }, 4000);
+        });
+      }
+    }
+
     if (historySearch) {
       const q = historySearch.toLowerCase();
       list = list.filter(dc => 
@@ -307,7 +340,10 @@ const DeliveryChallanModule = (() => {
     return `
       <div class="card">
         <div class="card-header" style="flex-direction:row; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
-          <h3>Delivery Challan History</h3>
+          <div class="flex items-center gap-2">
+            <h3 style="margin:0;">Delivery Challan History</h3>
+            <button id="dc-refresh-btn" class="btn btn-secondary btn-xs" onclick="DeliveryChallanModule.refreshHistory()" title="Reload Delivery Challans from cloud" style="display:inline-flex; align-items:center; gap:4px; padding:3px 8px;">🔄 Refresh</button>
+          </div>
           <div class="search-input" style="max-width:300px; margin:0;">
             <span class="search-icon">&#128269;</span>
             <input type="text" id="dc-history-search" class="form-control" placeholder="Search by DC No or Vendor..." value="${historySearch}" oninput="DeliveryChallanModule.filterHistory(this.value)">
@@ -319,12 +355,30 @@ const DeliveryChallanModule = (() => {
               <tr><th>DC No</th><th>Created At</th><th>Vendor</th><th>Department</th><th>Batches</th><th>Total Qty (pcs)</th><th>Actions</th></tr>
             </thead>
             <tbody>
-              ${rows || '<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--text-muted);">No delivery challan records found</td></tr>'}
+              ${rows || '<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--text-muted);"><div style="margin-bottom:8px;font-size:24px;">📜</div><div>No delivery challan records found</div><div style="font-size:11px;margin-top:4px;color:var(--text-secondary);"><button class="btn btn-secondary btn-xs" onclick="DeliveryChallanModule.refreshHistory()">🔄 Click to reload from cloud</button></div></td></tr>'}
             </tbody>
           </table>
         </div>
       </div>
     `;
+  }
+
+  async function refreshHistory() {
+    const btn = document.getElementById('dc-refresh-btn');
+    if (btn) btn.innerHTML = '⏳ Loading...';
+    try {
+      if (typeof DB !== 'undefined' && DB.DeliveryChallans && typeof DB.DeliveryChallans.fetchFromCloud === 'function') {
+        await DB.DeliveryChallans.fetchFromCloud();
+      } else if (typeof DB !== 'undefined' && typeof DB.ensureModuleLoaded === 'function') {
+        await DB.ensureModuleLoaded('delivery-challan', true);
+      }
+    } catch(e) {
+      console.warn("Refresh history error:", e);
+    }
+    if (activeTab === 'history') {
+      const el = document.getElementById('dc-module-content');
+      if (el) el.innerHTML = renderHistoryTab();
+    }
   }
 
   function filterHistory(val) {
@@ -949,6 +1003,7 @@ const DeliveryChallanModule = (() => {
     deleteChallan,
     printChallan,
     filterHistory,
+    refreshHistory,
     checkAutoAdd,
     onBatchEnter,
     onBatchChange,

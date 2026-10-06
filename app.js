@@ -864,7 +864,7 @@ const App = (() => {
       updateTableSyncState(table, hasPendingWrites);
     });
 
-    // Update Dashboard screen alone when cloud database changes arrive
+    // Update active screen when cloud database changes arrive
     let dataChangeTimer = null;
     DB.onDataChange((table) => {
       if (['batches', 'stageRecords', 'master', 'lossTracker', 'recheckTracker', 'sales'].includes(table)) {
@@ -877,6 +877,14 @@ const App = (() => {
             }
           }
         }, 300);
+      } else if (table === 'deliveryChallans' && currentModule === 'delivery-challan') {
+        if (typeof DeliveryChallanModule !== 'undefined' && typeof DeliveryChallanModule.render === 'function') {
+          DeliveryChallanModule.render();
+        }
+      } else if (table === 'moulds' && currentModule === 'mould-tracking') {
+        if (typeof MouldTrackingModule !== 'undefined' && typeof MouldTrackingModule.render === 'function') {
+          MouldTrackingModule.render();
+        }
       }
     });
 
@@ -1496,40 +1504,136 @@ const App = (() => {
     return Number(batch.remainingQty != null && !isNaN(Number(batch.remainingQty)) && Number(batch.remainingQty) > 0 ? batch.remainingQty : (batch.initialQty || 0));
   }
 
-  function getParentBatch(b) {
-    if (!b || !b.notes) return null;
-    const regexes = [
-      /pool batch:\s*([^\s\.]+)/i,
-      /created from batch\s*([^\s\.]+)/i,
-      /stock upload batch\s*([^\s\.]+)/i
-    ];
-    for (const regex of regexes) {
-      const match = b.notes.match(regex);
-      if (match) {
-        const parentNo = match[1].trim();
-        const parent = DB.Batches.all().find(x => x.batchNo === parentNo);
+  async function getParentBatch(b) {
+    if (!b) return null;
+    const allBatches = DB.Batches.allIncludeArchived ? DB.Batches.allIncludeArchived() : DB.Batches.all();
+
+    // 1. Explicit parentBatchId
+    if (b.parentBatchId) {
+      let parent = allBatches.find(x => x.id === b.parentBatchId);
+      if (!parent && DB.Batches.fetchRemoteByNo) {
+        parent = await DB.Batches.fetchRemoteByNo(b.parentBatchId);
+      }
+      if (parent) return parent;
+    }
+
+    // 2. Explicit parentBatchNo
+    if (b.parentBatchNo) {
+      const pNo = String(b.parentBatchNo).trim();
+      let parent = allBatches.find(x => x.batchNo && x.batchNo.trim().toUpperCase() === pNo.toUpperCase());
+      if (!parent && DB.Batches.fetchRemoteByNo) {
+        parent = await DB.Batches.fetchRemoteByNo(pNo);
+      }
+      if (parent) return parent;
+    }
+
+    // 3. Notes regex
+    if (b.notes) {
+      const regexes = [
+        /pool batch:\s*([^\s\.,;]+)/i,
+        /created from batch\s*([^\s\.,;]+)/i,
+        /stock upload batch\s*([^\s\.,;]+)/i,
+        /parent batch:\s*([^\s\.,;]+)/i,
+        /reprocessed from\s*([^\s\.,;]+)/i,
+        /split from\s*([^\s\.,;]+)/i
+      ];
+      for (const regex of regexes) {
+        const match = b.notes.match(regex);
+        if (match) {
+          const parentNo = match[1].trim();
+          let parent = allBatches.find(x => x.batchNo && x.batchNo.trim().toUpperCase() === parentNo.toUpperCase());
+          if (!parent && DB.Batches.fetchRemoteByNo) {
+            parent = await DB.Batches.fetchRemoteByNo(parentNo);
+          }
+          if (parent) return parent;
+        }
+      }
+    }
+
+    // 4. BatchNo naming pattern (e.g. BATCH-REP-1 or BATCH-REP)
+    if (b.batchNo && b.batchNo.includes('-REP')) {
+      const baseNo = b.batchNo.split('-REP')[0].trim();
+      if (baseNo && baseNo !== b.batchNo) {
+        let parent = allBatches.find(x => x.batchNo && x.batchNo.trim().toUpperCase() === baseNo.toUpperCase());
+        if (!parent && DB.Batches.fetchRemoteByNo) {
+          parent = await DB.Batches.fetchRemoteByNo(baseNo);
+        }
         if (parent) return parent;
       }
     }
+
     return null;
   }
 
-  function getChildBatches(parent) {
-    return DB.Batches.all().filter(b => {
-      const p = getParentBatch(b);
-      return p && p.id === parent.id;
+  async function getChildBatches(parent) {
+    if (!parent) return [];
+    const allBatches = DB.Batches.allIncludeArchived ? DB.Batches.allIncludeArchived() : DB.Batches.all();
+
+    // Query Firestore for remote children if firebase is available
+    if (typeof firebase !== 'undefined' && firebase.firestore) {
+      try {
+        const firestore = firebase.firestore();
+        const promises = [
+          firestore.collection('batches').where('parentBatchId', '==', parent.id).get()
+        ];
+        if (parent.batchNo) {
+          promises.push(firestore.collection('batches').where('parentBatchNo', '==', parent.batchNo).get());
+        }
+        const snapshots = await Promise.all(promises);
+        snapshots.forEach(snap => {
+          if (snap) {
+            snap.forEach(doc => {
+              const data = { id: doc.id, ...doc.data() };
+              const existingIdx = allBatches.findIndex(x => x.id === data.id);
+              if (existingIdx === -1) {
+                allBatches.push(data);
+                if (DB.cache && DB.cache.batches) {
+                  DB.cache.batches.push(data);
+                }
+              }
+            });
+          }
+        });
+      } catch (err) {
+        console.warn("getChildBatches cloud query error:", err);
+      }
+    }
+
+    const childMap = new Map();
+    allBatches.forEach(cb => {
+      if (!cb || cb.id === parent.id) return;
+      if (cb.parentBatchId === parent.id || (parent.batchNo && cb.parentBatchNo === parent.batchNo)) {
+        childMap.set(cb.id, cb);
+        return;
+      }
+      if (parent.batchNo && cb.batchNo && cb.batchNo.startsWith(parent.batchNo + '-REP')) {
+        childMap.set(cb.id, cb);
+        return;
+      }
+      if (cb.notes && parent.batchNo) {
+        const regexes = [
+          /pool batch:\s*([^\s\.,;]+)/i,
+          /created from batch\s*([^\s\.,;]+)/i,
+          /stock upload batch\s*([^\s\.,;]+)/i,
+          /parent batch:\s*([^\s\.,;]+)/i,
+          /reprocessed from\s*([^\s\.,;]+)/i,
+          /split from\s*([^\s\.,;]+)/i
+        ];
+        for (const regex of regexes) {
+          const match = cb.notes.match(regex);
+          if (match && match[1].trim().toUpperCase() === parent.batchNo.trim().toUpperCase()) {
+            childMap.set(cb.id, cb);
+            break;
+          }
+        }
+      }
     });
+
+    return Array.from(childMap.values());
   }
 
   async function showBatchGenealogy(batchIdOrNo) {
-    let b = DB.Batches.find(batchIdOrNo);
-    if (!b && DB.Batches.allIncludeArchived) {
-      b = DB.Batches.allIncludeArchived().find(x => x.batchNo === batchIdOrNo || x.batchNo === batchIdOrNo.split(' ')[0] || x.id === batchIdOrNo);
-    }
-    if (!b && DB.Batches.fetchRemoteByNo) {
-      b = await DB.Batches.fetchRemoteByNo(batchIdOrNo);
-    }
-    if (!b) return;
+    if (!batchIdOrNo) return;
 
     let modal = document.getElementById('genealogy-modal-overlay');
     if (!modal) {
@@ -1540,8 +1644,59 @@ const App = (() => {
       document.body.appendChild(modal);
     }
 
-    const parent = getParentBatch(b);
-    const children = getChildBatches(b);
+    // Immediate feedback: loading spinner
+    modal.innerHTML = `
+      <div class="modal modal-md" style="max-width: 940px; border-radius:16px;">
+        <div class="modal-header">
+          <h3>🔍 Batch Genealogy & Details</h3>
+          <button class="modal-close" onclick="document.getElementById('genealogy-modal-overlay').classList.add('hidden')">&#x2715;</button>
+        </div>
+        <div class="modal-body" style="padding:40px; text-align:center;">
+          <div class="spinner" style="margin: 0 auto 16px auto; width:36px; height:36px; border:3px solid rgba(0,0,0,0.1); border-top-color:var(--primary); border-radius:50%; animation: spin 1s linear infinite;"></div>
+          <div style="font-size:15px; font-weight:600; color:var(--text-main);">Loading full genealogy & stage history for ${batchIdOrNo}...</div>
+          <div class="text-xs text-muted" style="margin-top:6px;">Fetching complete stage trail, loss tracking, and family lineage</div>
+        </div>
+      </div>
+    `;
+    modal.classList.remove('hidden');
+
+    let b = DB.Batches.find(batchIdOrNo);
+    if (!b && DB.Batches.allIncludeArchived) {
+      b = DB.Batches.allIncludeArchived().find(x => x.batchNo === batchIdOrNo || x.batchNo === batchIdOrNo.split(' ')[0] || x.id === batchIdOrNo);
+    }
+    if (!b && DB.Batches.fetchRemoteByNo) {
+      b = await DB.Batches.fetchRemoteByNo(batchIdOrNo);
+    }
+    if (!b) {
+      modal.innerHTML = `
+        <div class="modal modal-md" style="max-width: 500px; border-radius:16px;">
+          <div class="modal-header">
+            <h3>Batch Not Found</h3>
+            <button class="modal-close" onclick="document.getElementById('genealogy-modal-overlay').classList.add('hidden')">&#x2715;</button>
+          </div>
+          <div class="modal-body" style="padding:24px; text-align:center;">
+            <p>Could not locate batch <b>${batchIdOrNo}</b> in local records or cloud database.</p>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="document.getElementById('genealogy-modal-overlay').classList.add('hidden')">Close</button>
+          </div>
+        </div>
+      `;
+      return;
+    }
+
+    // Fetch on-demand stage records, loss tracker, recheck tracker for this batch
+    if (typeof DB !== 'undefined') {
+      await Promise.all([
+        DB.StageRecords?.fetchByBatch ? DB.StageRecords.fetchByBatch(b.id) : null,
+        DB.LossTracker?.fetchByBatch ? DB.LossTracker.fetchByBatch(b.id) : null,
+        DB.RecheckTracker?.fetchByBatch ? DB.RecheckTracker.fetchByBatch(b.id) : null,
+        DB.RejectionTracker?.fetchByBatch ? DB.RejectionTracker.fetchByBatch(b.id) : null
+      ]);
+    }
+
+    const parent = await getParentBatch(b);
+    const children = await getChildBatches(b);
 
     const allBatchRecs = (DB.StageRecords.byBatch ? DB.StageRecords.byBatch(b.id) : []).slice();
     const prodRecord = allBatchRecs.find(sr => sr.stage === 'production');
@@ -1574,7 +1729,7 @@ const App = (() => {
               <button class="btn btn-ghost btn-xs text-blue" onclick="App.showBatchGenealogy('${parent.id}')" style="font-weight:700;padding:2px 6px;">
                 ${parent.batchNo} (IB: ${parent.internalBatchNo})
               </button>
-              <span class="stage-chip ${parent.currentStage}">${parent.currentStage.toUpperCase()}</span>
+              <span class="stage-chip ${parent.currentStage}">${(parent.currentStage||'').toUpperCase()}</span>
             </div>
           </div>
           <div style="padding-left:12px; border-left:2px dashed var(--border); margin:4px 0 12px 10px; height:16px;"></div>
@@ -1585,7 +1740,7 @@ const App = (() => {
         <div class="tree-node active-node" style="padding:8px 12px; background:var(--accent-blue-light); border-left:4px solid var(--accent-blue); border-radius:4px;">
           <span style="font-size:11px;color:var(--accent-blue);font-weight:700;text-transform:uppercase;">Current Batch</span>
           <div style="font-weight:700;margin-top:2px;">${b.batchNo} (IB: ${b.internalBatchNo})</div>
-          <div class="text-sm text-muted">${currentQtyDisplay} | Stage: ${b.currentStage.toUpperCase()} | Status: ${b.status}</div>
+          <div class="text-sm text-muted">${currentQtyDisplay} | Stage: ${(b.currentStage||'').toUpperCase()} | Status: ${b.status}</div>
         </div>
       `;
 
@@ -1602,7 +1757,7 @@ const App = (() => {
                     ${child.batchNo} (IB: ${child.internalBatchNo})
                   </button>
                   <span class="text-sm text-muted">Qty: ${formatNum(child.initialQty)}</span>
-                  <span class="stage-chip ${child.currentStage}">${child.currentStage.toUpperCase()}</span>
+                  <span class="stage-chip ${child.currentStage}">${(child.currentStage||'').toUpperCase()}</span>
                   <span class="badge badge-${child.status==='active'?'amber':child.status==='completed'?'green':'red'}">${child.status}</span>
                 </div>
               `).join('')}
@@ -1621,8 +1776,228 @@ const App = (() => {
     const visualStageRec = allBatchRecs.find(sr => (sr.stage === 'visual' || sr.movedFrom === 'visual') && sr.inspectorName);
     const visualInspectorName = visualStageRec ? visualStageRec.inspectorName : (b.inspectorName || '—');
 
+    // Stage Records list sorted chronologically
+    const rawRecs = allBatchRecs.slice().sort((x, y) => {
+      const tX = x.createdAt || (x.date ? (x.time ? `${x.date}T${x.time}` : x.date) : '');
+      const tY = y.createdAt || (y.date ? (y.time ? `${y.date}T${y.time}` : y.date) : '');
+      return tX.localeCompare(tY);
+    });
+
+    const filteredRecs = [];
+    rawRecs.forEach(r => {
+      if (filteredRecs.length > 0) {
+        const prev = filteredRecs[filteredRecs.length - 1];
+        if (prev.stage === r.stage && prev.movedTo === r.movedTo && prev.movedFrom === r.movedFrom && (prev.createdAt === r.createdAt || prev.date === r.date)) {
+          filteredRecs[filteredRecs.length - 1] = r;
+          return;
+        }
+      }
+      filteredRecs.push(r);
+    });
+
+    const allUsers = DB.Users.all();
+    const stageRowsHtml = filteredRecs.map(r => {
+      const repQty = Number(r.reprocessQty || 0);
+      const displayLoss = (r.stage === 'store') 
+        ? 0 
+        : (r.lossQty !== undefined && r.lossQty !== null 
+            ? Number(r.lossQty) 
+            : Math.max(0, (Number(r.inputQty) || 0) - (Number(r.outputQty) || 0) - repQty));
+      const stageNames = {
+        production: 'Production',
+        cryogenic: 'Cryogenic',
+        deflashing: 'DE Flashing',
+        'waiting-trimming': 'Waiting for Trimming',
+        trimming: 'Trimming',
+        'post-curing': 'Post Curing',
+        'waiting-visual': 'Waiting for Visual',
+        visual: 'Visual',
+        gauge: 'Gauge',
+        quality: 'QC Final',
+        store: 'Store',
+        'Stock Upload': 'Stock Upload'
+      };
+      const fromLabel = stageNames[r.movedFrom] || r.movedFrom || stageNames[r.stage] || r.stage;
+      const toLabel = stageNames[r.movedTo] || r.movedTo || stageNames[r.stage] || r.stage;
+      let routeText = '';
+      if (r.stage === 'store') {
+        routeText = `Received in Store (from ${fromLabel})`;
+      } else {
+        routeText = (fromLabel === toLabel) ? fromLabel : `${fromLabel} ➔ ${toLabel}`;
+      }
+
+      let changedBy = '—';
+      const uid = r.recordedBy || r.userId || r.createdBy || r.movedBy || r.uploadedBy;
+      if (uid) {
+        const u = DB.Users.find(uid) || allUsers.find(usr => usr.id === uid || usr.username === uid || usr.name === uid);
+        if (u) {
+          changedBy = u.name || u.username || uid;
+        } else {
+          changedBy = uid;
+        }
+      } else if (r.inspectorName) {
+        changedBy = r.inspectorName;
+      } else if (r.operatorName) {
+        changedBy = r.operatorName;
+      }
+
+      let inspectorOrOpDisplay = '—';
+      if (r.stage === 'visual' || r.movedFrom === 'visual' || r.inspectorName) {
+        const insp = r.inspectorName || (visualInspectorName !== '—' ? visualInspectorName : null);
+        if (insp) {
+          inspectorOrOpDisplay = `
+            <div style="font-weight:600; color:var(--accent-teal);">🔍 ${insp} <span class="badge badge-teal" style="font-size:10px; font-weight:normal;">Inspector</span></div>
+            ${(operatorName && operatorName !== '—') ? `<div class="text-xs text-muted" style="margin-top:2px;">⚙️ Op: ${operatorName}</div>` : ''}
+          `;
+        } else if (operatorName && operatorName !== '—') {
+          inspectorOrOpDisplay = `<div class="text-xs text-muted">⚙️ Op: ${operatorName}</div>`;
+        }
+      } else if (r.stage === 'production') {
+        const op = r.operatorName || (operatorName !== '—' ? operatorName : null);
+        if (op) {
+          inspectorOrOpDisplay = `
+            <div style="font-weight:600; color:var(--primary);">⚙️ ${op} <span class="badge badge-blue" style="font-size:10px; font-weight:normal;">Operator</span></div>
+          `;
+        }
+      } else if (r.vendorId) {
+        const v = DB.Vendors.find(r.vendorId);
+        const vName = v ? v.name : r.vendorId;
+        inspectorOrOpDisplay = `
+          <div style="font-weight:600; color:var(--accent-amber);">🏢 ${vName} <span class="badge badge-amber" style="font-size:10px; font-weight:normal;">Vendor</span></div>
+          ${(operatorName && operatorName !== '—') ? `<div class="text-xs text-muted" style="margin-top:2px;">⚙️ Op: ${operatorName}</div>` : ''}
+        `;
+      } else if (r.operatorName || r.operatorId) {
+        const op = r.operatorName || DB.Operators.find(r.operatorId)?.name;
+        if (op) {
+          inspectorOrOpDisplay = `
+            <div style="font-weight:600; color:var(--primary);">⚙️ ${op} <span class="badge badge-blue" style="font-size:10px; font-weight:normal;">Operator</span></div>
+          `;
+        }
+      } else if (operatorName && operatorName !== '—') {
+        inspectorOrOpDisplay = `<div class="text-xs text-muted">⚙️ Op: ${operatorName}</div>`;
+      }
+
+      let dateTimeDisplay = r.date || '—';
+      const timeRef = r.createdAt || r.recordedAt || r.timestamp;
+      if (dateTimeDisplay && dateTimeDisplay.includes('T') && dateTimeDisplay.length >= 16) {
+        dateTimeDisplay = dateTimeDisplay.slice(0, 16).replace('T', ' ');
+      } else if (r.time) {
+        dateTimeDisplay = `${r.date} ${r.time}`;
+      } else if (timeRef) {
+        try {
+          const d = new Date(timeRef);
+          if (!isNaN(d.getTime())) {
+            const timePart = d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+            dateTimeDisplay = `${r.date || d.toISOString().slice(0,10)} ${timePart}`;
+          }
+        } catch (e) {
+          if (typeof timeRef === 'string' && timeRef.includes('T')) {
+            dateTimeDisplay = `${r.date || timeRef.slice(0,10)} ${timeRef.slice(11,16)}`;
+          }
+        }
+      }
+
+      return `
+        <tr>
+          <td class="font-semibold" style="white-space: nowrap; color: var(--primary);">${routeText}</td>
+          <td>${formatNum(r.inputQty)}</td>
+          <td>${formatNum(r.outputQty)}</td>
+          <td class="${displayLoss > 0 ? 'text-danger font-semibold' : 'text-muted'}">${displayLoss > 0 ? formatNum(displayLoss) : '0'}</td>
+          <td class="${repQty > 0 ? 'text-warning font-semibold' : 'text-muted'}">${repQty > 0 ? formatNum(repQty) : '—'}</td>
+          <td style="white-space: nowrap;">${inspectorOrOpDisplay}</td>
+          <td class="font-medium" style="white-space: nowrap; color: var(--text-main);">${changedBy}</td>
+          <td style="white-space: nowrap;">${dateTimeDisplay}</td>
+          <td class="text-muted" style="max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${r.notes||''}">${r.notes || '—'}</td>
+        </tr>`;
+    }).join('') || '<tr><td colspan="9" class="text-center text-muted">No stage history recorded</td></tr>';
+
+    // Loss Tracker Records breakdown
+    const lossRecs = DB.LossTracker ? DB.LossTracker.byBatch(b.id) : [];
+    let lossSectionHtml = '';
+    if (lossRecs.length > 0) {
+      lossSectionHtml = `
+        <div style="border-top:1px solid var(--border); margin-top:20px; padding-top:16px;">
+          <h4 style="font-size:14px; font-weight:700; margin-bottom:12px; color:var(--accent-red);">📉 Loss &amp; Scrap Records (${lossRecs.length})</h4>
+          <div class="table-wrap">
+            <table class="data-table" style="font-size:12px;">
+              <thead>
+                <tr>
+                  <th>Stage</th>
+                  <th>Loss Qty</th>
+                  <th>Defect / Reason</th>
+                  <th>Recorded By / Inspector</th>
+                  <th>Date &amp; Time</th>
+                  <th>Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${lossRecs.map(l => {
+                  const stageName = l.stage ? l.stage.toUpperCase() : '—';
+                  const reason = l.reason || l.defectType || l.defectReason || 'Scrap / Loss';
+                  const recorder = l.inspectorName || l.operatorName || (l.recordedBy ? (DB.Users.find(l.recordedBy)?.name || l.recordedBy) : '—');
+                  const lDate = (l.date || l.createdAt || '—').slice(0, 16).replace('T', ' ');
+                  return `
+                    <tr>
+                      <td><span class="stage-chip ${l.stage}">${stageName}</span></td>
+                      <td class="text-danger font-semibold">${formatNum(l.lossQty)}</td>
+                      <td>${reason}</td>
+                      <td>${recorder}</td>
+                      <td style="white-space:nowrap;">${lDate}</td>
+                      <td class="text-muted">${l.notes || '—'}</td>
+                    </tr>
+                  `;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    }
+
+    // Recheck Tracker Records
+    const recheckRecs = DB.RecheckTracker ? DB.RecheckTracker.byBatch(b.id) : [];
+    let recheckSectionHtml = '';
+    if (recheckRecs.length > 0) {
+      recheckSectionHtml = `
+        <div style="border-top:1px solid var(--border); margin-top:20px; padding-top:16px;">
+          <h4 style="font-size:14px; font-weight:700; margin-bottom:12px; color:var(--accent-amber);">🔄 Recheck &amp; Rework Iterations (${recheckRecs.length})</h4>
+          <div class="table-wrap">
+            <table class="data-table" style="font-size:12px;">
+              <thead>
+                <tr>
+                  <th>Iteration</th>
+                  <th>Route</th>
+                  <th>Recheck Qty</th>
+                  <th>Loss Qty</th>
+                  <th>Date &amp; Time</th>
+                  <th>Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${recheckRecs.map(rc => {
+                  const iter = rc.recheckNo || rc.iterationNo || 1;
+                  const route = `${(rc.fromStage||'').toUpperCase()} ➔ ${(rc.toStage||'').toUpperCase()}`;
+                  const rcDate = (rc.date || rc.createdAt || '—').slice(0, 16).replace('T', ' ');
+                  return `
+                    <tr>
+                      <td class="font-semibold">Iter #${iter}</td>
+                      <td class="font-medium">${route}</td>
+                      <td class="text-warning font-semibold">${formatNum(rc.qty)}</td>
+                      <td class="text-danger">${rc.lossQty ? formatNum(rc.lossQty) : '0'}</td>
+                      <td style="white-space:nowrap;">${rcDate}</td>
+                      <td class="text-muted">${rc.notes || '—'}</td>
+                    </tr>
+                  `;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    }
+
     modal.innerHTML = `
-      <div class="modal modal-md" style="max-width: 940px; border-radius:16px;">
+      <div class="modal modal-md" style="max-width: 960px; border-radius:16px;">
         <div class="modal-header">
           <h3>🔍 Batch Genealogy & Details</h3>
           <button class="modal-close" onclick="document.getElementById('genealogy-modal-overlay').classList.add('hidden')">&#x2715;</button>
@@ -1635,7 +2010,7 @@ const App = (() => {
             </div>
             <div>
               <span class="text-xs text-muted" style="text-transform:uppercase;font-weight:600;">Internal Batch No</span>
-              <div style="font-weight:700;font-size:16px;color:var(--accent-teal);">IB: ${b.internalBatchNo}</div>
+              <div style="font-weight:700;font-size:16px;color:var(--accent-teal);">IB: ${b.internalBatchNo != null ? b.internalBatchNo : '—'}</div>
             </div>
             <div>
               <span class="text-xs text-muted" style="text-transform:uppercase;font-weight:600;">Part Number / JMREF</span>
@@ -1647,7 +2022,7 @@ const App = (() => {
             </div>
             <div>
               <span class="text-xs text-muted" style="text-transform:uppercase;font-weight:600;">Current Stage / Status</span>
-              <div><span class="stage-chip ${b.currentStage}">${b.currentStage.toUpperCase()}</span> / <span class="badge badge-${b.status==='active'?'amber':b.status==='completed'?'green':'red'}">${b.status}</span></div>
+              <div><span class="stage-chip ${b.currentStage}">${(b.currentStage||'').toUpperCase()}</span> / <span class="badge badge-${b.status==='active'?'amber':b.status==='completed'?'green':'red'}">${b.status}</span></div>
             </div>
             <div>
               <span class="text-xs text-muted" style="text-transform:uppercase;font-weight:600;">Quantity</span>
@@ -1673,7 +2048,7 @@ const App = (() => {
           </div>
 
           <div style="border-top:1px solid var(--border); padding-top:16px;">
-            <h4 style="font-size:14px; font-weight:700; margin-bottom:12px;">⏳ Stage History Records</h4>
+            <h4 style="font-size:14px; font-weight:700; margin-bottom:12px;">⏳ Stage History Records (${filteredRecs.length})</h4>
             <div class="table-wrap">
               <table class="data-table" style="font-size:12px;">
                 <thead>
@@ -1690,140 +2065,14 @@ const App = (() => {
                   </tr>
                 </thead>
                 <tbody>
-                  ${(() => {
-                    const rawRecs = DB.StageRecords.byBatch(b.id).slice().sort((x,y) => (x.createdAt||'').localeCompare(y.createdAt||''));
-                    const filteredRecs = [];
-                    rawRecs.forEach(r => {
-                      if (filteredRecs.length > 0) {
-                        const prev = filteredRecs[filteredRecs.length - 1];
-                        if (prev.stage === r.stage && prev.movedTo === r.movedTo && prev.movedFrom === r.movedFrom) {
-                          // Overwrite with the latest duplicate to ensure most recent notes/data are preserved
-                          filteredRecs[filteredRecs.length - 1] = r;
-                          return;
-                        }
-                      }
-                      filteredRecs.push(r);
-                    });
-                    const allUsers = DB.Users.all();
-                    return filteredRecs.map(r => {
-                      const repQty = Number(r.reprocessQty || 0);
-                      const displayLoss = (r.stage === 'store') 
-                        ? 0 
-                        : (r.lossQty !== undefined && r.lossQty !== null 
-                            ? Number(r.lossQty) 
-                            : Math.max(0, (Number(r.inputQty) || 0) - (Number(r.outputQty) || 0) - repQty));
-                      const stageNames = {
-                        production: 'Production',
-                        cryogenic: 'Cryogenic',
-                        deflashing: 'DE Flashing',
-                        'waiting-trimming': 'Waiting for Trimming',
-                        trimming: 'Trimming',
-                        'post-curing': 'Post Curing',
-                        'waiting-visual': 'Waiting for Visual',
-                        visual: 'Visual',
-                        gauge: 'Gauge',
-                        quality: 'QC Final',
-                        store: 'Store',
-                        'Stock Upload': 'Stock Upload'
-                      };
-                      const fromLabel = stageNames[r.movedFrom] || r.movedFrom || stageNames[r.stage] || r.stage;
-                      const toLabel = stageNames[r.movedTo] || r.movedTo || stageNames[r.stage] || r.stage;
-                      let routeText = '';
-                      if (r.stage === 'store') {
-                        routeText = `Received in Store (from ${fromLabel})`;
-                      } else {
-                        routeText = (fromLabel === toLabel) ? fromLabel : `${fromLabel} ➔ ${toLabel}`;
-                      }
-
-                      let changedBy = '—';
-                      const uid = r.recordedBy || r.userId || r.createdBy || r.movedBy || r.uploadedBy;
-                      if (uid) {
-                        const u = DB.Users.find(uid) || allUsers.find(usr => usr.id === uid || usr.username === uid || usr.name === uid);
-                        if (u) {
-                          changedBy = u.name || u.username || uid;
-                        } else {
-                          changedBy = uid;
-                        }
-                      } else if (r.inspectorName) {
-                        changedBy = r.inspectorName;
-                      } else if (r.operatorName) {
-                        changedBy = r.operatorName;
-                      }
-
-                      let inspectorOrOpDisplay = '—';
-                      if (r.stage === 'visual' || r.movedFrom === 'visual' || r.inspectorName) {
-                        const insp = r.inspectorName || (visualInspectorName !== '—' ? visualInspectorName : null);
-                        if (insp) {
-                          inspectorOrOpDisplay = `
-                            <div style="font-weight:600; color:var(--accent-teal);">🔍 ${insp} <span class="badge badge-teal" style="font-size:10px; font-weight:normal;">Inspector</span></div>
-                            ${(operatorName && operatorName !== '—') ? `<div class="text-xs text-muted" style="margin-top:2px;">⚙️ Op: ${operatorName}</div>` : ''}
-                          `;
-                        } else if (operatorName && operatorName !== '—') {
-                          inspectorOrOpDisplay = `<div class="text-xs text-muted">⚙️ Op: ${operatorName}</div>`;
-                        }
-                      } else if (r.stage === 'production') {
-                        const op = r.operatorName || (operatorName !== '—' ? operatorName : null);
-                        if (op) {
-                          inspectorOrOpDisplay = `
-                            <div style="font-weight:600; color:var(--primary);">⚙️ ${op} <span class="badge badge-blue" style="font-size:10px; font-weight:normal;">Operator</span></div>
-                          `;
-                        }
-                      } else if (r.vendorId) {
-                        const v = DB.Vendors.find(r.vendorId);
-                        const vName = v ? v.name : r.vendorId;
-                        inspectorOrOpDisplay = `
-                          <div style="font-weight:600; color:var(--accent-amber);">🏢 ${vName} <span class="badge badge-amber" style="font-size:10px; font-weight:normal;">Vendor</span></div>
-                          ${(operatorName && operatorName !== '—') ? `<div class="text-xs text-muted" style="margin-top:2px;">⚙️ Op: ${operatorName}</div>` : ''}
-                        `;
-                      } else if (r.operatorName || r.operatorId) {
-                        const op = r.operatorName || DB.Operators.find(r.operatorId)?.name;
-                        if (op) {
-                          inspectorOrOpDisplay = `
-                            <div style="font-weight:600; color:var(--primary);">⚙️ ${op} <span class="badge badge-blue" style="font-size:10px; font-weight:normal;">Operator</span></div>
-                          `;
-                        }
-                      } else if (operatorName && operatorName !== '—') {
-                        inspectorOrOpDisplay = `<div class="text-xs text-muted">⚙️ Op: ${operatorName}</div>`;
-                      }
-
-                      let dateTimeDisplay = r.date || '—';
-                      const timeRef = r.createdAt || r.recordedAt || r.timestamp;
-                      if (dateTimeDisplay && dateTimeDisplay.includes('T') && dateTimeDisplay.length >= 16) {
-                        dateTimeDisplay = dateTimeDisplay.slice(0, 16).replace('T', ' ');
-                      } else if (r.time) {
-                        dateTimeDisplay = `${r.date} ${r.time}`;
-                      } else if (timeRef) {
-                        try {
-                          const d = new Date(timeRef);
-                          if (!isNaN(d.getTime())) {
-                            const timePart = d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
-                            dateTimeDisplay = `${r.date || d.toISOString().slice(0,10)} ${timePart}`;
-                          }
-                        } catch (e) {
-                          if (typeof timeRef === 'string' && timeRef.includes('T')) {
-                            dateTimeDisplay = `${r.date || timeRef.slice(0,10)} ${timeRef.slice(11,16)}`;
-                          }
-                        }
-                      }
-
-                      return `
-                        <tr>
-                          <td class="font-semibold" style="white-space: nowrap; color: var(--primary);">${routeText}</td>
-                          <td>${formatNum(r.inputQty)}</td>
-                          <td>${formatNum(r.outputQty)}</td>
-                          <td class="${displayLoss > 0 ? 'text-danger font-semibold' : 'text-muted'}">${displayLoss > 0 ? formatNum(displayLoss) : '0'}</td>
-                          <td class="${repQty > 0 ? 'text-warning font-semibold' : 'text-muted'}">${repQty > 0 ? formatNum(repQty) : '—'}</td>
-                          <td style="white-space: nowrap;">${inspectorOrOpDisplay}</td>
-                          <td class="font-medium" style="white-space: nowrap; color: var(--text-main);">${changedBy}</td>
-                          <td style="white-space: nowrap;">${dateTimeDisplay}</td>
-                          <td class="text-muted" style="max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${r.notes||''}">${r.notes || '—'}</td>
-                        </tr>`;
-                    }).join('') || '<tr><td colspan="9" class="text-center text-muted">No stage history recorded</td></tr>';
-                  })()}
+                  ${stageRowsHtml}
                 </tbody>
               </table>
             </div>
           </div>
+
+          ${lossSectionHtml}
+          ${recheckSectionHtml}
         </div>
         <div class="modal-footer">
           <button class="btn btn-secondary" onclick="document.getElementById('genealogy-modal-overlay').classList.add('hidden')">Close</button>

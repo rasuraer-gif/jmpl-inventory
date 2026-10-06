@@ -433,28 +433,30 @@ const DB = (() => {
 
   // On-Demand Module Loader: Loads heavy and module-specific collections strictly when needed.
   const _loadedModules = new Set();
-  async function ensureModuleLoaded(moduleId) {
-    if (!db || _loadedModules.has(moduleId)) return;
+  async function ensureModuleLoaded(moduleId, force = false) {
+    if (!db) return;
+    if (force) _loadedModules.delete(moduleId);
+    if (_loadedModules.has(moduleId)) return;
 
     try {
       if (moduleId === 'mould-tracking') {
         _loadedModules.add(moduleId);
         const [mSnap, mmSnap, mmtSnap] = await Promise.all([
           db.collection('moulds').get().catch(() => null),
-          db.collection('mouldMovements').orderBy('date', 'desc').limit(200).get().catch(() => null),
-          db.collection('mouldMaintenance').orderBy('date', 'desc').limit(100).get().catch(() => null)
+          db.collection('mouldMovements').get().catch(() => null),
+          db.collection('mouldMaintenance').get().catch(() => null)
         ]);
-        if (mSnap && mSnap.docs) {
+        if (mSnap && mSnap.docs && mSnap.docs.length > 0) {
           cache.moulds = mSnap.docs.map(d => ({ id: d.id, ...d.data() }));
           rebuildIndexesForTable('moulds');
           saveLocal('moulds');
         }
-        if (mmSnap && mmSnap.docs) {
+        if (mmSnap && mmSnap.docs && mmSnap.docs.length > 0) {
           cache.mouldMovements = mmSnap.docs.map(d => ({ id: d.id, ...d.data() }));
           rebuildIndexesForTable('mouldMovements');
           saveLocal('mouldMovements');
         }
-        if (mmtSnap && mmtSnap.docs) {
+        if (mmtSnap && mmtSnap.docs && mmtSnap.docs.length > 0) {
           cache.mouldMaintenance = mmtSnap.docs.map(d => ({ id: d.id, ...d.data() }));
           rebuildIndexesForTable('mouldMaintenance');
           saveLocal('mouldMaintenance');
@@ -462,11 +464,11 @@ const DB = (() => {
         triggerDataChange('moulds');
       } else if (moduleId === 'delivery-challan') {
         _loadedModules.add(moduleId);
-        const d30 = new Date();
-        d30.setDate(d30.getDate() - 30);
-        const cutoff = d30.toISOString().slice(0, 10);
-        const snap = await db.collection('deliveryChallans').where('challanDate', '>=', cutoff).get().catch(() => null);
-        if (snap && snap.docs) {
+        const snap = await db.collection('deliveryChallans').get().catch(err => {
+          console.warn("[DB] deliveryChallans fetch error:", err);
+          return null;
+        });
+        if (snap && snap.docs && snap.docs.length > 0) {
           cache.deliveryChallans = snap.docs.map(d => ({ id: d.id, ...d.data() }));
           rebuildIndexesForTable('deliveryChallans');
           saveLocal('deliveryChallans');
@@ -475,7 +477,7 @@ const DB = (() => {
       } else if (moduleId === 'monthly-plan') {
         _loadedModules.add(moduleId);
         const snap = await db.collection('monthlyPlans').get().catch(() => null);
-        if (snap && snap.docs) {
+        if (snap && snap.docs && snap.docs.length > 0) {
           cache.monthlyPlans = snap.docs.map(d => ({ id: d.id, ...d.data() }));
           rebuildIndexesForTable('monthlyPlans');
           saveLocal('monthlyPlans');
@@ -484,7 +486,7 @@ const DB = (() => {
       } else if (moduleId === 'prod-sched') {
         _loadedModules.add(moduleId);
         const snap = await db.collection('productionSchedules').get().catch(() => null);
-        if (snap && snap.docs) {
+        if (snap && snap.docs && snap.docs.length > 0) {
           cache.productionSchedules = snap.docs.map(d => ({ id: d.id, ...d.data() }));
           rebuildIndexesForTable('productionSchedules');
           saveLocal('productionSchedules');
@@ -493,7 +495,7 @@ const DB = (() => {
       } else if (moduleId === 'task-tracking') {
         _loadedModules.add(moduleId);
         const snap = await db.collection('tasks').get().catch(() => null);
-        if (snap && snap.docs) {
+        if (snap && snap.docs && snap.docs.length > 0) {
           cache.tasks = snap.docs.map(d => ({ id: d.id, ...d.data() }));
           rebuildIndexesForTable('tasks');
           saveLocal('tasks');
@@ -501,8 +503,8 @@ const DB = (() => {
         }
       } else if (moduleId === 'stock-audit') {
         _loadedModules.add(moduleId);
-        const snap = await db.collection('auditSessions').orderBy('startedAt', 'desc').limit(30).get().catch(() => null);
-        if (snap && snap.docs) {
+        const snap = await db.collection('auditSessions').get().catch(() => null);
+        if (snap && snap.docs && snap.docs.length > 0) {
           cache.auditSessions = snap.docs.map(d => ({ id: d.id, ...d.data() }));
           rebuildIndexesForTable('auditSessions');
           saveLocal('auditSessions');
@@ -510,8 +512,8 @@ const DB = (() => {
         }
       } else if (moduleId === 'stock') {
         _loadedModules.add(moduleId);
-        const snap = await db.collection('stockUploads').orderBy('uploadedAt', 'desc').limit(50).get().catch(() => null);
-        if (snap && snap.docs) {
+        const snap = await db.collection('stockUploads').get().catch(() => null);
+        if (snap && snap.docs && snap.docs.length > 0) {
           cache.stockUploads = snap.docs.map(d => ({ id: d.id, ...d.data() }));
           rebuildIndexesForTable('stockUploads');
           saveLocal('stockUploads');
@@ -519,8 +521,8 @@ const DB = (() => {
         }
       } else if (moduleId === 'print-batch') {
         _loadedModules.add(moduleId);
-        const snap = await db.collection('printHistory').orderBy('printedAt', 'desc').limit(100).get().catch(() => null);
-        if (snap && snap.docs) {
+        const snap = await db.collection('printHistory').get().catch(() => null);
+        if (snap && snap.docs && snap.docs.length > 0) {
           cache.printHistory = snap.docs.map(d => ({ id: d.id, ...d.data() }));
           rebuildIndexesForTable('printHistory');
           saveLocal('printHistory');
@@ -528,8 +530,8 @@ const DB = (() => {
         }
       } else if (moduleId === 'admin') {
         _loadedModules.add(moduleId);
-        const snap = await db.collection('auditLogs').orderBy('timestamp', 'desc').limit(200).get().catch(() => null);
-        if (snap && snap.docs) {
+        const snap = await db.collection('auditLogs').get().catch(() => null);
+        if (snap && snap.docs && snap.docs.length > 0) {
           cache.auditLogs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
           rebuildIndexesForTable('auditLogs');
           saveLocal('auditLogs');
@@ -1865,6 +1867,8 @@ const DB = (() => {
           } else {
             cache.batches.push(found);
           }
+          rebuildIndexesForTable('batches');
+          saveLocal('batches');
         }
         return found;
       } catch(e) {
@@ -2259,6 +2263,32 @@ const DB = (() => {
       if (list) return [...list];
       return getAll('stageRecords').filter(r => r.batchId === batchId);
     },
+    fetchByBatch: async (batchId) => {
+      if (!batchId) return [];
+      if (db) {
+        try {
+          const snapshot = await db.collection('stageRecords').where('batchId', '==', batchId).get();
+          let changed = false;
+          snapshot.forEach(doc => {
+            const data = { id: doc.id, ...doc.data() };
+            const existingIdx = cache.stageRecords.findIndex(r => r.id === doc.id);
+            if (existingIdx >= 0) {
+              cache.stageRecords[existingIdx] = data;
+            } else {
+              cache.stageRecords.push(data);
+              changed = true;
+            }
+          });
+          if (changed || snapshot.size > 0) {
+            rebuildIndexesForTable('stageRecords');
+            saveLocal('stageRecords');
+          }
+        } catch (err) {
+          console.warn("fetchByBatch stageRecords error:", err);
+        }
+      }
+      return StageRecords.byBatch(batchId);
+    },
     byStage: (stage) => {
       let recs = stageRecordsByStageIndex.get(stage);
       if (recs) {
@@ -2296,6 +2326,32 @@ const DB = (() => {
       const list = lossTrackerByBatchIndex.get(batchId);
       return list ? [...list] : getAll('lossTracker').filter(r => r.batchId === batchId);
     },
+    fetchByBatch: async (batchId) => {
+      if (!batchId) return [];
+      if (db) {
+        try {
+          const snapshot = await db.collection('lossTracker').where('batchId', '==', batchId).get();
+          let changed = false;
+          snapshot.forEach(doc => {
+            const data = { id: doc.id, ...doc.data() };
+            const existingIdx = cache.lossTracker.findIndex(r => r.id === doc.id);
+            if (existingIdx >= 0) {
+              cache.lossTracker[existingIdx] = data;
+            } else {
+              cache.lossTracker.push(data);
+              changed = true;
+            }
+          });
+          if (changed || snapshot.size > 0) {
+            rebuildIndexesForTable('lossTracker');
+            saveLocal('lossTracker');
+          }
+        } catch (err) {
+          console.warn("fetchByBatch lossTracker error:", err);
+        }
+      }
+      return LossTracker.byBatch(batchId);
+    },
     insert: (r) => insert('lossTracker', r),
     insertAsync: (r) => insertAsync('lossTracker', r),
     update: (id, c) => update('lossTracker', id, c),
@@ -2312,6 +2368,32 @@ const DB = (() => {
   const RejectionTracker = {
     all: () => getAll('rejectionTracker'),
     byBatch: (batchId) => getAll('rejectionTracker').filter(r => r.batchId === batchId),
+    fetchByBatch: async (batchId) => {
+      if (!batchId) return [];
+      if (db) {
+        try {
+          const snapshot = await db.collection('rejectionTracker').where('batchId', '==', batchId).get();
+          let changed = false;
+          snapshot.forEach(doc => {
+            const data = { id: doc.id, ...doc.data() };
+            const existingIdx = cache.rejectionTracker.findIndex(r => r.id === doc.id);
+            if (existingIdx >= 0) {
+              cache.rejectionTracker[existingIdx] = data;
+            } else {
+              cache.rejectionTracker.push(data);
+              changed = true;
+            }
+          });
+          if (changed || snapshot.size > 0) {
+            rebuildIndexesForTable('rejectionTracker');
+            saveLocal('rejectionTracker');
+          }
+        } catch (err) {
+          console.warn("fetchByBatch rejectionTracker error:", err);
+        }
+      }
+      return RejectionTracker.byBatch(batchId);
+    },
     insert: (r) => insert('rejectionTracker', r),
     insertAsync: (r) => insertAsync('rejectionTracker', r),
     remove: (id) => remove('rejectionTracker', id),
@@ -2322,6 +2404,32 @@ const DB = (() => {
   const RecheckTracker = {
     all: () => getAll('recheckTracker'),
     byBatch: (batchId) => getAll('recheckTracker').filter(r => r.batchId === batchId),
+    fetchByBatch: async (batchId) => {
+      if (!batchId) return [];
+      if (db) {
+        try {
+          const snapshot = await db.collection('recheckTracker').where('batchId', '==', batchId).get();
+          let changed = false;
+          snapshot.forEach(doc => {
+            const data = { id: doc.id, ...doc.data() };
+            const existingIdx = cache.recheckTracker.findIndex(r => r.id === doc.id);
+            if (existingIdx >= 0) {
+              cache.recheckTracker[existingIdx] = data;
+            } else {
+              cache.recheckTracker.push(data);
+              changed = true;
+            }
+          });
+          if (changed || snapshot.size > 0) {
+            rebuildIndexesForTable('recheckTracker');
+            saveLocal('recheckTracker');
+          }
+        } catch (err) {
+          console.warn("fetchByBatch recheckTracker error:", err);
+        }
+      }
+      return RecheckTracker.byBatch(batchId);
+    },
     insert: (r) => insert('recheckTracker', r),
     insertAsync: (r) => insertAsync('recheckTracker', r),
     update: (id, c) => update('recheckTracker', id, c),
@@ -2848,6 +2956,22 @@ const DB = (() => {
   const DeliveryChallans = {
     all: () => getAll('deliveryChallans'),
     find: (id) => findById('deliveryChallans', id),
+    fetchFromCloud: async () => {
+      if (!db) return getAll('deliveryChallans');
+      try {
+        const snap = await db.collection('deliveryChallans').get();
+        if (snap && snap.docs && snap.docs.length > 0) {
+          const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          cache.deliveryChallans = list;
+          rebuildIndexesForTable('deliveryChallans');
+          saveLocal('deliveryChallans');
+          triggerDataChange('deliveryChallans');
+        }
+      } catch(e) {
+        console.warn("[DB] DeliveryChallans.fetchFromCloud error:", e);
+      }
+      return getAll('deliveryChallans');
+    },
     insert: (r) => insert('deliveryChallans', r),
     insertAsync: (r) => insertAsync('deliveryChallans', r),
     update: (id, c) => update('deliveryChallans', id, c),
