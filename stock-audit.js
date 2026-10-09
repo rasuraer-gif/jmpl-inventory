@@ -22,6 +22,14 @@ const StockAuditModule = (() => {
   let pinnedRackLocation = '';
   let pinnedAuditingStage = 'auto'; // 'auto' | any stage key like 'store', 'visual', etc.
   let cachedExpectedBatchesBySession = {}; // Cache expected batches & metrics per session for sub-millisecond refresh
+  let missingCrossFilter = 'all'; // 'all' | 'actual_missing' | 'validated_other' | 'stage_mismatch'
+  let selectedLineageBatchId = null;
+  let isFetchingCrossAuditRecords = false;
+
+  function escapeHtml(str) {
+    if (str == null) return '';
+    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
 
   // ── User Session Helpers ────────────────────────────────────
   function getCurrentUser() {
@@ -533,6 +541,9 @@ const StockAuditModule = (() => {
       
       <!-- Verification Modal -->
       ${renderVerificationModal()}
+
+      <!-- Cross-Session Audit Lineage Modal -->
+      ${renderBatchAuditLineageModal()}
     `;
 
     // Focus barcode input if on scanner tab
@@ -941,42 +952,199 @@ const StockAuditModule = (() => {
     `;
   }
 
-  // ── Tab 3: Missing / Unscanned Batches ──────────────────────
-  function renderMissingTab(session, metrics) {
-    let missingList = metrics.missingList || [];
+  // ── Tab 3: Missing / Unscanned Batches & Cross-Session Audit ──────
+  function filterMissingCrossStatus(status) {
+    missingCrossFilter = status;
+    missingCurrentPage = 1;
+    render();
+  }
 
-    if (missingSearch) {
-      const q = missingSearch.toLowerCase();
-      missingList = missingList.filter(b => 
-        (b.batchNo || '').toLowerCase().includes(q) ||
-        (b.jmrefNo || '').toLowerCase().includes(q) ||
-        (b.partNo || '').toLowerCase().includes(q)
-      );
+  function openBatchAuditLineageModal(batchId) {
+    selectedLineageBatchId = batchId;
+    render();
+  }
+
+  function closeBatchAuditLineageModal() {
+    selectedLineageBatchId = null;
+    render();
+  }
+
+  function renderMissingTab(session, metrics) {
+    // Background fetch all audit records if not already populated
+    if (!isFetchingCrossAuditRecords && typeof DB !== 'undefined' && DB.AuditRecords && typeof DB.AuditRecords.fetchAll === 'function') {
+      isFetchingCrossAuditRecords = true;
+      DB.AuditRecords.fetchAll().then(() => {
+        if (activeTab === 'missing') render();
+      }).catch(err => console.warn("Cross-session audit fetch error:", err));
     }
 
-    if (missingStageFilter) {
-      missingList = missingList.filter(b => b.currentStage === missingStageFilter);
+    const allAuditRecords = DB.AuditRecords.all();
+    const allSessions = DB.AuditSessions.all();
+    const sessionMap = {};
+    allSessions.forEach(s => { sessionMap[s.id] = s; });
+
+    // Pre-index other sessions' records for O(1) matching
+    const otherRecordsByBatchId = new Map();
+    const otherRecordsByBatchNo = new Map();
+
+    for (let i = 0; i < allAuditRecords.length; i++) {
+      const r = allAuditRecords[i];
+      if (r.sessionId === session.id) continue;
+      if (r.batchId) {
+        let list = otherRecordsByBatchId.get(r.batchId);
+        if (!list) { list = []; otherRecordsByBatchId.set(r.batchId, list); }
+        list.push(r);
+      }
+      if (r.batchNo) {
+        const clean = String(r.batchNo).trim().toLowerCase();
+        let list = otherRecordsByBatchNo.get(clean);
+        if (!list) { list = []; otherRecordsByBatchNo.set(clean, list); }
+        list.push(r);
+      }
     }
 
     const masterMap = {};
     DB.Master.all().forEach(m => { masterMap[m.jmrefNo] = m; });
 
-    const totalMissingPieces = missingList.reduce((s, b) => s + getBatchExpectedQty(b), 0);
-    const totalMissingValue = missingList.reduce((s, b) => {
-      const qty = getBatchExpectedQty(b);
+    const rawMissingList = metrics.missingList || [];
+    const enrichedMissing = rawMissingList.map(b => {
+      const bId = b.id;
+      const cleanNo = String(b.batchNo || '').trim().toLowerCase();
+      const matchesById = otherRecordsByBatchId.get(bId) || [];
+      const matchesByNo = otherRecordsByBatchNo.get(cleanNo) || [];
+
+      const seen = new Set();
+      const otherMatches = [];
+      [...matchesById, ...matchesByNo].forEach(r => {
+        if (!seen.has(r.id)) {
+          seen.add(r.id);
+          otherMatches.push(r);
+        }
+      });
+
+      otherMatches.sort((x, y) => (y.scannedAt || '').localeCompare(x.scannedAt || ''));
+
+      const isValidatedElsewhere = otherMatches.length > 0;
+      const isActualMissing = !isValidatedElsewhere;
+      const latestRec = isValidatedElsewhere ? otherMatches[0] : null;
+      const latestSess = latestRec ? (sessionMap[latestRec.sessionId] || { title: latestRec.sessionId }) : null;
+      const hasStageMismatch = Boolean(latestRec && latestRec.scannedStage && b.currentStage && latestRec.scannedStage !== b.currentStage);
+
+      const expQty = getBatchExpectedQty(b);
       const part = masterMap[b.jmrefNo] || {};
       const unitPrice = Number(part.salePrice || part.standardCost || 0);
-      return s + (qty * unitPrice);
-    }, 0);
+      const deficitValue = expQty * unitPrice;
 
-    const totalItems = missingList.length;
+      return {
+        batch: b,
+        expQty,
+        unitPrice,
+        deficitValue,
+        isValidatedElsewhere,
+        isActualMissing,
+        hasStageMismatch,
+        otherMatches,
+        latestRec,
+        latestSess
+      };
+    });
+
+    // ── Stage-Wise Breakdown Aggregation ──────────────────────
+    const STAGES_CONFIG = [
+      { key: 'store', label: 'Finished Goods Store', icon: '🏪' },
+      { key: 'waiting-visual', label: 'Waiting for Visual', icon: '⏳' },
+      { key: 'visual', label: 'Visual Inspection', icon: '👁️' },
+      { key: 'gauge', label: 'Gauge Inspection', icon: '📏' },
+      { key: 'quality', label: 'Quality Final QC', icon: '⭐' },
+      { key: 'production', label: 'Production / Moulding', icon: '🏭' },
+      { key: 'cryogenic', label: 'Cryogenic Deflashing', icon: '❄️' },
+      { key: 'deflashing', label: 'Manual DE Flashing', icon: '🔧' },
+      { key: 'waiting-trimming', label: 'Waiting for Trimming', icon: '⏳' },
+      { key: 'trimming', label: 'Trimming', icon: '✂️' },
+      { key: 'post-curing', label: 'Post Curing', icon: '🔥' }
+    ];
+
+    const stageBreakdown = {};
+    STAGES_CONFIG.forEach(st => {
+      stageBreakdown[st.key] = {
+        ...st,
+        missingInSession: 0,
+        missingQtyInSession: 0,
+        validatedOther: 0,
+        actualMissing: 0,
+        actualMissingQty: 0,
+        actualMissingVal: 0
+      };
+    });
+
+    enrichedMissing.forEach(item => {
+      const stKey = item.batch.currentStage || 'store';
+      if (!stageBreakdown[stKey]) {
+        stageBreakdown[stKey] = {
+          key: stKey,
+          label: STAGE_LABELS[stKey] || stKey,
+          icon: '📦',
+          missingInSession: 0,
+          missingQtyInSession: 0,
+          validatedOther: 0,
+          actualMissing: 0,
+          actualMissingQty: 0,
+          actualMissingVal: 0
+        };
+      }
+      const sb = stageBreakdown[stKey];
+      sb.missingInSession++;
+      sb.missingQtyInSession += item.expQty;
+      if (item.isValidatedElsewhere) {
+        sb.validatedOther++;
+      } else {
+        sb.actualMissing++;
+        sb.actualMissingQty += item.expQty;
+        sb.actualMissingVal += item.deficitValue;
+      }
+    });
+
+    const totalMissingInSession = enrichedMissing.length;
+    const totalValidatedOther = enrichedMissing.filter(x => x.isValidatedElsewhere).length;
+    const totalActualMissing = enrichedMissing.filter(x => x.isActualMissing).length;
+    const totalActualMissingPieces = enrichedMissing.filter(x => x.isActualMissing).reduce((s, x) => s + x.expQty, 0);
+    const totalActualMissingValue = enrichedMissing.filter(x => x.isActualMissing).reduce((s, x) => s + x.deficitValue, 0);
+    const totalStageShift = enrichedMissing.filter(x => x.hasStageMismatch).length;
+
+    // ── Apply Interactive Filters ─────────────────────────────
+    let filteredItems = enrichedMissing;
+
+    if (missingSearch) {
+      const q = missingSearch.toLowerCase();
+      filteredItems = filteredItems.filter(item => 
+        (item.batch.batchNo || '').toLowerCase().includes(q) ||
+        (item.batch.jmrefNo || '').toLowerCase().includes(q) ||
+        (item.batch.partNo || '').toLowerCase().includes(q) ||
+        (item.latestSess?.title || '').toLowerCase().includes(q) ||
+        (item.latestRec?.scannedBy || '').toLowerCase().includes(q)
+      );
+    }
+
+    if (missingStageFilter) {
+      filteredItems = filteredItems.filter(item => item.batch.currentStage === missingStageFilter);
+    }
+
+    if (missingCrossFilter === 'actual_missing') {
+      filteredItems = filteredItems.filter(item => item.isActualMissing);
+    } else if (missingCrossFilter === 'validated_other') {
+      filteredItems = filteredItems.filter(item => item.isValidatedElsewhere);
+    } else if (missingCrossFilter === 'stage_mismatch') {
+      filteredItems = filteredItems.filter(item => item.hasStageMismatch);
+    }
+
+    const totalItems = filteredItems.length;
     const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
     if (missingCurrentPage > totalPages) missingCurrentPage = totalPages;
     if (missingCurrentPage < 1) missingCurrentPage = 1;
 
     const startIdx = (missingCurrentPage - 1) * itemsPerPage;
     const endIdx = startIdx + itemsPerPage;
-    const pageItems = missingList.slice(startIdx, endIdx);
+    const pageItems = filteredItems.slice(startIdx, endIdx);
 
     let paginationHtml = '';
     if (totalPages > 1) {
@@ -994,11 +1162,132 @@ const StockAuditModule = (() => {
       `;
     }
 
+    // Generate Stage Summary Rows HTML
+    const stageSummaryRowsHtml = STAGES_CONFIG.map(st => {
+      const data = stageBreakdown[st.key] || { missingInSession: 0, validatedOther: 0, actualMissing: 0, actualMissingQty: 0, actualMissingVal: 0 };
+      if (data.missingInSession === 0) return '';
+      const recoveryRate = Math.round((data.validatedOther / data.missingInSession) * 100);
+      const isSelected = missingStageFilter === st.key;
+
+      return `
+        <tr style="cursor:pointer; ${isSelected ? 'background:rgba(59,130,246,0.08); font-weight:700;' : ''}" onclick="StockAuditModule.filterMissingStage('${isSelected ? '' : st.key}')" title="Click to filter by ${st.label}">
+          <td>
+            <div class="flex items-center gap-2">
+              <span>${st.icon}</span>
+              <span class="${isSelected ? 'text-blue' : ''}">${st.label}</span>
+              ${isSelected ? '<span class="badge badge-blue text-xs">Selected</span>' : ''}
+            </div>
+          </td>
+          <td class="font-semibold">${formatNum(data.missingInSession)}</td>
+          <td class="text-success font-semibold">${formatNum(data.validatedOther)}</td>
+          <td class="${data.actualMissing > 0 ? 'text-danger font-bold' : 'text-muted'}">${formatNum(data.actualMissing)}</td>
+          <td class="${data.actualMissingQty > 0 ? 'text-danger font-bold' : 'text-muted'}">${formatNum(data.actualMissingQty)}</td>
+          <td class="${data.actualMissingVal > 0 ? 'text-danger font-semibold' : 'text-muted'}">₹${formatNum(Math.round(data.actualMissingVal))}</td>
+          <td>
+            <div class="flex items-center gap-2">
+              <span class="badge ${recoveryRate === 100 ? 'badge-green' : (recoveryRate >= 50 ? 'badge-amber' : 'badge-red')}" style="font-size:11px;">
+                ${recoveryRate}% Resolved
+              </span>
+            </div>
+          </td>
+        </tr>
+      `;
+    }).filter(Boolean).join('');
+
     return `
       <div>
+        <!-- Cross-Session Reconciliation KPI Cards -->
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+          <div class="card" style="padding:12px 14px; border-left:4px solid #64748b;">
+            <div class="text-xs text-muted font-bold uppercase">Missing in this Session</div>
+            <div class="font-bold mt-1" style="font-size:20px; color:var(--text-main);">${formatNum(totalMissingInSession)} <span class="text-xs text-muted font-normal">batches</span></div>
+            <div class="text-xs text-muted mt-1">Unscanned in "${escapeHtml(session.title || 'Session')}"</div>
+          </div>
+
+          <div class="card" style="padding:12px 14px; border-left:4px solid #10b981;">
+            <div class="text-xs text-muted font-bold uppercase">Validated Elsewhere</div>
+            <div class="font-bold text-success mt-1" style="font-size:20px;">${formatNum(totalValidatedOther)} <span class="text-xs text-muted font-normal">batches</span></div>
+            <div class="text-xs text-success mt-1 font-medium">Scanned in another audit session</div>
+          </div>
+
+          <div class="card" style="padding:12px 14px; border-left:4px solid #ef4444; background:rgba(239,68,68,0.03);">
+            <div class="text-xs text-danger font-bold uppercase">🚨 Actual Missing Everywhere</div>
+            <div class="font-bold text-danger mt-1" style="font-size:20px;">${formatNum(totalActualMissing)} <span class="text-xs text-danger font-normal">batches</span></div>
+            <div class="text-xs text-danger mt-1 font-semibold">Unscanned in ALL audit sessions</div>
+          </div>
+
+          <div class="card" style="padding:12px 14px; border-left:4px solid #f97316;">
+            <div class="text-xs text-muted font-bold uppercase">Actual Deficit Pieces</div>
+            <div class="font-bold text-danger mt-1" style="font-size:20px;">${formatNum(totalActualMissingPieces)} <span class="text-xs text-muted font-normal">pcs</span></div>
+            <div class="text-xs text-muted mt-1">Physical quantity deficit</div>
+          </div>
+
+          <div class="card" style="padding:12px 14px; border-left:4px solid #dc2626;">
+            <div class="text-xs text-muted font-bold uppercase">Est. Deficit Value</div>
+            <div class="font-bold text-danger mt-1" style="font-size:20px;">₹${formatNum(Math.round(totalActualMissingValue))}</div>
+            <div class="text-xs text-muted mt-1">Financial deficit valuation</div>
+          </div>
+        </div>
+
+        <!-- Stage-Wise Breakdown Summary Table -->
+        <div class="card mb-4" style="padding:14px 18px; border:1px solid var(--border); border-radius:10px;">
+          <div class="flex items-center justify-between mb-3" style="flex-wrap:wrap; gap:8px;">
+            <div>
+              <h4 class="font-bold text-sm" style="margin:0; color:var(--text-main);">
+                🏭 Stage-Wise Missing Batches &amp; Cross-Session Verification Summary
+              </h4>
+              <p class="text-xs text-muted mt-0.5" style="margin:0;">
+                Click any stage row below to instantly filter the batch detail list.
+              </p>
+            </div>
+            ${missingStageFilter ? `
+              <button class="btn btn-ghost btn-xs text-blue" onclick="StockAuditModule.filterMissingStage('')">
+                ✕ Clear Stage Filter (${STAGE_LABELS[missingStageFilter] || missingStageFilter})
+              </button>
+            ` : ''}
+          </div>
+
+          <div class="table-wrap">
+            <table class="data-table" style="font-size:12px;">
+              <thead>
+                <tr>
+                  <th>Stage Name</th>
+                  <th>Missing in Session</th>
+                  <th>Validated Elsewhere</th>
+                  <th>🚨 Actual Missing Everywhere</th>
+                  <th>Deficit Pieces</th>
+                  <th>Financial Deficit (INR)</th>
+                  <th>Cross-Session Resolution</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${stageSummaryRowsHtml || '<tr><td colspan="7" style="text-align:center; padding:12px; color:var(--text-success);">🎉 All registered stages fully accounted for!</td></tr>'}
+              </tbody>
+              ${stageSummaryRowsHtml ? `
+                <tfoot>
+                  <tr class="font-bold" style="background:rgba(0,0,0,0.03);">
+                    <td>TOTAL (ALL STAGES)</td>
+                    <td>${formatNum(totalMissingInSession)}</td>
+                    <td class="text-success">${formatNum(totalValidatedOther)}</td>
+                    <td class="text-danger font-bold">${formatNum(totalActualMissing)}</td>
+                    <td class="text-danger font-bold">${formatNum(totalActualMissingPieces)}</td>
+                    <td class="text-danger font-bold">₹${formatNum(Math.round(totalActualMissingValue))}</td>
+                    <td>
+                      <span class="badge ${totalActualMissing === 0 ? 'badge-green' : 'badge-amber'}">
+                        ${totalMissingInSession > 0 ? Math.round((totalValidatedOther / totalMissingInSession) * 100) : 100}% Overall
+                      </span>
+                    </td>
+                  </tr>
+                </tfoot>
+              ` : ''}
+            </table>
+          </div>
+        </div>
+
+        <!-- Filter Controls Toolbar -->
         <div class="flex items-center justify-between gap-3 mb-4" style="flex-wrap:wrap;">
           <div class="flex items-center gap-2" style="flex-wrap:wrap; flex:1;">
-            <input type="text" id="audit-missing-search" class="form-control form-control-sm" style="max-width:280px;" placeholder="Search Missing Batch / JMREF / Part..." value="${missingSearch}" oninput="StockAuditModule.filterMissingSearch(this.value)">
+            <input type="text" id="audit-missing-search" class="form-control form-control-sm" style="max-width:280px;" placeholder="Search Batch / JMREF / Part / Auditor..." value="${missingSearch}" oninput="StockAuditModule.filterMissingSearch(this.value)">
             
             <select class="form-control form-control-sm" style="max-width:200px;" onchange="StockAuditModule.filterMissingStage(this.value)">
               <option value="">All Registered Stages</option>
@@ -1010,69 +1299,127 @@ const StockAuditModule = (() => {
               <option value="production" ${missingStageFilter === 'production' ? 'selected' : ''}>Production / Moulding</option>
               <option value="cryogenic" ${missingStageFilter === 'cryogenic' ? 'selected' : ''}>Cryogenic</option>
               <option value="deflashing" ${missingStageFilter === 'deflashing' ? 'selected' : ''}>Flash Removal</option>
+              <option value="waiting-trimming" ${missingStageFilter === 'waiting-trimming' ? 'selected' : ''}>Waiting for Trimming</option>
               <option value="trimming" ${missingStageFilter === 'trimming' ? 'selected' : ''}>Trimming</option>
               <option value="post-curing" ${missingStageFilter === 'post-curing' ? 'selected' : ''}>Post Curing</option>
             </select>
+
+            <!-- Cross-Session Status Filter Pills -->
+            <div class="flex gap-1" style="background:var(--bg-input); padding:2px; border-radius:6px; border:1px solid var(--border);">
+              <button class="btn ${missingCrossFilter === 'all' ? 'btn-primary' : 'btn-ghost'} btn-xs" onclick="StockAuditModule.filterMissingCrossStatus('all')">
+                All (${totalMissingInSession})
+              </button>
+              <button class="btn ${missingCrossFilter === 'actual_missing' ? 'btn-danger' : 'btn-ghost'} btn-xs" onclick="StockAuditModule.filterMissingCrossStatus('actual_missing')">
+                🚨 Actual Missing (${totalActualMissing})
+              </button>
+              <button class="btn ${missingCrossFilter === 'validated_other' ? 'btn-success' : 'btn-ghost'} btn-xs" onclick="StockAuditModule.filterMissingCrossStatus('validated_other')">
+                ✅ Validated Elsewhere (${totalValidatedOther})
+              </button>
+              <button class="btn ${missingCrossFilter === 'stage_mismatch' ? 'btn-warning' : 'btn-ghost'} btn-xs" onclick="StockAuditModule.filterMissingCrossStatus('stage_mismatch')">
+                ⚠️ Stage Shift (${totalStageShift})
+              </button>
+            </div>
           </div>
 
-          <div class="text-xs text-danger font-semibold">
-            🚨 ${totalItems} Missing Batches (${formatNum(totalMissingPieces)} pcs | ₹${formatNum(Math.round(totalMissingValue))} Est. Value)
+          <div class="flex items-center gap-2">
+            <button class="btn btn-teal btn-sm" onclick="StockAuditModule.exportCrossSessionMissingExcel('${session.id}')">
+              📊 Export Cross-Session Report (Excel)
+            </button>
           </div>
         </div>
 
+        <!-- Missing Batches List Table -->
         <div class="table-wrap">
-          <table class="data-table">
+          <table class="data-table" style="font-size:12px;">
             <thead>
               <tr>
                 <th>#</th>
-                <th>Batch No</th>
-                <th>JMREF</th>
-                <th>Part No</th>
+                <th>Batch No &amp; IB</th>
+                <th>JMREF / Part No</th>
                 <th>Registered Stage</th>
                 <th>Book Expected Qty</th>
-                <th>Est. Unit Price</th>
-                <th>Est. Financial Value</th>
-                <th>Batch Created</th>
-                <th class="no-print">Action</th>
+                <th>Cross-Session Audit Status</th>
+                <th>Validated Details (Floor Findings)</th>
+                <th>Est. Deficit Value</th>
+                <th class="no-print">Actions</th>
               </tr>
             </thead>
             <tbody>
               ${pageItems.length === 0 ? `
-                <tr><td colspan="10" style="text-align:center; padding:24px; color:var(--text-success); font-weight:600;">🎉 Great! All expected batches have been scanned and verified. Zero missing batches!</td></tr>
-              ` : pageItems.map((b, i) => {
-                const expQty = getBatchExpectedQty(b);
-                const part = masterMap[b.jmrefNo] || {};
-                const price = Number(part.salePrice || part.standardCost || 0);
-                const val = expQty * price;
-
+                <tr><td colspan="9" style="text-align:center; padding:28px; color:var(--text-success); font-weight:600;">
+                  🎉 No missing batches matching the selected filters.
+                </td></tr>
+              ` : pageItems.map((item, i) => {
+                const b = item.batch;
                 return `
                   <tr>
                     <td>${startIdx + i + 1}</td>
-                    <td class="font-semibold text-blue">${b.batchNo}</td>
-                    <td><span class="badge badge-teal">${b.jmrefNo || '—'}</span></td>
-                    <td>${b.partNo || '—'}</td>
-                    <td><span class="badge badge-blue">${STAGE_LABELS[b.currentStage] || b.currentStage || '—'}</span></td>
-                    <td class="font-bold text-danger">${formatNum(expQty)}</td>
-                    <td>₹${formatNum(price.toFixed(2))}</td>
-                    <td class="font-semibold text-danger">₹${formatNum(Math.round(val))}</td>
-                    <td class="text-xs text-muted">${formatDate(b.productionDate || b.createdAt)}</td>
-                    <td class="no-print">
-                      <button class="btn btn-primary btn-xs" onclick="StockAuditModule.openVerificationModalForBatch('${b.id}')">
-                        🔍 Verify Count
+                    <td>
+                      <button class="btn btn-ghost btn-xs text-blue" onclick="App.showBatchGenealogy('${b.id}')" style="font-weight:700; padding:2px 4px;" title="View Batch Genealogy">
+                        ${b.batchNo}
                       </button>
+                      <div class="text-xs text-muted" style="margin-left:4px;">IB: ${b.internalBatchNo != null ? b.internalBatchNo : '—'}</div>
+                    </td>
+                    <td>
+                      <div><span class="badge badge-teal">${b.jmrefNo || '—'}</span></div>
+                      <div class="text-xs text-muted mt-0.5">${b.partNo || '—'}</div>
+                    </td>
+                    <td>
+                      <span class="stage-chip ${b.currentStage}">${(STAGE_LABELS[b.currentStage] || b.currentStage || '—').toUpperCase()}</span>
+                    </td>
+                    <td class="font-bold text-danger">${formatNum(item.expQty)} pcs</td>
+                    <td>
+                      ${item.isActualMissing ? `
+                        <span class="badge badge-red font-bold" style="font-size:11px; padding:3px 8px;">🚨 ACTUAL MISSING</span>
+                        <div class="text-xs text-danger font-semibold mt-1">Unscanned in all audit sessions</div>
+                      ` : `
+                        <span class="badge ${item.hasStageMismatch ? 'badge-amber' : 'badge-green'} font-bold" style="font-size:11px; padding:3px 8px;">
+                          ${item.hasStageMismatch ? '⚠️ Validated (Stage Shift)' : '✅ Validated Elsewhere'}
+                        </span>
+                        <div class="text-xs font-medium text-blue mt-1">Session: ${escapeHtml(item.latestSess?.title || 'Other Session')}</div>
+                      `}
+                    </td>
+                    <td>
+                      ${item.isValidatedElsewhere ? `
+                        <div>
+                          <b>Stage:</b> <span class="stage-chip ${item.latestRec.scannedStage}" style="font-size:10px; padding:1px 5px;">${(STAGE_LABELS[item.latestRec.scannedStage]||item.latestRec.scannedStage||'').toUpperCase()}</span>
+                          ${item.hasStageMismatch ? `<span class="badge badge-amber text-xs ml-1" title="Differs from registered location">Floor Shift</span>` : ''}
+                        </div>
+                        <div class="text-xs text-muted mt-0.5">
+                          Counted: <b class="text-success">${formatNum(item.latestRec.countedQty)}</b> pcs 
+                          ${item.latestRec.varianceQty ? `<span class="${item.latestRec.varianceQty < 0 ? 'text-danger' : 'text-warning'}">(${item.latestRec.varianceQty > 0 ? '+' : ''}${formatNum(item.latestRec.varianceQty)})</span>` : ''}
+                        </div>
+                        <div class="text-xs text-muted">By: ${escapeHtml(item.latestRec.scannedBy || 'Auditor')} (${formatDate(item.latestRec.scannedAt)})</div>
+                      ` : `
+                        <div class="text-xs text-muted font-italic">— Unverified floor deficit —</div>
+                      `}
+                    </td>
+                    <td class="font-semibold text-danger">
+                      <div>₹${formatNum(Math.round(item.deficitValue))}</div>
+                      <div class="text-xs text-muted font-normal">@ ₹${item.unitPrice.toFixed(2)}/pc</div>
+                    </td>
+                    <td class="no-print">
+                      <div class="flex gap-1">
+                        <button class="btn btn-primary btn-xs" onclick="StockAuditModule.openVerificationModalForBatch('${b.id}')" title="Verify Count in this Session">
+                          🔍 Verify
+                        </button>
+                        <button class="btn btn-secondary btn-xs" onclick="StockAuditModule.openBatchAuditLineageModal('${b.id}')" title="View Cross-Session History">
+                          📜 History
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 `;
               }).join('')}
             </tbody>
-            ${missingList.length > 0 ? `
+            ${filteredItems.length > 0 ? `
               <tfoot>
                 <tr class="font-bold text-danger" style="background:rgba(239,68,68,0.05);">
-                  <td colspan="5" style="text-align:right;">TOTAL MISSING DEFICIT:</td>
-                  <td>${formatNum(totalMissingPieces)}</td>
-                  <td></td>
-                  <td>₹${formatNum(Math.round(totalMissingValue))}</td>
+                  <td colspan="4" style="text-align:right;">FILTERED DEFICIT TOTALS:</td>
+                  <td>${formatNum(filteredItems.reduce((s, x) => s + x.expQty, 0))} pcs</td>
                   <td colspan="2"></td>
+                  <td>₹${formatNum(Math.round(filteredItems.reduce((s, x) => s + x.deficitValue, 0)))}</td>
+                  <td></td>
                 </tr>
               </tfoot>
             ` : ''}
@@ -1362,6 +1709,129 @@ const StockAuditModule = (() => {
           <div class="modal-footer">
             <button class="btn btn-secondary" onclick="StockAuditModule.closeModal('modal-audit-verify')">Cancel</button>
             <button class="btn btn-primary" onclick="StockAuditModule.saveBatchVerification()">💾 Save Verification</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // ── Modal: Cross-Session Audit Lineage ──────────────────────
+  function renderBatchAuditLineageModal() {
+    if (!selectedLineageBatchId) return '';
+    const b = DB.Batches.find(selectedLineageBatchId) || (DB.Batches.allIncludeArchived ? DB.Batches.allIncludeArchived().find(x => x.id === selectedLineageBatchId) : null);
+    if (!b) return '';
+
+    const allRecords = DB.AuditRecords.all();
+    const allSessions = DB.AuditSessions.all();
+    const sessionMap = {};
+    allSessions.forEach(s => { sessionMap[s.id] = s; });
+
+    const cleanNo = String(b.batchNo || '').trim().toLowerCase();
+    const records = allRecords.filter(r => 
+      r.batchId === b.id || (cleanNo && r.batchNo && String(r.batchNo).trim().toLowerCase() === cleanNo)
+    ).sort((x, y) => (y.scannedAt || '').localeCompare(x.scannedAt || ''));
+
+    const masterPart = DB.Master.all().find(m => m.jmrefNo === b.jmrefNo) || {};
+    const unitPrice = Number(masterPart.salePrice || masterPart.standardCost || 0);
+
+    return `
+      <div class="modal-overlay" id="modal-batch-audit-lineage" style="z-index:1600;">
+        <div class="modal modal-lg" style="max-width:860px; border-radius:14px;">
+          <div class="modal-header">
+            <div>
+              <h3 style="margin:0;">📜 Cross-Session Stock Audit History</h3>
+              <p class="text-xs text-muted mt-1" style="margin:0;">Batch verification trail across all monthly physical stock taking sessions.</p>
+            </div>
+            <button class="modal-close" onclick="StockAuditModule.closeBatchAuditLineageModal()">✕</button>
+          </div>
+          <div class="modal-body" style="padding:20px; max-height:75vh; overflow-y:auto;">
+            <!-- Batch Header Card -->
+            <div style="background:var(--bg-input); border:1px solid var(--border); border-radius:10px; padding:14px 16px; margin-bottom:16px;">
+              <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                <div>
+                  <span class="text-xs text-muted font-semibold uppercase">Batch Number</span>
+                  <div class="font-bold text-blue">${b.batchNo}</div>
+                  <div class="text-xs text-muted">IB: ${b.internalBatchNo != null ? b.internalBatchNo : '—'}</div>
+                </div>
+                <div>
+                  <span class="text-xs text-muted font-semibold uppercase">Part / JMREF</span>
+                  <div class="font-bold">${b.partNo || '—'}</div>
+                  <div><span class="badge badge-teal">${b.jmrefNo || '—'}</span></div>
+                </div>
+                <div>
+                  <span class="text-xs text-muted font-semibold uppercase">Registered Stage</span>
+                  <div class="mt-1"><span class="stage-chip ${b.currentStage}">${(STAGE_LABELS[b.currentStage]||b.currentStage||'—').toUpperCase()}</span></div>
+                </div>
+                <div>
+                  <span class="text-xs text-muted font-semibold uppercase">Expected Qty / Value</span>
+                  <div class="font-bold text-danger">${formatNum(b.initialQty)} pcs</div>
+                  <div class="text-xs text-muted">Est. ₹${formatNum(Math.round(Number(b.initialQty||0) * unitPrice))}</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Verification Status Banner -->
+            ${records.length === 0 ? `
+              <div style="background:rgba(239,68,68,0.08); border-left:4px solid #ef4444; border-radius:6px; padding:12px 16px; margin-bottom:16px;">
+                <div class="font-bold text-danger text-sm">🚨 ACTUAL MISSING BATCH (Unscanned Everywhere)</div>
+                <div class="text-xs text-danger mt-1">This batch has NEVER been scanned or verified in any monthly stock taking session. It represents a true unverified physical deficit.</div>
+              </div>
+            ` : `
+              <div style="background:rgba(16,185,129,0.08); border-left:4px solid #10b981; border-radius:6px; padding:12px 16px; margin-bottom:16px;">
+                <div class="font-bold text-success text-sm">✅ SCANNED IN ${records.length} STOCK TAKING SESSION(S)</div>
+                <div class="text-xs text-muted mt-1">This batch was physically verified on the shop floor in the session(s) listed below.</div>
+              </div>
+            `}
+
+            <!-- Audit Scans Table -->
+            <div class="table-wrap">
+              <table class="data-table" style="font-size:12px;">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Session Title</th>
+                    <th>Audit Date</th>
+                    <th>Physical Stage Scanned</th>
+                    <th>Expected</th>
+                    <th>Counted</th>
+                    <th>Variance</th>
+                    <th>Rack / Bin</th>
+                    <th>Auditor</th>
+                    <th>Notes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${records.length === 0 ? `
+                    <tr><td colspan="10" style="text-align:center; padding:20px; color:var(--text-muted);">No audit verification records found for this batch.</td></tr>
+                  ` : records.map((r, i) => {
+                    const sess = sessionMap[r.sessionId] || { title: r.sessionId };
+                    const isMismatch = r.scannedStage && b.currentStage && r.scannedStage !== b.currentStage;
+                    return `
+                      <tr>
+                        <td>${i + 1}</td>
+                        <td class="font-bold text-blue">${escapeHtml(sess.title || 'Audit Session')}</td>
+                        <td class="text-xs text-muted">${formatDate(r.scannedAt || sess.startedAt)}</td>
+                        <td>
+                          <span class="stage-chip ${r.scannedStage}">${(STAGE_LABELS[r.scannedStage]||r.scannedStage||'').toUpperCase()}</span>
+                          ${isMismatch ? `<span class="badge badge-amber text-xs ml-1" title="Differs from registered location">Shift</span>` : ''}
+                        </td>
+                        <td>${formatNum(r.expectedQty)}</td>
+                        <td class="font-bold text-success">${formatNum(r.countedQty)}</td>
+                        <td class="${r.varianceQty < 0 ? 'text-danger font-bold' : (r.varianceQty > 0 ? 'text-warning font-bold' : 'text-muted')}">
+                          ${r.varianceQty > 0 ? '+' : ''}${formatNum(r.varianceQty)}
+                        </td>
+                        <td>${escapeHtml(r.rackLocation || '—')}</td>
+                        <td>${escapeHtml(r.scannedBy || '—')}</td>
+                        <td class="text-muted" style="max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(r.notes||'')}">${escapeHtml(r.notes || '—')}</td>
+                      </tr>
+                    `;
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="StockAuditModule.closeBatchAuditLineageModal()">Close</button>
           </div>
         </div>
       </div>
@@ -1964,6 +2434,223 @@ const StockAuditModule = (() => {
   }
 
   // ── Multi-Sheet Excel Export Engine ────────────────────────
+  function exportCrossSessionMissingExcel(sessionId) {
+    if (typeof XLSX === 'undefined') {
+      showToast('Excel library (SheetJS) is not loaded', 'error');
+      return;
+    }
+
+    const session = DB.AuditSessions.find(sessionId) || getActiveSession();
+    if (!session) {
+      showToast('No session selected for export', 'warning');
+      return;
+    }
+
+    const metrics = getSessionMetrics(session);
+    const rawMissing = metrics.missingList || [];
+    const allRecords = DB.AuditRecords.all();
+    const allSessions = DB.AuditSessions.all();
+    const sessionMap = {};
+    allSessions.forEach(s => { sessionMap[s.id] = s; });
+
+    const masterMap = {};
+    DB.Master.all().forEach(m => { masterMap[m.jmrefNo] = m; });
+
+    // Index other records
+    const otherRecordsByBatchId = new Map();
+    const otherRecordsByBatchNo = new Map();
+    for (let i = 0; i < allRecords.length; i++) {
+      const r = allRecords[i];
+      if (r.sessionId === session.id) continue;
+      if (r.batchId) {
+        let list = otherRecordsByBatchId.get(r.batchId);
+        if (!list) { list = []; otherRecordsByBatchId.set(r.batchId, list); }
+        list.push(r);
+      }
+      if (r.batchNo) {
+        const clean = String(r.batchNo).trim().toLowerCase();
+        let list = otherRecordsByBatchNo.get(clean);
+        if (!list) { list = []; otherRecordsByBatchNo.set(clean, list); }
+        list.push(r);
+      }
+    }
+
+    const enriched = rawMissing.map(b => {
+      const bId = b.id;
+      const cleanNo = String(b.batchNo || '').trim().toLowerCase();
+      const matchesById = otherRecordsByBatchId.get(bId) || [];
+      const matchesByNo = otherRecordsByBatchNo.get(cleanNo) || [];
+
+      const seen = new Set();
+      const otherMatches = [];
+      [...matchesById, ...matchesByNo].forEach(r => {
+        if (!seen.has(r.id)) {
+          seen.add(r.id);
+          otherMatches.push(r);
+        }
+      });
+      otherMatches.sort((x, y) => (y.scannedAt || '').localeCompare(x.scannedAt || ''));
+
+      const isValidatedElsewhere = otherMatches.length > 0;
+      const isActualMissing = !isValidatedElsewhere;
+      const latestRec = isValidatedElsewhere ? otherMatches[0] : null;
+      const latestSess = latestRec ? (sessionMap[latestRec.sessionId] || { title: latestRec.sessionId }) : null;
+      const hasStageMismatch = Boolean(latestRec && latestRec.scannedStage && b.currentStage && latestRec.scannedStage !== b.currentStage);
+
+      const expQty = getBatchExpectedQty(b);
+      const part = masterMap[b.jmrefNo] || {};
+      const unitPrice = Number(part.salePrice || part.standardCost || 0);
+      const deficitValue = expQty * unitPrice;
+
+      return {
+        batch: b,
+        expQty,
+        unitPrice,
+        deficitValue,
+        isValidatedElsewhere,
+        isActualMissing,
+        hasStageMismatch,
+        latestRec,
+        latestSess
+      };
+    });
+
+    const wb = XLSX.utils.book_new();
+
+    const totalMissingInSession = enriched.length;
+    const totalValidatedOther = enriched.filter(x => x.isValidatedElsewhere).length;
+    const totalActualMissing = enriched.filter(x => x.isActualMissing).length;
+    const totalActualMissingQty = enriched.filter(x => x.isActualMissing).reduce((s, x) => s + x.expQty, 0);
+    const totalActualMissingVal = enriched.filter(x => x.isActualMissing).reduce((s, x) => s + x.deficitValue, 0);
+
+    // 1. Executive Summary Sheet
+    const summaryData = [
+      ['JANANI MOULDINGS PVT. LTD. - PHYSICAL STOCK AUDIT CROSS-SESSION REPORT'],
+      ['Report Name:', 'Actual Missing Batches & Cross-Session Floor Validation'],
+      ['Audit Session Title:', session.title || 'Stock Audit'],
+      ['Audit Scope:', session.stageScope === 'all' ? 'All Factory Stages & Store' : (STAGE_LABELS[session.stageScope] || session.stageScope)],
+      ['Session Auditor:', session.auditorName || '—'],
+      ['Session Status:', session.status === 'in_progress' ? 'Active Floor Count' : 'Finalized / Closed'],
+      ['Started At:', formatDate(session.startedAt)],
+      ['Export Date & Time:', new Date().toLocaleString('en-IN')],
+      [],
+      ['RECONCILIATION SUMMARY METRIC', 'COUNT', 'QUANTITY (PCS)', 'FINANCIAL VALUE (INR)'],
+      ['Total Expected Batches in Session', metrics.expectedBatches, metrics.expectedQty, '—'],
+      ['Total Verified on Floor in this Session', metrics.verifiedBatches, metrics.verifiedQty, '—'],
+      ['Missing / Unscanned in this Session', totalMissingInSession, rawMissing.reduce((s,b)=>s+getBatchExpectedQty(b),0), '—'],
+      ['Batches Validated in Other Audit Sessions', totalValidatedOther, enriched.filter(x=>x.isValidatedElsewhere).reduce((s,x)=>s+x.expQty,0), '—'],
+      ['🚨 ACTUAL MISSING EVERYWHERE (Unscanned in All Sessions)', totalActualMissing, totalActualMissingQty, '₹' + Math.round(totalActualMissingVal)],
+      ['Cross-Session Floor Recovery Rate %', (totalMissingInSession > 0 ? Math.round((totalValidatedOther/totalMissingInSession)*100) : 100) + '%', '—', '—']
+    ];
+    const wsSummary = XLSX.utils.aoa_to_sheet(summaryData);
+    XLSX.utils.book_append_sheet(wb, wsSummary, 'Executive Summary');
+
+    // 2. Stage-Wise Missing Breakdown Sheet
+    const stageSummaryHeaders = ['#', 'Stage Key', 'Stage Name', 'Missing in Session', 'Validated in Other Sessions', 'Actual Missing Everywhere', 'Actual Deficit Pieces', 'Financial Deficit Value (INR)', 'Cross-Session Resolution Rate %'];
+    const STAGE_KEYS = ['store', 'waiting-visual', 'visual', 'gauge', 'quality', 'production', 'cryogenic', 'deflashing', 'waiting-trimming', 'trimming', 'post-curing'];
+    
+    const stageSummaryRows = STAGE_KEYS.map((stKey, idx) => {
+      const inStage = enriched.filter(x => x.batch.currentStage === stKey);
+      const valOther = inStage.filter(x => x.isValidatedElsewhere).length;
+      const actMiss = inStage.filter(x => x.isActualMissing);
+      const actMissQty = actMiss.reduce((s, x) => s + x.expQty, 0);
+      const actMissVal = actMiss.reduce((s, x) => s + x.deficitValue, 0);
+      const rate = inStage.length > 0 ? Math.round((valOther / inStage.length) * 100) : 100;
+
+      return [
+        idx + 1,
+        stKey,
+        STAGE_LABELS[stKey] || stKey,
+        inStage.length,
+        valOther,
+        actMiss.length,
+        actMissQty,
+        Math.round(actMissVal),
+        `${rate}%`
+      ];
+    });
+
+    stageSummaryRows.push([
+      '',
+      'TOTAL',
+      'All Registered Stages',
+      totalMissingInSession,
+      totalValidatedOther,
+      totalActualMissing,
+      totalActualMissingQty,
+      Math.round(totalActualMissingVal),
+      `${totalMissingInSession > 0 ? Math.round((totalValidatedOther/totalMissingInSession)*100) : 100}%`
+    ]);
+
+    const wsStageSummary = XLSX.utils.aoa_to_sheet([stageSummaryHeaders, ...stageSummaryRows]);
+    XLSX.utils.book_append_sheet(wb, wsStageSummary, 'Stage-Wise Breakdown');
+
+    // 3. Actual Missing Batches Sheet (Only Truly Missing)
+    const actualMissingHeaders = ['#', 'Batch No', 'Internal Batch No', 'JMREF No', 'Part No', 'Registered Stage', 'Expected Qty', 'Unit Price (INR)', 'Deficit Value (INR)', 'Batch Created Date', 'Cross-Session Status'];
+    const actualMissingRows = enriched.filter(x => x.isActualMissing).map((x, i) => [
+      i + 1,
+      x.batch.batchNo || '',
+      x.batch.internalBatchNo != null ? x.batch.internalBatchNo : '',
+      x.batch.jmrefNo || '',
+      x.batch.partNo || '',
+      STAGE_LABELS[x.batch.currentStage] || x.batch.currentStage || '',
+      x.expQty,
+      x.unitPrice,
+      Math.round(x.deficitValue),
+      x.batch.productionDate || x.batch.createdAt || '',
+      'ACTUAL MISSING (Unscanned in all audit sessions)'
+    ]);
+    const wsActualMissing = XLSX.utils.aoa_to_sheet([actualMissingHeaders, ...actualMissingRows]);
+    XLSX.utils.book_append_sheet(wb, wsActualMissing, 'Actual Missing Everywhere');
+
+    // 4. Validated in Other Sessions Sheet
+    const valOtherHeaders = ['#', 'Batch No', 'Internal Batch No', 'JMREF No', 'Part No', 'Registered Stage', 'Expected Qty', 'Validated Session Title', 'Scanned Stage', 'Stage Location Shift?', 'Counted Qty', 'Variance Qty', 'Auditor Name', 'Scanned Date', 'Rack Location', 'Notes'];
+    const valOtherRows = enriched.filter(x => x.isValidatedElsewhere).map((x, i) => [
+      i + 1,
+      x.batch.batchNo || '',
+      x.batch.internalBatchNo != null ? x.batch.internalBatchNo : '',
+      x.batch.jmrefNo || '',
+      x.batch.partNo || '',
+      STAGE_LABELS[x.batch.currentStage] || x.batch.currentStage || '',
+      x.expQty,
+      x.latestSess?.title || '',
+      STAGE_LABELS[x.latestRec?.scannedStage] || x.latestRec?.scannedStage || '',
+      x.hasStageMismatch ? 'YES (Stage Shift)' : 'NO (Same Stage)',
+      x.latestRec?.countedQty || 0,
+      x.latestRec?.varianceQty || 0,
+      x.latestRec?.scannedBy || '',
+      x.latestRec?.scannedAt || '',
+      x.latestRec?.rackLocation || '',
+      x.latestRec?.notes || ''
+    ]);
+    const wsValOther = XLSX.utils.aoa_to_sheet([valOtherHeaders, ...valOtherRows]);
+    XLSX.utils.book_append_sheet(wb, wsValOther, 'Validated in Other Sessions');
+
+    // 5. Complete Missing Batches Matrix
+    const allMissingHeaders = ['#', 'Batch No', 'JMREF No', 'Part No', 'Registered Stage', 'Expected Qty', 'Cross-Session Audit Status', 'Validated Session', 'Scanned Stage', 'Counted Qty', 'Auditor', 'Deficit Value (INR)', 'Batch Creation Date'];
+    const allMissingRows = enriched.map((x, i) => [
+      i + 1,
+      x.batch.batchNo || '',
+      x.batch.jmrefNo || '',
+      x.batch.partNo || '',
+      STAGE_LABELS[x.batch.currentStage] || x.batch.currentStage || '',
+      x.expQty,
+      x.isActualMissing ? 'ACTUAL MISSING' : (x.hasStageMismatch ? 'VALIDATED (STAGE SHIFT)' : 'VALIDATED ELSEWHERE'),
+      x.latestSess?.title || '—',
+      x.latestRec?.scannedStage ? (STAGE_LABELS[x.latestRec.scannedStage]||x.latestRec.scannedStage) : '—',
+      x.latestRec?.countedQty != null ? x.latestRec.countedQty : '—',
+      x.latestRec?.scannedBy || '—',
+      Math.round(x.deficitValue),
+      x.batch.productionDate || x.batch.createdAt || ''
+    ]);
+    const wsAllMissing = XLSX.utils.aoa_to_sheet([allMissingHeaders, ...allMissingRows]);
+    XLSX.utils.book_append_sheet(wb, wsAllMissing, 'Complete Missing Matrix');
+
+    const fileName = `JMPL_Cross_Session_Missing_Batches_${(session.title || 'Audit').replace(/[^a-zA-Z0-9_-]/g, '_')}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    XLSX.writeFile(wb, fileName);
+    showToast('Cross-Session Missing Batches Excel Workbook exported successfully!', 'success');
+  }
+
   function exportAuditExcel(sessionId) {
     if (typeof XLSX === 'undefined') {
       showToast('Excel library (SheetJS) is not loaded', 'error');
@@ -1979,6 +2666,11 @@ const StockAuditModule = (() => {
     const metrics = getSessionMetrics(session);
     const records = DB.AuditRecords.bySession(session.id);
     const missingList = metrics.missingList || [];
+    const allRecords = DB.AuditRecords.all();
+    const allSessions = DB.AuditSessions.all();
+    const sessionMap = {};
+    allSessions.forEach(s => { sessionMap[s.id] = s; });
+
     const masterMap = {};
     DB.Master.all().forEach(m => { masterMap[m.jmrefNo] = m; });
 
@@ -2033,12 +2725,22 @@ const StockAuditModule = (() => {
     const wsVerified = XLSX.utils.aoa_to_sheet([verifiedHeaders, ...verifiedRows]);
     XLSX.utils.book_append_sheet(wb, wsVerified, 'Verified Batches');
 
-    // 3. Missing Batches Sheet
-    const missingHeaders = ['#', 'Batch No', 'JMREF No', 'Part No', 'Registered Stage', 'Expected Qty', 'Unit Price (INR)', 'Deficit Value (INR)', 'Batch Creation Date'];
+    // 3. Missing Batches Sheet (with Cross-Session Validation)
+    const missingHeaders = ['#', 'Batch No', 'JMREF No', 'Part No', 'Registered Stage', 'Expected Qty', 'Unit Price (INR)', 'Deficit Value (INR)', 'Cross-Session Audit Status', 'Validated Elsewhere In', 'Scanned Stage Elsewhere', 'Batch Creation Date'];
     const missingRows = missingList.map((b, i) => {
       const qty = getBatchExpectedQty(b);
       const part = masterMap[b.jmrefNo] || {};
       const price = Number(part.salePrice || part.standardCost || 0);
+      const cleanNo = String(b.batchNo || '').trim().toLowerCase();
+      const otherRecs = allRecords.filter(r => r.sessionId !== session.id && (r.batchId === b.id || (cleanNo && r.batchNo && String(r.batchNo).trim().toLowerCase() === cleanNo)));
+      const otherRec = otherRecs[0];
+      const otherSess = otherRec ? (sessionMap[otherRec.sessionId] || { title: otherRec.sessionId }) : null;
+
+      let status = 'ACTUAL MISSING';
+      if (otherRec) {
+        status = (otherRec.scannedStage !== b.currentStage) ? 'VALIDATED (STAGE SHIFT)' : 'VALIDATED ELSEWHERE';
+      }
+
       return [
         i + 1,
         b.batchNo || '',
@@ -2048,6 +2750,9 @@ const StockAuditModule = (() => {
         qty,
         price,
         Math.round(qty * price),
+        status,
+        otherSess?.title || '—',
+        otherRec?.scannedStage ? (STAGE_LABELS[otherRec.scannedStage]||otherRec.scannedStage) : '—',
         b.productionDate || b.createdAt || ''
       ];
     });
@@ -2079,8 +2784,12 @@ const StockAuditModule = (() => {
     filterVerifiedStatus,
     filterMissingSearch,
     filterMissingStage,
+    filterMissingCrossStatus,
+    openBatchAuditLineageModal,
+    closeBatchAuditLineageModal,
     closeModal,
     exportAuditExcel,
+    exportCrossSessionMissingExcel,
     toggleRapidScan,
     updatePinnedRack,
     updateAuditingStage,

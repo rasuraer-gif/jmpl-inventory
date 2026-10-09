@@ -2941,6 +2941,23 @@ const DB = (() => {
         return AuditRecords.bySession(sessionId);
       }
     },
+    fetchAll: async () => {
+      if (!db) return AuditRecords.all();
+      try {
+        const snap = await db.collection('auditRecords').get();
+        const list = [];
+        snap.forEach(doc => {
+          list.push({ id: doc.id, ...doc.data() });
+        });
+        cache.auditRecords = list;
+        rebuildIndexesForTable('auditRecords');
+        saveLocal('auditRecords');
+        return list;
+      } catch(err) {
+        console.warn("[DB] AuditRecords fetchAll error:", err);
+        return AuditRecords.all();
+      }
+    },
     stopSessionListener: () => {
       if (_activeAuditSessionListener) {
         try { _activeAuditSessionListener(); } catch(e) {}
@@ -3259,10 +3276,11 @@ const DB = (() => {
       const promises = [];
       const fetchedBatchIds = new Set();
 
-      // 1. Fetch Stage Records if date range is specified
-      if (from || to) {
+      // 1. Fetch Stage Records if date range is specified or for stage pending/aging reports
+      if (from || to || ['pending-batches', 'aging', 'sub-pending'].includes(reportKey)) {
         let qSr = db.collection('stageRecords');
-        if (from) qSr = qSr.where('date', '>=', from);
+        const effectiveFrom = from || (['pending-batches', 'aging', 'sub-pending'].includes(reportKey) ? cutoff60 : null);
+        if (effectiveFrom) qSr = qSr.where('date', '>=', effectiveFrom);
         if (to) qSr = qSr.where('date', '<=', to);
         promises.push(
           qSr.get().then(snap => {

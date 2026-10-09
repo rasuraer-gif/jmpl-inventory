@@ -122,6 +122,193 @@ const ReportsModule = (() => {
     return `<div class="empty-state"><div class="empty-icon">📊</div><p>${msg}</p></div>`;
   }
 
+  // ── Stage Movement & Date Resolution Helpers ───────────────
+  function parseLocalDate(dateStr) {
+    if (!dateStr) return new Date();
+    const clean = String(dateStr).slice(0, 10).trim();
+    const parts = clean.split(/[-/]/);
+    if (parts.length === 3) {
+      if (parts[0].length === 4) {
+        return new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+      } else {
+        return new Date(Number(parts[2]), Number(parts[1]) - 1, Number(parts[0]));
+      }
+    }
+    const d = new Date(clean);
+    return isNaN(d.getTime()) ? new Date() : d;
+  }
+
+  function indexStageRecordsByBatch(stageRecs) {
+    const byId = new Map();
+    const byNo = new Map();
+    if (!stageRecs || !stageRecs.length) return { byId, byNo };
+
+    for (let i = 0; i < stageRecs.length; i++) {
+      const r = stageRecs[i];
+      if (r.batchId) {
+        let list = byId.get(r.batchId);
+        if (!list) { list = []; byId.set(r.batchId, list); }
+        list.push(r);
+
+        const cleanBId = String(r.batchId).trim().toLowerCase();
+        let listClean = byNo.get(cleanBId);
+        if (!listClean) { listClean = []; byNo.set(cleanBId, listClean); }
+        if (listClean !== list) listClean.push(r);
+      }
+      if (r.batchNo) {
+        const cleanNo = String(r.batchNo).trim().toLowerCase();
+        let listNo = byNo.get(cleanNo);
+        if (!listNo) { listNo = []; byNo.set(cleanNo, listNo); }
+        listNo.push(r);
+      }
+    }
+    return { byId, byNo };
+  }
+
+  function getBatchStageDetails(b, stageIndexOrRecs, today) {
+    if (!today) {
+      today = new Date();
+      today.setHours(0, 0, 0, 0);
+    }
+
+    let records = [];
+    if (stageIndexOrRecs && stageIndexOrRecs.byId && stageIndexOrRecs.byNo) {
+      const bId = b.id || '';
+      const bNo = (b.batchNo || '').trim().toLowerCase();
+      const list1 = (bId && stageIndexOrRecs.byId.get(bId)) || [];
+      const list2 = (bNo && stageIndexOrRecs.byNo.get(bNo)) || [];
+      if (!list1.length && !list2.length) {
+        records = [];
+      } else if (!list1.length) {
+        records = list2.slice();
+      } else if (!list2.length) {
+        records = list1.slice();
+      } else {
+        const seen = new Set();
+        for (let i = 0; i < list1.length; i++) {
+          seen.add(list1[i].id || list1[i]);
+          records.push(list1[i]);
+        }
+        for (let i = 0; i < list2.length; i++) {
+          if (!seen.has(list2[i].id || list2[i])) {
+            seen.add(list2[i].id || list2[i]);
+            records.push(list2[i]);
+          }
+        }
+      }
+    } else {
+      const allRecs = Array.isArray(stageIndexOrRecs) ? stageIndexOrRecs : ((typeof DB !== 'undefined' && DB.StageRecords) ? DB.StageRecords.all() : []);
+      const bId = b.id || '';
+      const bNo = (b.batchNo || '').trim().toLowerCase();
+      records = allRecs.filter(r => {
+        if (r.batchId) {
+          if (r.batchId === bId) return true;
+          if (bNo && String(r.batchId).trim().toLowerCase() === bNo) return true;
+        }
+        if (r.batchNo) {
+          if (bNo && String(r.batchNo).trim().toLowerCase() === bNo) return true;
+          if (bId && String(r.batchNo).trim() === bId) return true;
+        }
+        return false;
+      });
+    }
+
+    // Sort records chronologically
+    records.sort((x, y) => {
+      const tX = x.createdAt || (x.date ? (x.time ? `${x.date}T${x.time}` : `${x.date}T00:00:00`) : '');
+      const tY = y.createdAt || (y.date ? (y.time ? `${y.date}T${y.time}` : `${y.date}T00:00:00`) : '');
+      return tX.localeCompare(tY);
+    });
+
+    const validStages = [
+      'production', 'cryogenic', 'deflashing', 'waiting-trimming',
+      'trimming', 'post-curing', 'waiting-visual', 'visual',
+      'gauge', 'quality', 'store'
+    ];
+
+    let effectiveStage = b.currentStage || 'production';
+    let latestRecord = null;
+
+    if (records.length > 0) {
+      latestRecord = records[records.length - 1];
+      const targetDest = latestRecord.movedTo || latestRecord.toStage;
+      if (targetDest && validStages.includes(targetDest)) {
+        if (effectiveStage !== targetDest) {
+          effectiveStage = targetDest;
+          if (b.currentStage !== targetDest) {
+            b.currentStage = targetDest;
+            try {
+              if (typeof DB !== 'undefined' && DB.Batches && typeof DB.Batches.update === 'function') {
+                DB.Batches.update(b.id, { currentStage: targetDest });
+              }
+            } catch (e) {}
+          }
+        }
+      } else if (latestRecord.stage && validStages.includes(latestRecord.stage) && !latestRecord.movedTo) {
+        effectiveStage = latestRecord.stage;
+      }
+    }
+
+    // Determine the entry date into this effective stage
+    let entryDateStr = '';
+
+    // 1. Records where movedTo === effectiveStage
+    const entryRecs = records.filter(r => (r.movedTo === effectiveStage || r.toStage === effectiveStage));
+    if (entryRecs.length > 0) {
+      const lastEntry = entryRecs[entryRecs.length - 1];
+      entryDateStr = lastEntry.date || (lastEntry.createdAt ? lastEntry.createdAt.slice(0, 10) : '');
+    }
+
+    // 2. Records where stage === effectiveStage
+    if (!entryDateStr) {
+      const atStageRecs = records.filter(r => r.stage === effectiveStage);
+      if (atStageRecs.length > 0) {
+        const lastAt = atStageRecs[atStageRecs.length - 1];
+        entryDateStr = lastAt.date || (lastAt.createdAt ? lastAt.createdAt.slice(0, 10) : '');
+      }
+    }
+
+    // 3. Fallback to latest stage record date
+    if (!entryDateStr && records.length > 0) {
+      const lastAny = records[records.length - 1];
+      entryDateStr = lastAny.date || (lastAny.createdAt ? lastAny.createdAt.slice(0, 10) : '');
+    }
+
+    // 4. Fallback to batch productionDate or createdAt
+    if (!entryDateStr) {
+      entryDateStr = b.productionDate || (b.createdAt ? b.createdAt.slice(0, 10) : '') || '';
+    }
+
+    // Calculate days pending from respective stage movement
+    const entryDate = parseLocalDate(entryDateStr);
+    entryDate.setHours(0, 0, 0, 0);
+    const diffMs = today.getTime() - entryDate.getTime();
+    const daysPending = Math.max(0, Math.round(diffMs / (1000 * 60 * 60 * 24)));
+
+    // Calculate quantity
+    let qty = b.initialQty || 0;
+    if (effectiveStage === 'store' || b.status === 'completed') {
+      qty = b.remainingQty != null ? Number(b.remainingQty) : (b.currentQty != null ? Number(b.currentQty) : b.initialQty || 0);
+    } else if (effectiveStage !== 'production') {
+      const incoming = records.filter(r => r.movedTo === effectiveStage || r.toStage === effectiveStage);
+      if (incoming.length > 0) {
+        const lastRec = incoming[incoming.length - 1];
+        qty = Number(lastRec.isRecheck ? lastRec.recheckQty : (lastRec.outputQty != null ? lastRec.outputQty : lastRec.inputQty)) || b.initialQty || 0;
+      } else if (b.currentQty != null) {
+        qty = Number(b.currentQty);
+      }
+    }
+
+    return {
+      effectiveStage,
+      entryDateStr: entryDateStr.slice(0, 10),
+      daysPending,
+      qty,
+      latestRecord,
+      records
+    };
+  }
+
   // ── Export Helpers ─────────────────────────────────────────
   function formatFilters(filters) {
     if (!filters) return '';
@@ -1924,45 +2111,24 @@ const ReportsModule = (() => {
   function renderAging(filters) {
     const batches = DB.Batches.all().filter(b => b.status === 'active');
     const stageRecs = DB.StageRecords.all();
+    const stageIndex = indexStageRecordsByBatch(stageRecs);
     const master = DB.Master.all();
     const today = new Date();
+    today.setHours(0,0,0,0);
 
     const agingBatches = [];
 
     batches.forEach(b => {
-      let entryDateStr = '';
-      
-      const recs = stageRecs.filter(r => r.batchId === b.id && r.movedTo === b.currentStage)
-                            .sort((a, b) => (a.createdAt || a.date).localeCompare(b.createdAt || b.date));
-
-      if (recs.length > 0) {
-        entryDateStr = recs[recs.length - 1].date || recs[recs.length - 1].createdAt || '';
-      } else {
-        entryDateStr = b.productionDate || b.createdAt || '';
-      }
-
-      if (!entryDateStr) return;
-
-      const entryDate = new Date(entryDateStr.slice(0, 10));
-      const diffTime = Math.abs(today - entryDate);
-      const days = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      const details = getBatchStageDetails(b, stageIndex, today);
+      const days = details.daysPending;
 
       if (days > 7) {
-        let qty = b.initialQty || 0;
-        if (b.currentStage !== 'production') {
-          const incoming = stageRecs.filter(r => r.batchId === b.id && r.movedTo === b.currentStage);
-          if (incoming.length > 0) {
-            const lastRec = incoming[incoming.length - 1];
-            qty = lastRec.isRecheck ? lastRec.recheckQty : lastRec.outputQty;
-          }
-        }
-
         agingBatches.push({
           batch: b,
-          stage: b.currentStage,
-          entryDate: entryDateStr.slice(0, 10),
+          stage: details.effectiveStage,
+          entryDate: details.entryDateStr,
           days,
-          qty
+          qty: details.qty
         });
       }
     });
@@ -2063,7 +2229,7 @@ const ReportsModule = (() => {
   }
 
   function renderPendingBatches(filters) {
-    const { pendingStage, pendingTimeframe } = filters;
+    const { pendingStage, pendingTimeframe } = filters || {};
     let filterStage = pendingStage;
     let filterVendorId = null;
     if (pendingStage && pendingStage.includes('_')) {
@@ -2072,60 +2238,40 @@ const ReportsModule = (() => {
       filterVendorId = pendingStage.substring(idx + 1);
     }
 
-    const batches = DB.Batches.all().filter(b => {
-      if (filterStage) {
-        if (filterStage === 'store') {
-          return b.status === 'completed' && b.currentStage === 'store';
-        }
-        return b.status === 'active' && b.currentStage === filterStage;
-      }
-      return b.status === 'active' || (b.status === 'completed' && b.currentStage === 'store');
-    });
-
+    const allBatches = DB.Batches.all();
     const stageRecs = DB.StageRecords.all();
+    const stageIndex = indexStageRecordsByBatch(stageRecs);
     const master = DB.Master.all();
     const vendors = DB.Vendors.all();
     const today = new Date();
     today.setHours(0,0,0,0);
 
-    function parseLocalDate(dateStr) {
-      if (!dateStr) return new Date();
-      const clean = dateStr.slice(0, 10).trim();
-      const parts = clean.split(/[-/]/);
-      if (parts.length === 3) {
-        if (parts[0].length === 4) {
-          return new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
-        } else {
-          return new Date(Number(parts[2]), Number(parts[1]) - 1, Number(parts[0]));
-        }
-      }
-      const d = new Date(clean);
-      return isNaN(d.getTime()) ? new Date() : d;
-    }
-
     const dataRows = [];
     const headers = ['#', 'Batch No', 'JMREF No', 'Part No', 'Current Stage', 'Current Qty', 'Date Received', 'Days Pending'];
 
-    batches.forEach(b => {
-      if (filterStage && b.currentStage !== filterStage) return;
-      if (filterVendorId && b.vendorId !== filterVendorId) return;
+    allBatches.forEach(b => {
+      if (b.status === 'rejected') return;
+      if (b.status === 'completed' && b.currentStage !== 'store') return;
 
-      let entryDateStr = '';
-      const recs = stageRecs.filter(r => r.batchId === b.id && r.movedTo === b.currentStage)
-                            .sort((a, b) => (a.createdAt || a.date || '').localeCompare(b.createdAt || b.date || ''));
+      const details = getBatchStageDetails(b, stageIndex, today);
 
-      if (recs.length > 0) {
-        entryDateStr = recs[recs.length - 1].date || recs[recs.length - 1].createdAt || '';
+      // Filter by Stage (evaluated against true effective stage)
+      if (filterStage) {
+        if (filterStage === 'store') {
+          if (details.effectiveStage !== 'store' || (b.status !== 'completed' && b.status !== 'active')) return;
+        } else {
+          if (details.effectiveStage !== filterStage || b.status !== 'active') return;
+        }
+      } else {
+        if (b.status !== 'active' && !(b.status === 'completed' && details.effectiveStage === 'store')) return;
       }
-      if (!entryDateStr) {
-        entryDateStr = b.productionDate || b.createdAt || '';
-      }
 
-      const entryDate = parseLocalDate(entryDateStr);
-      entryDate.setHours(0,0,0,0);
-      const diffTime = today - entryDate;
-      const days = Math.max(0, Math.round(diffTime / (1000 * 60 * 60 * 24)));
+      // Filter by Vendor
+      const effectiveVendorId = b.vendorId || (details.latestRecord && details.latestRecord.vendorId);
+      if (filterVendorId && effectiveVendorId !== filterVendorId) return;
 
+      // Filter by Timeframe (based on days pending from respective stage movement!)
+      const days = details.daysPending;
       if (pendingTimeframe) {
         if (pendingTimeframe === '1w' && days > 7) return;
         if (pendingTimeframe === '2w' && days > 14) return;
@@ -2140,18 +2286,9 @@ const ReportsModule = (() => {
         if (pendingTimeframe === '2m_plus' && days < 60) return;
       }
 
-      let qty = b.initialQty || 0;
-      if (b.currentStage !== 'production') {
-        const incoming = stageRecs.filter(r => r.batchId === b.id && r.movedTo === b.currentStage);
-        if (incoming.length > 0) {
-          const lastRec = incoming[incoming.length - 1];
-          qty = lastRec.isRecheck ? lastRec.recheckQty : lastRec.outputQty;
-        }
-      }
-
       const p = master.find(m => m.jmrefNo === b.jmrefNo) || {};
       
-      let stageText = STAGE_LABELS[b.currentStage] || b.currentStage;
+      let stageText = STAGE_LABELS[details.effectiveStage] || details.effectiveStage;
       const VENDOR_ELIGIBLE_STAGES = ['production', 'cryogenic', 'deflashing', 'trimming'];
       const STAGE_DEPT_MAP = {
         'production': 'production',
@@ -2159,9 +2296,9 @@ const ReportsModule = (() => {
         'deflashing': 'deflashing',
         'trimming': 'trimming'
       };
-      if (b.vendorId && VENDOR_ELIGIBLE_STAGES.includes(b.currentStage)) {
-        const v = vendors.find(vv => vv.id === b.vendorId);
-        if (v && v.name && v.department === STAGE_DEPT_MAP[b.currentStage]) {
+      if (effectiveVendorId && VENDOR_ELIGIBLE_STAGES.includes(details.effectiveStage)) {
+        const v = vendors.find(vv => vv.id === effectiveVendorId);
+        if (v && v.name && v.department === STAGE_DEPT_MAP[details.effectiveStage]) {
           stageText += ` → ${v.name}`;
         }
       }
@@ -2172,8 +2309,8 @@ const ReportsModule = (() => {
         jmrefNo: b.jmrefNo,
         partNo: p.partNo || b.partNo || '—',
         currentStage: stageText,
-        qty: qty,
-        dateReceived: entryDateStr.slice(0, 10),
+        qty: details.qty,
+        dateReceived: details.entryDateStr,
         daysPending: days
       });
     });
@@ -2787,25 +2924,11 @@ const ReportsModule = (() => {
     const { from, to, jmref, subcontractorId } = filters;
     const batches = DB.Batches.all().filter(b => b.productionType === 'subcontractor' && b.status === 'active' && b.currentStage !== 'store');
     const stageRecs = DB.StageRecords.all();
+    const stageIndex = indexStageRecordsByBatch(stageRecs);
     const master = DB.Master.all();
     const subcontractors = DB.Subcontractors.all();
     const today = new Date();
     today.setHours(0,0,0,0);
-
-    function parseLocalDate(dateStr) {
-      if (!dateStr) return new Date();
-      const clean = dateStr.slice(0, 10).trim();
-      const parts = clean.split(/[-/]/);
-      if (parts.length === 3) {
-        if (parts[0].length === 4) {
-          return new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
-        } else {
-          return new Date(Number(parts[2]), Number(parts[1]) - 1, Number(parts[0]));
-        }
-      }
-      const d = new Date(clean);
-      return isNaN(d.getTime()) ? new Date() : d;
-    }
 
     const dataRows = [];
     const headers = ['#', 'Batch No', 'JMREF No', 'Part No', 'Description', 'Subcontractor', 'Current Stage', 'Current Qty', 'Production Date', 'Date Created', 'Days Pending (Current Stage)'];
@@ -2833,33 +2956,9 @@ const ReportsModule = (() => {
       const sub = subcontractors.find(s => s.id === b.subcontractorId) || {};
       const subName = sub.name || 'Unknown / Not Assigned';
 
-      // Find current quantity
-      let qty = b.initialQty || 0;
-      if (b.currentStage !== 'production') {
-        const incoming = stageRecs.filter(r => r.batchId === b.id && r.movedTo === b.currentStage);
-        if (incoming.length > 0) {
-          const lastRec = incoming[incoming.length - 1];
-          qty = lastRec.isRecheck ? lastRec.recheckQty : lastRec.outputQty;
-        }
-      }
-
-      // Find date received / entered in current stage
-      let entryDateStr = '';
-      const recs = stageRecs.filter(r => r.batchId === b.id && r.movedTo === b.currentStage)
-                            .sort((a, b) => (a.createdAt || a.date || '').localeCompare(b.createdAt || b.date || ''));
-      if (recs.length > 0) {
-        entryDateStr = recs[recs.length - 1].date || recs[recs.length - 1].createdAt || '';
-      }
-      if (!entryDateStr) {
-        entryDateStr = b.productionDate || b.createdAt || '';
-      }
-
-      const entryDate = parseLocalDate(entryDateStr);
-      entryDate.setHours(0,0,0,0);
-      const diffTime = today - entryDate;
-      const days = Math.max(0, Math.round(diffTime / (1000 * 60 * 60 * 24)));
-
+      const details = getBatchStageDetails(b, stageIndex, today);
       const p = master.find(m => m.jmrefNo === b.jmrefNo) || {};
+
       dataRows.push({
         batchNo: b.batchNo,
         internalBatchNo: b.internalBatchNo,
@@ -2867,11 +2966,11 @@ const ReportsModule = (() => {
         partNo: p.partNo || b.partNo || '—',
         description: p.description || b.description || '—',
         subcontractor: subName,
-        currentStage: STAGE_LABELS[b.currentStage] || b.currentStage,
-        qty: qty,
+        currentStage: STAGE_LABELS[details.effectiveStage] || details.effectiveStage,
+        qty: details.qty,
         productionDate: (b.productionDate || b.createdAt || '').slice(0, 10),
         dateCreated: (b.createdAt || '').slice(0, 10),
-        daysPending: days
+        daysPending: details.daysPending
       });
     });
 
@@ -3407,6 +3506,17 @@ const ReportsModule = (() => {
         </select>
       </div>`;
 
+    const auditMissingStatusFilter = `
+      <div class="form-group mb-0">
+        <label class="form-label">Audit Validation Status</label>
+        <select class="form-control" id="rpt-audit-status">
+          <option value="">All Missing Batches</option>
+          <option value="actual_missing">🚨 Actual Missing Everywhere</option>
+          <option value="validated_other">✅ Validated in Other Sessions</option>
+          <option value="stage_mismatch">⚠️ Stage Location Mismatches</option>
+        </select>
+      </div>`;
+
     const batchLossStatusFilter = `
       <div class="form-group mb-0">
         <label class="form-label">Batch Status</label>
@@ -3472,7 +3582,8 @@ const ReportsModule = (() => {
       'store-aging': jmrefFilter,
       'daily-summary': dateRange,
       'analytics': dateRange,
-      'stock-audit': [auditSessionTitleFilter, dateRange, jmrefFilter].join('')
+      'stock-audit': [auditSessionTitleFilter, dateRange, jmrefFilter].join(''),
+      'audit-missing-batches': [auditSessionTitleFilter, pendingStageFilter, auditMissingStatusFilter, jmrefFilter].join('')
     };
     return filterMap[report] || '';
   }
@@ -4100,6 +4211,490 @@ const ReportsModule = (() => {
     return { html, headers, dataRows };
   }
 
+  // ── Missing Batches Cross-Session Audit Report ────────────
+  function renderAuditMissingCrossSessionReport(filters) {
+    const { auditSessionId, pendingStage, auditStatus, jmref } = filters || {};
+
+    const allSessions = DB.AuditSessions ? DB.AuditSessions.all().sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || '')) : [];
+    if (!allSessions || allSessions.length === 0) {
+      return emptyState('No stock audit sessions found. Please create a stock taking session first.');
+    }
+
+    const sessionMap = {};
+    allSessions.forEach(s => { sessionMap[s.id] = s; });
+
+    // Identify target session: either the filtered one, or the latest active / recent session
+    let primarySession = null;
+    if (auditSessionId) {
+      primarySession = sessionMap[auditSessionId];
+    }
+    if (!primarySession) {
+      primarySession = allSessions.find(s => s.status === 'in_progress') || allSessions[0];
+    }
+
+    // Pre-fetch all audit records across all sessions if available
+    if (typeof DB !== 'undefined' && DB.AuditRecords && typeof DB.AuditRecords.fetchAll === 'function') {
+      DB.AuditRecords.fetchAll().catch(e => console.warn('Audit fetch error:', e));
+    }
+
+    const allAuditRecords = DB.AuditRecords ? DB.AuditRecords.all() : [];
+    const primaryRecords = DB.AuditRecords ? DB.AuditRecords.bySession(primarySession.id) : [];
+
+    // Pre-index verified batches in the primary session
+    const verifiedPrimaryIds = new Set(primaryRecords.map(r => r.batchId).filter(Boolean));
+    const verifiedPrimaryNos = new Set(primaryRecords.map(r => (r.batchNo || '').trim().toLowerCase()));
+
+    // Pre-index records in other sessions
+    const otherRecordsByBatchId = new Map();
+    const otherRecordsByBatchNo = new Map();
+
+    for (let i = 0; i < allAuditRecords.length; i++) {
+      const r = allAuditRecords[i];
+      if (r.sessionId === primarySession.id) continue;
+      if (r.batchId) {
+        let list = otherRecordsByBatchId.get(r.batchId);
+        if (!list) { list = []; otherRecordsByBatchId.set(r.batchId, list); }
+        list.push(r);
+      }
+      if (r.batchNo) {
+        const clean = String(r.batchNo).trim().toLowerCase();
+        let list = otherRecordsByBatchNo.get(clean);
+        if (!list) { list = []; otherRecordsByBatchNo.set(clean, list); }
+        list.push(r);
+      }
+    }
+
+    // Determine expected batches in the scope of primarySession
+    const allBatches = DB.Batches.all().filter(b => !b.isArchived);
+    const scope = primarySession.stageScope || 'all';
+
+    let expectedBatches = [];
+    if (scope === 'all') {
+      expectedBatches = allBatches.filter(b => b.status === 'active' || b.currentStage === 'store' || b.status === 'completed');
+    } else if (scope === 'store') {
+      expectedBatches = allBatches.filter(b => b.currentStage === 'store' || b.status === 'completed');
+    } else {
+      expectedBatches = allBatches.filter(b => b.currentStage === scope && b.status === 'active');
+    }
+
+    // Filter to missing / unscanned batches in primarySession
+    let missingList = expectedBatches.filter(b => !verifiedPrimaryIds.has(b.id) && !verifiedPrimaryNos.has((b.batchNo || '').trim().toLowerCase()));
+
+    const masterMap = {};
+    if (DB.Master) {
+      DB.Master.all().forEach(m => { masterMap[m.jmrefNo] = m; });
+    }
+
+    // Index stage records for expected qty calculations
+    const allStageRecs = DB.StageRecords.all();
+    const stageRecsMap = {};
+    for (let i = 0; i < allStageRecs.length; i++) {
+      const r = allStageRecs[i];
+      if (r.batchId) {
+        if (!stageRecsMap[r.batchId]) stageRecsMap[r.batchId] = [];
+        stageRecsMap[r.batchId].push(r);
+      }
+    }
+
+    function calculateBatchQty(batch) {
+      if (!batch) return 0;
+      if (batch.currentStage === 'store' || batch.status === 'completed') {
+        if (batch.remainingQty != null) return Number(batch.remainingQty);
+        if (batch.currentQty != null) return Number(batch.currentQty);
+      }
+      if (batch.currentQty != null) return Number(batch.currentQty);
+
+      const stageRecs = stageRecsMap[batch.id];
+      if (!stageRecs || stageRecs.length === 0) return batch.initialQty || 0;
+
+      if (batch.currentStage === 'store' || batch.status === 'completed') {
+        const storeRecs = stageRecs.filter(r => r.movedTo === 'store');
+        if (storeRecs.length > 0) return storeRecs[storeRecs.length - 1].outputQty || 0;
+      }
+
+      const incoming = stageRecs.filter(r => r.movedTo === batch.currentStage);
+      if (incoming.length > 0) {
+        const last = incoming[incoming.length - 1];
+        return last.isRecheck ? (last.recheckQty || 0) : (last.outputQty || 0);
+      }
+      return batch.initialQty || 0;
+    }
+
+    function safeEscape(str) {
+      if (!str) return '';
+      return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    // Cross-validate missing batches
+    let enrichedItems = missingList.map(b => {
+      const bId = b.id;
+      const cleanNo = String(b.batchNo || '').trim().toLowerCase();
+      const matchesById = otherRecordsByBatchId.get(bId) || [];
+      const matchesByNo = otherRecordsByBatchNo.get(cleanNo) || [];
+
+      const seen = new Set();
+      const otherMatches = [];
+      [...matchesById, ...matchesByNo].forEach(r => {
+        if (!seen.has(r.id)) {
+          seen.add(r.id);
+          otherMatches.push(r);
+        }
+      });
+      otherMatches.sort((x, y) => (y.scannedAt || '').localeCompare(x.scannedAt || ''));
+
+      const isValidatedElsewhere = otherMatches.length > 0;
+      const isActualMissing = !isValidatedElsewhere;
+      const latestRec = isValidatedElsewhere ? otherMatches[0] : null;
+      const latestSess = latestRec ? (sessionMap[latestRec.sessionId] || { title: latestRec.sessionId }) : null;
+      const hasStageMismatch = Boolean(latestRec && latestRec.scannedStage && b.currentStage && latestRec.scannedStage !== b.currentStage);
+
+      const expQty = calculateBatchQty(b);
+      const part = masterMap[b.jmrefNo] || {};
+      const unitPrice = Number(part.salePrice || part.standardCost || 0);
+      const deficitValue = expQty * unitPrice;
+
+      return {
+        batch: b,
+        expQty,
+        unitPrice,
+        deficitValue,
+        isValidatedElsewhere,
+        isActualMissing,
+        hasStageMismatch,
+        otherMatches,
+        latestRec,
+        latestSess
+      };
+    });
+
+    // Compute Stage Breakdown across ALL stages before applying filters
+    const STAGES_CONFIG = [
+      { key: 'store', label: 'Finished Goods Store', icon: '🏪' },
+      { key: 'waiting-visual', label: 'Waiting for Visual', icon: '⏳' },
+      { key: 'visual', label: 'Visual Inspection', icon: '👁️' },
+      { key: 'gauge', label: 'Gauge Inspection', icon: '📏' },
+      { key: 'quality', label: 'Quality Final QC', icon: '⭐' },
+      { key: 'production', label: 'Production / Moulding', icon: '🏭' },
+      { key: 'cryogenic', label: 'Cryogenic Deflashing', icon: '❄️' },
+      { key: 'deflashing', label: 'Manual DE Flashing', icon: '🔧' },
+      { key: 'waiting-trimming', label: 'Waiting for Trimming', icon: '⏳' },
+      { key: 'trimming', label: 'Trimming', icon: '✂️' },
+      { key: 'post-curing', label: 'Post Curing', icon: '🔥' }
+    ];
+
+    const stageBreakdown = {};
+    STAGES_CONFIG.forEach(st => {
+      stageBreakdown[st.key] = {
+        ...st,
+        missingInSession: 0,
+        missingQtyInSession: 0,
+        validatedOther: 0,
+        actualMissing: 0,
+        actualMissingQty: 0,
+        actualMissingVal: 0
+      };
+    });
+
+    enrichedItems.forEach(item => {
+      const stKey = item.batch.currentStage || 'store';
+      if (!stageBreakdown[stKey]) {
+        stageBreakdown[stKey] = {
+          key: stKey,
+          label: STAGE_LABELS[stKey] || stKey,
+          icon: '📦',
+          missingInSession: 0,
+          missingQtyInSession: 0,
+          validatedOther: 0,
+          actualMissing: 0,
+          actualMissingQty: 0,
+          actualMissingVal: 0
+        };
+      }
+      const sb = stageBreakdown[stKey];
+      sb.missingInSession++;
+      sb.missingQtyInSession += item.expQty;
+      if (item.isValidatedElsewhere) {
+        sb.validatedOther++;
+      } else {
+        sb.actualMissing++;
+        sb.actualMissingQty += item.expQty;
+        sb.actualMissingVal += item.deficitValue;
+      }
+    });
+
+    // Summary totals across entire session missing pool
+    const totalMissingInSession = enrichedItems.length;
+    const totalValidatedElsewhere = enrichedItems.filter(i => i.isValidatedElsewhere).length;
+    const totalActualMissing = enrichedItems.filter(i => i.isActualMissing).length;
+    const totalActualMissingQty = enrichedItems.filter(i => i.isActualMissing).reduce((s, i) => s + i.expQty, 0);
+    const totalActualMissingVal = enrichedItems.filter(i => i.isActualMissing).reduce((s, i) => s + i.deficitValue, 0);
+
+    // Apply Filter Criteria to displayed batches
+    if (pendingStage) {
+      enrichedItems = enrichedItems.filter(i => (i.batch.currentStage || 'store') === pendingStage);
+    }
+
+    if (auditStatus) {
+      if (auditStatus === 'actual_missing') {
+        enrichedItems = enrichedItems.filter(i => i.isActualMissing);
+      } else if (auditStatus === 'validated_other') {
+        enrichedItems = enrichedItems.filter(i => i.isValidatedElsewhere);
+      } else if (auditStatus === 'stage_mismatch') {
+        enrichedItems = enrichedItems.filter(i => i.hasStageMismatch);
+      }
+    }
+
+    if (jmref) {
+      const q = jmref.toLowerCase();
+      enrichedItems = enrichedItems.filter(i => 
+        (i.batch.batchNo || '').toLowerCase().includes(q) ||
+        (i.batch.jmrefNo || '').toLowerCase().includes(q) ||
+        (i.batch.partNo || '').toLowerCase().includes(q)
+      );
+    }
+
+    // Sort by actual missing first, then deficit value descending
+    enrichedItems.sort((a, b) => {
+      if (a.isActualMissing !== b.isActualMissing) return a.isActualMissing ? -1 : 1;
+      return b.deficitValue - a.deficitValue;
+    });
+
+    // Prepare table headers and data rows for display & export
+    const headers = [
+      '#',
+      'Batch No',
+      'JMREF No',
+      'Part No',
+      'Expected Stage',
+      'Expected Pcs',
+      'Cross-Session Audit Status',
+      'Validated Session',
+      'Scanned Stage Elsewhere',
+      'Counted Pcs Elsewhere',
+      'Auditor & Date',
+      'Deficit Value (₹)'
+    ];
+
+    const dataRows = enrichedItems.map((item, idx) => {
+      const b = item.batch;
+      const rec = item.latestRec;
+      const sess = item.latestSess;
+
+      let statusText = 'Actual Missing Everywhere';
+      if (item.isValidatedElsewhere) {
+        statusText = item.hasStageMismatch ? 'Stage Shift (Found Elsewhere)' : 'Validated in Other Session';
+      }
+
+      return [
+        idx + 1,
+        b.batchNo || '-',
+        b.jmrefNo || '-',
+        b.partNo || '-',
+        STAGE_LABELS[b.currentStage] || b.currentStage || '-',
+        formatNum(item.expQty),
+        statusText,
+        sess ? (sess.title || sess.id) : '—',
+        rec ? (STAGE_LABELS[rec.scannedStage] || rec.scannedStage) : '—',
+        rec ? formatNum(rec.countedQty) : '—',
+        rec ? `${rec.scannedBy || '—'} (${(rec.scannedAt || '').slice(0, 10)})` : '—',
+        item.isActualMissing ? `₹${formatNum(Math.round(item.deficitValue))}` : '₹0'
+      ];
+    });
+
+    // UI HTML construction
+    const summaryCards = `
+      <div style="background:linear-gradient(135deg, rgba(239,68,68,0.06), rgba(245,158,11,0.06)); border:1px solid rgba(239,68,68,0.2); border-radius:12px; padding:16px 20px; margin-bottom:20px;">
+        <div class="flex items-center justify-between" style="flex-wrap:wrap; gap:12px;">
+          <div>
+            <div class="flex items-center gap-2">
+              <span style="font-size:20px;">🚨</span>
+              <h3 class="font-bold" style="font-size:16px; margin:0; color:var(--text-main);">
+                Audited Session: <span class="text-blue">${safeEscape(primarySession.title || primarySession.id)}</span>
+              </h3>
+              <span class="badge ${primarySession.status === 'in_progress' ? 'badge-green' : 'badge-gray'}">
+                ${primarySession.status === 'in_progress' ? '🟢 Active' : '🔒 Closed'}
+              </span>
+            </div>
+            <div class="text-xs text-muted mt-1">
+              Scope: <strong>${primarySession.stageScope === 'all' ? 'All Factory & Store' : (STAGE_LABELS[primarySession.stageScope] || primarySession.stageScope)}</strong> | 
+              Auditor: <strong>${safeEscape(primarySession.auditorName || '—')}</strong> | 
+              Started: <strong>${(primarySession.startedAt || '').slice(0, 10)}</strong>
+            </div>
+          </div>
+          <div class="text-xs font-semibold text-muted">
+            Cross-matched across <strong class="text-blue">${allSessions.length - 1}</strong> other audit session(s)
+          </div>
+        </div>
+      </div>
+
+      <div class="stats-grid mb-6" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:16px;">
+        <div class="stat-card" style="border-left:4px solid #ef4444;">
+          <div class="stat-label">Missing in Session</div>
+          <div class="stat-value text-danger">${formatNum(totalMissingInSession)}</div>
+          <div class="text-xs text-muted mt-1">Unscanned during this audit</div>
+        </div>
+        <div class="stat-card" style="border-left:4px solid #10b981;">
+          <div class="stat-label">Validated in Other Sessions</div>
+          <div class="stat-value text-success">${formatNum(totalValidatedElsewhere)}</div>
+          <div class="text-xs text-muted mt-1">Physical count confirmed elsewhere</div>
+        </div>
+        <div class="stat-card" style="border-left:4px solid #dc2626;">
+          <div class="stat-label">🚨 Actual Missing Everywhere</div>
+          <div class="stat-value text-danger font-bold">${formatNum(totalActualMissing)}</div>
+          <div class="text-xs text-danger mt-1 font-semibold">True physical floor deficit</div>
+        </div>
+        <div class="stat-card" style="border-left:4px solid #f59e0b;">
+          <div class="stat-label">Actual Deficit Pieces</div>
+          <div class="stat-value text-amber">${formatNum(totalActualMissingQty)} pcs</div>
+          <div class="text-xs text-muted mt-1">Total pieces unaccounted</div>
+        </div>
+        <div class="stat-card" style="border-left:4px solid #7c3aed;">
+          <div class="stat-label">Est. Financial Deficit</div>
+          <div class="stat-value text-purple font-bold">₹${formatNum(Math.round(totalActualMissingVal))}</div>
+          <div class="text-xs text-muted mt-1">Based on master sales price</div>
+        </div>
+      </div>
+    `;
+
+    // Stage-Wise Summary Breakdown Table
+    const stageBreakdownRows = Object.values(stageBreakdown).filter(sb => sb.missingInSession > 0);
+    const stageTableHtml = `
+      <div class="card mb-6" style="padding:16px 20px;">
+        <div class="flex items-center justify-between mb-3">
+          <h4 class="font-bold text-sm" style="margin:0; color:var(--text-main);">
+            📊 Stage-Wise Missing vs. Cross-Session Verification Breakdown
+          </h4>
+          <span class="text-xs text-muted">Showing all stages with unscanned batches</span>
+        </div>
+        
+        <div class="table-wrap">
+          <table class="data-table" style="font-size:12.5px;">
+            <thead>
+              <tr style="background:rgba(0,0,0,0.02);">
+                <th>Stage Location</th>
+                <th>Unscanned in Session</th>
+                <th>Validated Elsewhere</th>
+                <th>🚨 Actual Missing</th>
+                <th>Actual Deficit (Pcs)</th>
+                <th>Est. Deficit (₹)</th>
+                <th>Stage Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${stageBreakdownRows.length === 0 ? `
+                <tr><td colspan="7" class="text-center text-muted py-3">🎉 Zero missing batches across all stages!</td></tr>
+              ` : stageBreakdownRows.map(sb => `
+                <tr>
+                  <td class="font-bold">${sb.icon} ${sb.label}</td>
+                  <td>${sb.missingInSession} <span class="text-xs text-muted">(${formatNum(sb.missingQtyInSession)} pcs)</span></td>
+                  <td><span class="badge badge-green font-bold">${sb.validatedOther}</span></td>
+                  <td><span class="badge ${sb.actualMissing > 0 ? 'badge-danger font-bold' : 'badge-gray'}">${sb.actualMissing}</span></td>
+                  <td class="${sb.actualMissingQty > 0 ? 'text-danger font-bold' : 'text-muted'}">${formatNum(sb.actualMissingQty)}</td>
+                  <td class="${sb.actualMissingVal > 0 ? 'text-danger font-semibold' : 'text-muted'}">₹${formatNum(Math.round(sb.actualMissingVal))}</td>
+                  <td>
+                    ${sb.actualMissing === 0 ? '<span class="badge badge-green">100% Accounted</span>' : `<span class="badge badge-red font-bold">${Math.round((sb.actualMissing / sb.missingInSession) * 100)}% Deficit</span>`}
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+
+    // Detailed missing batches table
+    const tableHtml = `
+      <div class="card" style="padding:16px 20px;">
+        <div class="flex items-center justify-between mb-3" style="flex-wrap:wrap; gap:10px;">
+          <h4 class="font-bold text-sm" style="margin:0; color:var(--text-main);">
+            📋 Missing Batches Detailed Audit Trail (${enrichedItems.length} entries)
+          </h4>
+          <div class="text-xs text-muted">
+            ${auditStatus ? `Filtered by: <strong>${auditStatus.replace('_', ' ').toUpperCase()}</strong>` : 'Showing all missing batches'}
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th style="width:40px;">#</th>
+                <th>Batch No</th>
+                <th>JMREF No</th>
+                <th>Part No</th>
+                <th>Expected Stage</th>
+                <th>Expected Pcs</th>
+                <th>Cross-Session Audit Status</th>
+                <th>Validated Session</th>
+                <th>Scanned Stage</th>
+                <th>Counted Pcs</th>
+                <th>Auditor &amp; Date</th>
+                <th>Deficit (₹)</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${enrichedItems.length === 0 ? `
+                <tr><td colspan="12" class="text-center text-muted py-4">No missing batches match the current filter criteria.</td></tr>
+              ` : enrichedItems.map((item, idx) => {
+                const b = item.batch;
+                const rec = item.latestRec;
+                const sess = item.latestSess;
+
+                let statusBadge = '';
+                if (item.isActualMissing) {
+                  statusBadge = '<span class="badge badge-danger font-bold" style="background:#fee2e2; color:#b91c1c; border:1px solid #fca5a5;">🚨 ACTUAL MISSING</span>';
+                } else if (item.hasStageMismatch) {
+                  statusBadge = '<span class="badge badge-purple font-bold" style="background:#ede9fe; color:#6d28d9; border:1px solid #ddd6fe;">⚠️ STAGE SHIFT</span>';
+                } else {
+                  statusBadge = '<span class="badge badge-green font-bold" style="background:#d1fae5; color:#065f46; border:1px solid #a7f3d0;">✅ VALIDATED ELSEWHERE</span>';
+                }
+
+                return `
+                  <tr style="${item.isActualMissing ? 'background:rgba(239,68,68,0.02);' : ''}">
+                    <td>${idx + 1}</td>
+                    <td>
+                      <a href="javascript:void(0)" onclick="GenealogyModule?.openBatchModal('${safeEscape(b.batchNo)}')" class="font-bold text-blue hover:underline">
+                        ${safeEscape(b.batchNo)}
+                      </a>
+                    </td>
+                    <td><span class="badge badge-teal">${safeEscape(b.jmrefNo || '—')}</span></td>
+                    <td class="font-semibold text-xs">${safeEscape(b.partNo || '—')}</td>
+                    <td><span class="stage-chip ${b.currentStage}">${STAGE_LABELS[b.currentStage] || b.currentStage}</span></td>
+                    <td class="font-bold">${formatNum(item.expQty)}</td>
+                    <td>${statusBadge}</td>
+                    <td class="text-xs">
+                      ${sess ? `<span class="font-semibold text-blue" title="${safeEscape(sess.title || sess.id)}">${safeEscape((sess.title || sess.id).slice(0, 24))}</span>` : '<span class="text-muted">—</span>'}
+                    </td>
+                    <td>
+                      ${rec ? `<span class="badge ${item.hasStageMismatch ? 'badge-amber font-bold' : 'badge-blue'}">${STAGE_LABELS[rec.scannedStage] || rec.scannedStage}</span>` : '<span class="text-muted">—</span>'}
+                    </td>
+                    <td>
+                      ${rec ? `<span class="font-bold text-success">${formatNum(rec.countedQty)}</span>` : '<span class="text-muted">—</span>'}
+                    </td>
+                    <td class="text-xs text-muted">
+                      ${rec ? `${safeEscape(rec.scannedBy || 'Auditor')}<br><span style="font-size:10.5px;">${(rec.scannedAt || '').slice(0, 10)}</span>` : '—'}
+                    </td>
+                    <td class="${item.isActualMissing ? 'text-danger font-bold' : 'text-muted'}">
+                      ${item.isActualMissing ? '₹' + formatNum(Math.round(item.deficitValue)) : '—'}
+                    </td>
+                  </tr>
+                `;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+
+    const html = `
+      ${summaryCards}
+      ${stageTableHtml}
+      ${tableHtml}
+    `;
+
+    return { html, headers, dataRows };
+  }
+
   // ── Subcontractor Batches Report (by Production Date) ─────
   function renderSubBatchesReport(filters) {
     const { from, to, jmref, subcontractorId } = filters || {};
@@ -4280,6 +4875,7 @@ const ReportsModule = (() => {
       subcontractorId: g('rpt-subcontractor'),
       vendorId: g('rpt-vendor'),
       auditSessionId: g('rpt-audit-session'),
+      auditStatus: g('rpt-audit-status'),
       status: g('rpt-status'),
       excludeAdmin: g('rpt-exclude-admin'),
     };
@@ -4308,6 +4904,7 @@ const ReportsModule = (() => {
     setVal('rpt-subcontractor', saved.subcontractorId);
     setVal('rpt-vendor', saved.vendorId);
     setVal('rpt-audit-session', saved.auditSessionId);
+    setVal('rpt-audit-status', saved.auditStatus);
     setVal('rpt-status', saved.status);
     setVal('rpt-exclude-admin', saved.excludeAdmin);
   }
@@ -4405,6 +5002,7 @@ const ReportsModule = (() => {
       case 'sub-vs-inhouse':  result = renderSubVsInhouse(filters); break;
       case 'analytics':       result = renderAnalytics(filters); break;
       case 'stock-audit':     result = renderStockAuditReport(filters); break;
+      case 'audit-missing-batches': result = renderAuditMissingCrossSessionReport(filters); break;
       default: result = emptyState('Unknown report');
     }
 
@@ -4469,7 +5067,8 @@ const ReportsModule = (() => {
     { key:'store-aging', label:'⏳ Finished-Goods FIFO Aging Report', desc:'Available stock batches in the Store with FIFO-calculated remaining quantities and age' },
     { key:'daily-summary', label:'📊 Daily Production & Scrap Summary', desc:'Daily overview of total pieces molded, completed, reprocessed, and scrap rates across all stages' },
     { key:'analytics', label:'📈 Production & Quality Analytics', desc:'Interactive visual charts showing WIP bottlenecks, daily production yield trends, and top defective parts' },
-    { key:'stock-audit', label:'📊 Stock Audit Discrepancy & Reconciliation', desc:'Monthly physical stock audit variance, exact match rates, and financial discrepancy report' }
+    { key:'stock-audit', label:'📊 Stock Audit Discrepancy & Reconciliation', desc:'Monthly physical stock audit variance, exact match rates, and financial discrepancy report' },
+    { key:'audit-missing-batches', label:'🚨 Missing Batches Cross-Session Audit', desc:'Actual missing batches by stage verified against all monthly stock taking sessions' }
   ];
 
   // ── Render ────────────────────────────────────────────────

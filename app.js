@@ -641,6 +641,7 @@ const NAV = [
   { id:'rpt-daily-summary', label:'Daily Production & Scrap', icon:'📊', module:'report_daily_summary', section:'tools', parent:'reports', perm:'report_daily_summary' },
   { id:'rpt-analytics', label:'Production & Quality Analytics', icon:'📈', module:'report_analytics', section:'tools', parent:'reports', perm:'report_analytics' },
   { id:'rpt-stock-audit', label:'Stock Audit Discrepancy & Reconciliation', icon:'📊', module:'report_stock_audit', section:'tools', parent:'reports' },
+  { id:'rpt-audit-missing', label:'Missing Batches Cross-Session Audit', icon:'🚨', module:'report_audit_missing', section:'tools', parent:'reports' },
 
   { id:'print-batch',  label:'Print Label',        icon:'🖨️', module:'print-batch',  section:'tools', perm:'print-batch' },
   { id:'ai-agent',   label:'AI Assistant',        icon:'🤖', module:'ai-agent',  section:'tools', perm:'ai-agent' },
@@ -717,6 +718,7 @@ const App = (() => {
     report_daily_summary: () => ReportsModule?.render('daily-summary'),
     report_analytics:  () => ReportsModule?.render('analytics'),
     report_stock_audit:() => ReportsModule?.render('stock-audit'),
+    report_audit_missing:() => ReportsModule?.render('audit-missing-batches'),
     'print-batch':     () => PrintBatchModule?.render(),
   };
 
@@ -767,6 +769,7 @@ const App = (() => {
     report_daily_summary:'Daily Production & Scrap Summary',
     report_analytics:'Production & Quality Visual Analytics Dashboard',
     report_stock_audit:'Stock Audit Discrepancy & Reconciliation Report',
+    report_audit_missing:'Missing Batches Cross-Session Audit Report',
   };
 
   function navigate(moduleId) {
