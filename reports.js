@@ -3304,6 +3304,72 @@ const ReportsModule = (() => {
     return { html, headers, dataRows };
   }
 
+  // ── Quick Date Filter Presets ───────────────────────────────
+  function applyDatePreset(presetKey, autoRun = true) {
+    const fromInput = document.getElementById('rpt-from');
+    const toInput   = document.getElementById('rpt-to');
+    if (!fromInput || !toInput) return;
+
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const toDateStr = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+    let fromStr = '';
+    let toStr = toDateStr(now);
+
+    if (presetKey === 'today') {
+      fromStr = toStr;
+    } else if (presetKey === 'yesterday') {
+      const y = new Date(now);
+      y.setDate(y.getDate() - 1);
+      fromStr = toDateStr(y);
+      toStr = fromStr;
+    } else if (presetKey === 'this-week') {
+      const d = new Date(now);
+      const day = d.getDay(); // 0 is Sun, 1 is Mon
+      const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+      const monday = new Date(d.setDate(diff));
+      fromStr = toDateStr(monday);
+      toStr = toDateStr(now);
+    } else if (presetKey === 'this-month') {
+      const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+      fromStr = toDateStr(firstDay);
+      toStr = toDateStr(now);
+    } else if (presetKey === 'last-month') {
+      const firstPrevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const lastPrevMonth = new Date(now.getFullYear(), now.getMonth(), 0);
+      fromStr = toDateStr(firstPrevMonth);
+      toStr = toDateStr(lastPrevMonth);
+    } else if (presetKey === 'last-30d') {
+      const d = new Date(now);
+      d.setDate(d.getDate() - 30);
+      fromStr = toDateStr(d);
+      toStr = toDateStr(now);
+    }
+
+    fromInput.value = fromStr;
+    toInput.value = toStr;
+    fromInput.dispatchEvent(new Event('input', { bubbles: true }));
+    toInput.dispatchEvent(new Event('input', { bubbles: true }));
+    fromInput.dispatchEvent(new Event('change', { bubbles: true }));
+    toInput.dispatchEvent(new Event('change', { bubbles: true }));
+
+    document.querySelectorAll('.rpt-preset-btn').forEach(btn => {
+      if (btn.getAttribute('data-preset') === presetKey) {
+        btn.classList.add('btn-primary');
+        btn.classList.remove('btn-ghost');
+      } else {
+        btn.classList.remove('btn-primary');
+        btn.classList.add('btn-ghost');
+      }
+    });
+
+    if (autoRun) {
+      const runBtn = document.getElementById('rpt-run-btn');
+      if (runBtn) runBtn.click();
+    }
+  }
+
   // ── Build Filter UI ────────────────────────────────────────
   function buildFilters(report) {
     const masterList = DB.Master.all();
@@ -3316,7 +3382,19 @@ const ReportsModule = (() => {
     const trimmingVendors = DB.Vendors.byDept ? DB.Vendors.byDept('trimming') : DB.Vendors.all().filter(v => v.department === 'trimming');
     const vendorOpts = trimmingVendors.map(v => `<option value="${v.id}">${v.name}</option>`).join('');
 
+    const presetsBar = `
+      <div class="date-presets-bar flex items-center gap-1 mb-2 no-print" style="width: 100%; flex-wrap: wrap;">
+        <span class="text-xs text-muted font-semibold mr-1">⚡ Quick Dates:</span>
+        <button type="button" class="btn btn-ghost btn-xs rpt-preset-btn" data-preset="today" onclick="ReportsModule.applyDatePreset('today')" style="padding: 2px 7px; font-size: 11px;">Today</button>
+        <button type="button" class="btn btn-ghost btn-xs rpt-preset-btn" data-preset="yesterday" onclick="ReportsModule.applyDatePreset('yesterday')" style="padding: 2px 7px; font-size: 11px;">Yesterday</button>
+        <button type="button" class="btn btn-ghost btn-xs rpt-preset-btn" data-preset="this-week" onclick="ReportsModule.applyDatePreset('this-week')" style="padding: 2px 7px; font-size: 11px;">This Week</button>
+        <button type="button" class="btn btn-ghost btn-xs rpt-preset-btn" data-preset="this-month" onclick="ReportsModule.applyDatePreset('this-month')" style="padding: 2px 7px; font-size: 11px;">This Month</button>
+        <button type="button" class="btn btn-ghost btn-xs rpt-preset-btn" data-preset="last-month" onclick="ReportsModule.applyDatePreset('last-month')" style="padding: 2px 7px; font-size: 11px;">Last Month</button>
+        <button type="button" class="btn btn-ghost btn-xs rpt-preset-btn" data-preset="last-30d" onclick="ReportsModule.applyDatePreset('last-30d')" style="padding: 2px 7px; font-size: 11px;">Last 30 Days</button>
+      </div>`;
+
     const dateRange = `
+      ${presetsBar}
       <div class="form-group mb-0">
         <label class="form-label">From Date</label>
         <input type="date" class="form-control" id="rpt-from">
@@ -3327,6 +3405,7 @@ const ReportsModule = (() => {
       </div>`;
 
     const prodDateRange = `
+      ${presetsBar}
       <div class="form-group mb-0">
         <label class="form-label">Production From Date</label>
         <input type="date" class="form-control" id="rpt-from">
@@ -5980,8 +6059,116 @@ const ReportsModule = (() => {
     document.body.appendChild(div);
   }
 
+  // ── Executive KPI Metric Summary Cards ──────────────────────
+  function buildReportKpiBanner(container) {
+    let headers = [];
+    let dataRows = [];
+    try {
+      if (container.dataset.headers) headers = JSON.parse(container.dataset.headers);
+      if (container.dataset.rows) dataRows = JSON.parse(container.dataset.rows);
+    } catch (e) {
+      return '';
+    }
+
+    if (!Array.isArray(dataRows) || !dataRows.length || !Array.isArray(headers) || !headers.length) {
+      return '';
+    }
+
+    const totalRecords = dataRows.length;
+    let qtyTotal = 0;
+    let hasQty = false;
+    let qtyColName = '';
+
+    let lossTotal = 0;
+    let hasLoss = false;
+    let lossColName = '';
+
+    let valTotal = 0;
+    let hasVal = false;
+    let valColName = '';
+
+    headers.forEach((h, idx) => {
+      const hLower = String(h).toLowerCase();
+      if (!hasQty && (/qty|pieces|output|input|wip|store|produced|stock|total/i.test(hLower)) && !/loss|scrap|reject|rate|%|price|cost|val/i.test(hLower)) {
+        hasQty = true;
+        qtyColName = h;
+        dataRows.forEach(r => {
+          if (!r || r[idx] == null) return;
+          const v = parseFloat(String(r[idx]).replace(/[₹$,\s]/g, ''));
+          if (!isNaN(v)) qtyTotal += v;
+        });
+      }
+      if (!hasLoss && (/loss|scrap|reject/i.test(hLower)) && !/%|rate/i.test(hLower)) {
+        hasLoss = true;
+        lossColName = h;
+        dataRows.forEach(r => {
+          if (!r || r[idx] == null) return;
+          const v = parseFloat(String(r[idx]).replace(/[₹$,\s]/g, ''));
+          if (!isNaN(v)) lossTotal += v;
+        });
+      }
+      if (!hasVal && (/price|amount|val|cost|₹/i.test(hLower)) && !/%|rate/i.test(hLower)) {
+        hasVal = true;
+        valColName = h;
+        dataRows.forEach(r => {
+          if (!r || r[idx] == null) return;
+          const v = parseFloat(String(r[idx]).replace(/[₹$,\s]/g, ''));
+          if (!isNaN(v)) valTotal += v;
+        });
+      }
+    });
+
+    const cards = [];
+    cards.push(`
+      <div class="stat-card blue" style="padding: 12px 16px; border-radius: 8px; border-left: 4px solid var(--accent-blue);">
+        <div class="stat-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px;">📋 Total Records</div>
+        <div class="stat-value blue" style="font-size: 20px; font-weight: 800; margin-top: 4px;">${formatNum(totalRecords)}</div>
+      </div>
+    `);
+
+    if (hasQty && qtyTotal > 0) {
+      cards.push(`
+        <div class="stat-card teal" style="padding: 12px 16px; border-radius: 8px; border-left: 4px solid var(--accent-teal);">
+          <div class="stat-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px;">📦 Total ${qtyColName}</div>
+          <div class="stat-value teal" style="font-size: 20px; font-weight: 800; margin-top: 4px;">${formatNum(Math.round(qtyTotal))}</div>
+        </div>
+      `);
+    }
+
+    if (hasLoss && lossTotal > 0) {
+      const scrapRate = (qtyTotal > 0) ? ((lossTotal / (qtyTotal + lossTotal)) * 100).toFixed(1) + '%' : '';
+      cards.push(`
+        <div class="stat-card red" style="padding: 12px 16px; border-radius: 8px; border-left: 4px solid var(--accent-red);">
+          <div class="stat-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px;">📉 Total ${lossColName}</div>
+          <div class="stat-value red" style="font-size: 20px; font-weight: 800; margin-top: 4px;">${formatNum(Math.round(lossTotal))} ${scrapRate ? `<span style="font-size: 12px; font-weight: 600; color: var(--accent-red);">(${scrapRate})</span>` : ''}</div>
+        </div>
+      `);
+    }
+
+    if (hasVal && valTotal > 0) {
+      cards.push(`
+        <div class="stat-card green" style="padding: 12px 16px; border-radius: 8px; border-left: 4px solid var(--accent-green);">
+          <div class="stat-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px;">💰 Total ${valColName}</div>
+          <div class="stat-value green" style="font-size: 20px; font-weight: 800; margin-top: 4px;">₹${formatNum(Math.round(valTotal))}</div>
+        </div>
+      `);
+    }
+
+    if (cards.length > 1) {
+      return `
+        <div class="stats-grid report-kpi-banner no-print mb-4" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px;">
+          ${cards.join('')}
+        </div>
+      `;
+    }
+    return '';
+  }
+
   function paginateReportTables(container, html) {
-    container.innerHTML = html;
+    const hasCustomStats = html.includes('stats-grid') || html.includes('report-kpi-banner');
+    const kpiBanner = hasCustomStats ? '' : buildReportKpiBanner(container);
+
+    container.innerHTML = kpiBanner + html;
     
     const tables = container.querySelectorAll('table.data-table');
     if (!tables.length) return;
@@ -5991,7 +6178,7 @@ const ReportsModule = (() => {
       if (!tbody) return;
       
       const rows = Array.from(tbody.querySelectorAll('tr'));
-      if (rows.length <= 50) return; // Only paginate if > 50 entries
+      if (!rows.length) return;
       
       // Separate TOTAL row if present so it remains pinned at bottom on all pages
       let totalRowHtml = '';
@@ -6005,34 +6192,199 @@ const ReportsModule = (() => {
         totalRowHtml = rows.pop().outerHTML;
       }
 
-      const totalItems = rows.length;
-      const allRows = rows.map(r => r.outerHTML);
+      // Structure all data rows for fast sorting and searching
+      const allRowData = rows.map((r, idx) => ({
+        idx,
+        html: r.outerHTML,
+        text: r.textContent.toLowerCase(),
+        cells: Array.from(r.children).map(td => td.textContent.trim())
+      }));
+
+      let currentQuery = '';
+      let filteredData = allRowData.slice();
+      let sortCol = -1;
+      let sortDir = 'none';
       let currentPage = 1;
       let itemsPerPage = 50;
-      
+
       const tableWrap = table.closest('.table-wrap') || table.parentElement;
-      
-      // Remove existing paginator if any
-      const existing = tableWrap.parentElement.querySelector('.report-pagination');
-      if (existing) existing.remove();
-      
+
+      // Clean up any existing toolbar / pagination
+      const prevToolbar = tableWrap.parentElement.querySelector('.report-table-toolbar');
+      if (prevToolbar) prevToolbar.remove();
+      const prevPaginator = tableWrap.parentElement.querySelector('.report-pagination');
+      if (prevPaginator) prevPaginator.remove();
+
+      // Create Instant Search & Count Toolbar
+      const toolbar = document.createElement('div');
+      toolbar.className = 'report-table-toolbar flex justify-between items-center mb-3 no-print';
+      toolbar.style.cssText = 'flex-wrap: wrap; gap: 10px; padding: 4px 2px;';
+      toolbar.innerHTML = `
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-muted font-medium">
+            Records: <strong class="table-record-count text-blue">${allRowData.length}</strong>
+          </span>
+          <span class="text-xs filter-tag" style="display:none; color: var(--accent-amber); font-weight: 600;">(filtered)</span>
+        </div>
+        <div class="flex items-center" style="position: relative; max-width: 320px; width: 100%;">
+          <span style="position: absolute; left: 10px; top: 50%; transform: translateY(-50%); font-size: 13px; color: var(--text-muted); pointer-events: none;">🔍</span>
+          <input type="text" class="form-control form-control-sm report-table-search" placeholder="Instant filter in table..." style="padding-left: 30px; padding-right: 26px; font-size: 12px; height: 32px; border-radius: 6px; width: 100%;">
+          <button type="button" class="btn btn-ghost btn-xs clear-search-btn" title="Clear filter" style="display:none; position: absolute; right: 4px; top: 50%; transform: translateY(-50%); padding: 2px 6px; font-size: 11px; color: var(--text-muted);">✕</button>
+        </div>
+      `;
+      tableWrap.before(toolbar);
+
+      // Create Pagination Bar
       const paginator = document.createElement('div');
       paginator.className = 'report-pagination flex justify-between items-center p-4 no-print';
       paginator.style.cssText = 'border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover); border-radius: 0 0 var(--radius-md) var(--radius-md); margin-bottom: 16px;';
-      
       tableWrap.after(paginator);
-      
-      const updateTable = () => {
+
+      function parseSortVal(str) {
+        if (!str || str === '—' || str === '-') return -Infinity;
+        const clean = String(str).replace(/[₹$,\s]/g, '');
+        if (clean.endsWith('%')) {
+          const num = parseFloat(clean.slice(0, -1));
+          if (!isNaN(num)) return num;
+        }
+        const num = parseFloat(clean);
+        if (!isNaN(num) && /^-?\d+(\.\d+)?$/.test(clean)) {
+          return num;
+        }
+        if (/^\d{4}-\d{2}-\d{2}/.test(str)) {
+          const ts = new Date(str).getTime();
+          if (!isNaN(ts)) return ts;
+        }
+        return String(str).toLowerCase();
+      }
+
+      function applySort() {
+        if (sortCol < 0 || sortDir === 'none') {
+          filteredData.sort((a, b) => a.idx - b.idx);
+          return;
+        }
+        filteredData.sort((a, b) => {
+          const va = parseSortVal(a.cells[sortCol]);
+          const vb = parseSortVal(b.cells[sortCol]);
+          let cmp = 0;
+          if (typeof va === 'number' && typeof vb === 'number') {
+            cmp = va - vb;
+          } else {
+            cmp = String(va).localeCompare(String(vb));
+          }
+          return sortDir === 'asc' ? cmp : -cmp;
+        });
+      }
+
+      // Setup interactive clickable headers
+      const thElements = Array.from(table.querySelectorAll('thead th'));
+      thElements.forEach((th, cIdx) => {
+        th.style.cursor = 'pointer';
+        th.style.userSelect = 'none';
+        th.title = 'Click to sort';
+
+        const indicator = document.createElement('span');
+        indicator.className = 'sort-indicator';
+        indicator.style.cssText = 'margin-left: 6px; font-size: 10px; opacity: 0.35; font-weight: normal;';
+        indicator.textContent = '⇅';
+        th.appendChild(indicator);
+
+        th.addEventListener('click', () => {
+          if (sortCol === cIdx) {
+            sortDir = sortDir === 'asc' ? 'desc' : (sortDir === 'desc' ? 'none' : 'asc');
+          } else {
+            sortCol = cIdx;
+            sortDir = 'asc';
+          }
+
+          thElements.forEach((h, i) => {
+            const ind = h.querySelector('.sort-indicator');
+            if (!ind) return;
+            if (i === sortCol) {
+              if (sortDir === 'asc') {
+                ind.textContent = '▲';
+                ind.style.opacity = '1';
+                ind.style.color = 'var(--primary)';
+              } else if (sortDir === 'desc') {
+                ind.textContent = '▼';
+                ind.style.opacity = '1';
+                ind.style.color = 'var(--primary)';
+              } else {
+                ind.textContent = '⇅';
+                ind.style.opacity = '0.35';
+                ind.style.color = '';
+              }
+            } else {
+              ind.textContent = '⇅';
+              ind.style.opacity = '0.35';
+              ind.style.color = '';
+            }
+          });
+
+          applySort();
+          currentPage = 1;
+          renderTable();
+        });
+      });
+
+      // Filter input listener
+      const searchInput = toolbar.querySelector('.report-table-search');
+      const clearBtn = toolbar.querySelector('.clear-search-btn');
+      const countEl = toolbar.querySelector('.table-record-count');
+      const filterTag = toolbar.querySelector('.filter-tag');
+
+      searchInput?.addEventListener('input', (e) => {
+        currentQuery = (e.target.value || '').trim().toLowerCase();
+        if (clearBtn) clearBtn.style.display = currentQuery ? 'block' : 'none';
+        if (filterTag) filterTag.style.display = currentQuery ? 'inline' : 'none';
+
+        if (!currentQuery) {
+          filteredData = allRowData.slice();
+        } else {
+          filteredData = allRowData.filter(r => r.text.includes(currentQuery));
+        }
+
+        if (countEl) countEl.textContent = filteredData.length;
+        applySort();
+        currentPage = 1;
+        renderTable();
+      });
+
+      clearBtn?.addEventListener('click', () => {
+        if (searchInput) searchInput.value = '';
+        currentQuery = '';
+        clearBtn.style.display = 'none';
+        if (filterTag) filterTag.style.display = 'none';
+        filteredData = allRowData.slice();
+        if (countEl) countEl.textContent = filteredData.length;
+        applySort();
+        currentPage = 1;
+        renderTable();
+      });
+
+      function renderTable() {
+        const totalItems = filteredData.length;
         const isAll = itemsPerPage === 'ALL';
         const totalPages = isAll ? 1 : Math.ceil(totalItems / itemsPerPage) || 1;
         if (currentPage > totalPages) currentPage = totalPages;
         if (currentPage < 1) currentPage = 1;
-        
+
         const startIdx = isAll ? 0 : (currentPage - 1) * itemsPerPage;
         const endIdx = isAll ? totalItems : currentPage * itemsPerPage;
-        
-        tbody.innerHTML = allRows.slice(startIdx, endIdx).join('') + (totalRowHtml || '');
-        
+
+        if (totalItems === 0) {
+          tbody.innerHTML = `<tr><td colspan="${thElements.length || 10}" class="text-center p-6 text-muted" style="padding: 32px 0;">No matching records found for "<strong>${currentQuery}</strong>"</td></tr>`;
+        } else {
+          tbody.innerHTML = filteredData.slice(startIdx, endIdx).map(r => r.html).join('') + (totalRowHtml || '');
+        }
+
+        // Hide pagination controls if total filtered items is <= 50 and using default size
+        if (allRowData.length <= 50 && totalItems <= 50 && itemsPerPage === 50) {
+          paginator.style.display = 'none';
+          return;
+        }
+        paginator.style.display = 'flex';
+
         paginator.innerHTML = `
           <div class="text-sm text-muted">
             Showing <strong>${totalItems === 0 ? 0 : startIdx + 1}</strong> to <strong>${Math.min(endIdx, totalItems)}</strong> of <strong>${totalItems}</strong> entries
@@ -6055,18 +6407,18 @@ const ReportsModule = (() => {
             </div>
           </div>
         `;
-        
+
         paginator.querySelector('.prev-btn')?.addEventListener('click', () => {
           if (currentPage > 1) {
             currentPage--;
-            updateTable();
+            renderTable();
             table.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
           }
         });
         paginator.querySelector('.next-btn')?.addEventListener('click', () => {
           if (currentPage < totalPages) {
             currentPage++;
-            updateTable();
+            renderTable();
             table.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
           }
         });
@@ -6075,12 +6427,12 @@ const ReportsModule = (() => {
             const sz = btn.getAttribute('data-size');
             itemsPerPage = sz === 'ALL' ? 'ALL' : parseInt(sz, 10);
             currentPage = 1;
-            updateTable();
+            renderTable();
           });
         });
-      };
-      
-      updateTable();
+      }
+
+      renderTable();
     });
   }
 
@@ -6419,6 +6771,7 @@ const ReportsModule = (() => {
 
   window.exportCSV = exportCSV;
   window.exportExcel = exportExcel;
+  window.applyDatePreset = applyDatePreset;
 
-  return { render, filterAging, showPartBatches, closePartBatches, openDefectiveBatchesModal, filterDefectiveModalBatches, openDailySummaryBatchesModal, filterDailySummaryModalBatches, exportCSV, exportExcel };
+  return { render, filterAging, showPartBatches, closePartBatches, openDefectiveBatchesModal, filterDefectiveModalBatches, openDailySummaryBatchesModal, filterDailySummaryModalBatches, exportCSV, exportExcel, applyDatePreset };
 })();

@@ -15,6 +15,7 @@ const MasterModule = (() => {
         <div class="flex items-center justify-between mb-6">
           <div><h2 class="font-bold" style="font-size:20px;">Inventory Master</h2><p class="text-sm text-muted mt-1">Manage Part Numbers, Technical Specifications, and Pricing</p></div>
           <div class="flex gap-2">
+            <button class="btn btn-ghost" id="master-sync-btn" onclick="MasterModule.syncOnline()" title="Refresh and sync data from Online DB">🔄 Sync Online DB</button>
             <button class="btn btn-secondary" onclick="MasterModule.openBulk()">📥 Bulk Upload</button>
             <button class="btn btn-primary" onclick="MasterModule.openAdd()">+ Add Part</button>
           </div>
@@ -157,7 +158,7 @@ const MasterModule = (() => {
           </div>
           <div class="modal-footer">
             <button class="btn btn-secondary" onclick="document.getElementById('master-modal').classList.add('hidden')">Cancel</button>
-            <button class="btn btn-primary" onclick="MasterModule.save()">Save Part</button>
+            <button class="btn btn-primary" id="master-save-btn" onclick="MasterModule.save()">Save Part</button>
           </div>
         </div>
       </div>
@@ -165,6 +166,14 @@ const MasterModule = (() => {
       ${bulkModal()}`;
     renderStats();
     renderTable();
+
+    // Verify latest master data from cloud
+    if (typeof DB !== 'undefined' && typeof DB.ensureModuleLoaded === 'function') {
+      DB.ensureModuleLoaded('master', true).then(() => {
+        renderStats();
+        renderTable();
+      }).catch(console.warn);
+    }
   }
 
   function renderStats() {
@@ -380,7 +389,10 @@ const MasterModule = (() => {
     document.getElementById('master-modal').classList.remove('hidden');
   }
 
-  function save() {
+  async function save() {
+    const saveBtn = document.getElementById('master-save-btn');
+    const origText = saveBtn ? saveBtn.innerHTML : 'Save Part';
+
     const id = document.getElementById('master-edit-id').value;
     const partNo = document.getElementById('master-partno').value.trim();
     const jmrefNo = document.getElementById('master-jmref').value.trim();
@@ -388,14 +400,26 @@ const MasterModule = (() => {
     
     const tenDigitNo = document.getElementById('master-tendigit').value.trim();
     const compoundCode = document.getElementById('master-compound').value.trim();
-    const salePrice = document.getElementById('master-saleprice').value !== '' ? parseFloat(document.getElementById('master-saleprice').value) : null;
-    const timeMinutes = document.getElementById('master-time').value !== '' ? parseFloat(document.getElementById('master-time').value) : null;
-    const temperature = document.getElementById('master-temp').value !== '' ? parseFloat(document.getElementById('master-temp').value) : null;
-    const pressure = document.getElementById('master-pressure').value !== '' ? parseFloat(document.getElementById('master-pressure').value) : null;
-    const sheetThickness = document.getElementById('master-thickness').value !== '' ? parseFloat(document.getElementById('master-thickness').value) : null;
-    const blankLength = document.getElementById('master-length').value !== '' ? parseFloat(document.getElementById('master-length').value) : null;
-    const blankWeight = document.getElementById('master-weight').value !== '' ? parseFloat(document.getElementById('master-weight').value) : null;
-    const averageTargetInventory = document.getElementById('master-avgtarget').value !== '' ? parseInt(document.getElementById('master-avgtarget').value, 10) : null;
+
+    const parseNum = (v) => {
+      if (v === '' || v === null || v === undefined) return null;
+      const n = parseFloat(v);
+      return isNaN(n) ? null : n;
+    };
+    const parseIntNum = (v) => {
+      if (v === '' || v === null || v === undefined) return null;
+      const n = parseInt(v, 10);
+      return isNaN(n) ? null : n;
+    };
+
+    const salePrice = parseNum(document.getElementById('master-saleprice').value);
+    const timeMinutes = parseNum(document.getElementById('master-time').value);
+    const temperature = parseNum(document.getElementById('master-temp').value);
+    const pressure = parseNum(document.getElementById('master-pressure').value);
+    const sheetThickness = parseNum(document.getElementById('master-thickness').value);
+    const blankLength = parseNum(document.getElementById('master-length').value);
+    const blankWeight = parseNum(document.getElementById('master-weight').value);
+    const averageTargetInventory = parseIntNum(document.getElementById('master-avgtarget').value);
     const quickMovementEnabled = document.getElementById('master-quick-enable')?.checked || false;
 
     if (!partNo || !jmrefNo || !description) { showToast('Part No, JMREF No, and Description are required', 'error'); return; }
@@ -404,12 +428,14 @@ const MasterModule = (() => {
     const mouldRows = Array.from(document.querySelectorAll('.mould-row'));
     const moulds = mouldRows.map(row => {
       const cavitiesInput = row.querySelector('.mould-cavities')?.value.trim();
+      const mNoRaw = row.querySelector('.mould-no')?.value;
+      const mNo = parseIntNum(mNoRaw);
       return {
-        mouldNo: parseInt(row.querySelector('.mould-no').value, 10),
-        mouldType: row.querySelector('.mould-type').value,
-        cavities: cavitiesInput ? parseInt(cavitiesInput, 10) : null,
-        processFlow: row.querySelector('.mould-flow').value.trim(),
-        firstProcess: row.querySelector('.mould-first-process').value
+        mouldNo: mNo || 1,
+        mouldType: row.querySelector('.mould-type')?.value || 'Yet to be assigned',
+        cavities: parseIntNum(cavitiesInput),
+        processFlow: row.querySelector('.mould-flow')?.value.trim() || 'Cryogenic',
+        firstProcess: row.querySelector('.mould-first-process')?.value || 'Cryogenic'
       };
     });
 
@@ -440,24 +466,58 @@ const MasterModule = (() => {
       moulds
     };
 
-    if (id) { 
-      DB.Master.update(id, fields); 
-      showToast('Part updated', 'success'); 
-    } else { 
-      DB.Master.insert(fields); 
-      showToast('Part added', 'success'); 
+    if (saveBtn) {
+      saveBtn.disabled = true;
+      saveBtn.innerHTML = '⏳ Syncing Online...';
     }
-    document.getElementById('master-modal').classList.add('hidden');
-    renderStats(); renderTable();
+
+    try {
+      if (id) { 
+        if (typeof DB.Master.updateAsync === 'function') {
+          await DB.Master.updateAsync(id, fields);
+        } else {
+          DB.Master.update(id, fields);
+        }
+        showToast('Part updated and synced with Online DB ✅', 'success'); 
+      } else { 
+        if (typeof DB.Master.insertAsync === 'function') {
+          await DB.Master.insertAsync(fields);
+        } else {
+          DB.Master.insert(fields);
+        }
+        showToast('Part added and synced with Online DB ✅', 'success'); 
+      }
+      document.getElementById('master-modal').classList.add('hidden');
+      renderStats();
+      renderTable();
+    } catch (err) {
+      console.error("[Master] Cloud sync error:", err);
+      showToast('Failed to sync part to Online DB: ' + err.message, 'error');
+    } finally {
+      if (saveBtn) {
+        saveBtn.disabled = false;
+        saveBtn.innerHTML = origText;
+      }
+    }
   }
 
-  function remove(id) {
+  async function remove(id) {
     const inUse = DB.Batches.all().some(b => b.partId === id);
     if (inUse) { showToast('Cannot delete - this part is used in batches', 'error'); return; }
     if (!confirm('Delete this part? This cannot be undone.')) return;
-    DB.Master.remove(id);
-    showToast('Part deleted', 'success');
-    renderStats(); renderTable();
+    try {
+      if (typeof DB.Master.removeAsync === 'function') {
+        await DB.Master.removeAsync(id);
+      } else {
+        DB.Master.remove(id);
+      }
+      showToast('Part deleted from Online DB ✅', 'success');
+      renderStats();
+      renderTable();
+    } catch (err) {
+      console.error("[Master] Delete error:", err);
+      showToast('Failed to delete from Online DB: ' + err.message, 'error');
+    }
   }
 
   // ── Excel Bulk Upload Implementation ───────────────────────
@@ -798,7 +858,7 @@ const MasterModule = (() => {
     async function doUpload() {
       for (let i = 0; i < total; i += chunkSize) {
         const chunk = validRows.slice(i, i + chunkSize);
-        chunk.forEach(row => {
+        for (const row of chunk) {
           const fields = { ...row };
           delete fields.isValid;
           
@@ -811,14 +871,22 @@ const MasterModule = (() => {
               if (fields.moulds && fields.moulds.length > 0) {
                 merged.moulds = fields.moulds;
               }
-              DB.Master.update(existingId, merged);
+              if (typeof DB.Master.updateAsync === 'function') {
+                await DB.Master.updateAsync(existingId, merged);
+              } else {
+                DB.Master.update(existingId, merged);
+              }
               updatedCount++;
             }
           } else {
-            DB.Master.insert(fields);
+            if (typeof DB.Master.insertAsync === 'function') {
+              await DB.Master.insertAsync(fields);
+            } else {
+              DB.Master.insert(fields);
+            }
             uploadedCount++;
           }
-        });
+        }
 
         const percent = Math.round(((i + chunk.length) / total) * 100);
         const progressText = document.getElementById('upload-progress-text');
@@ -851,6 +919,9 @@ const MasterModule = (() => {
         if (input) input.value = '';
         
         window.preventAutoRefresh = false;
+        if (typeof DB !== 'undefined' && typeof DB.notifyMasterSync === 'function') {
+          DB.notifyMasterSync().catch(console.warn);
+        }
         renderStats();
         renderTable();
       }, 1000);
@@ -1153,7 +1224,7 @@ const MasterModule = (() => {
     });
   }
 
-  function saveQuickMoveConfig() {
+  async function saveQuickMoveConfig() {
     const partId = document.getElementById('qm-config-part-id').value;
     if (!partId) return;
 
@@ -1182,14 +1253,58 @@ const MasterModule = (() => {
     const hasAnyEnabled = Object.values(mouldConfigsCache).some(c => c.enabled);
     p.quickMovementEnabled = hasAnyEnabled;
 
-    DB.Master.update(partId, p);
-
-    document.getElementById('master-quick-move-config-modal').classList.add('hidden');
-    showToast(`Mould-wise Quick Movement Configuration saved successfully!`, 'success');
-    renderTable();
+    try {
+      if (typeof DB.Master.updateAsync === 'function') {
+        await DB.Master.updateAsync(partId, p);
+      } else {
+        DB.Master.update(partId, p);
+      }
+      document.getElementById('master-quick-move-config-modal').classList.add('hidden');
+      showToast(`Mould-wise Quick Movement Configuration saved & synced! ✅`, 'success');
+      renderTable();
+    } catch (err) {
+      console.error("[Master] Quick move config save error:", err);
+      showToast('Failed to sync Quick Movement Configuration to Online DB: ' + err.message, 'error');
+    }
   }
 
-  return { render, search, openAdd, openEdit, save, remove, openBulk, downloadTemplate, handleFileSelect, saveBulk, addMouldRow, removeMouldRow, handleUpdateCheckboxChange, changePage, openQuickMoveConfig, saveQuickMoveConfig, moveStageRow, switchQuickMoveMouldTab };
+  async function syncOnline() {
+    const btn = document.getElementById('master-sync-btn');
+    const origHtml = btn ? btn.innerHTML : '🔄 Sync Online DB';
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '⏳ Syncing...';
+    }
+    showToast('Syncing Inventory Master with Online DB...', 'info');
+    try {
+      if (typeof DB !== 'undefined') {
+        if (typeof DB.refreshMasterData === 'function') {
+          await DB.refreshMasterData();
+        }
+        if (typeof DB.ensureModuleLoaded === 'function') {
+          await DB.ensureModuleLoaded('master', true);
+        }
+      }
+      searchTerm = '';
+      currentPage = 1;
+      const searchInput = document.getElementById('master-search');
+      if (searchInput) searchInput.value = '';
+      renderStats();
+      renderTable();
+      const count = (DB.Master ? DB.Master.all().length : 0);
+      showToast(`Inventory Master synced successfully! (${count} parts available) ✅`, 'success');
+    } catch (e) {
+      console.error(e);
+      showToast('Failed to sync with Online DB: ' + e.message, 'error');
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+      }
+    }
+  }
+
+  return { render, search, openAdd, openEdit, save, remove, openBulk, downloadTemplate, handleFileSelect, saveBulk, addMouldRow, removeMouldRow, handleUpdateCheckboxChange, changePage, openQuickMoveConfig, saveQuickMoveConfig, moveStageRow, switchQuickMoveMouldTab, syncOnline };
 })();
 
 // ── Global Quick Movement Execution Handler ─────────────────

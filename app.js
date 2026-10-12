@@ -870,7 +870,22 @@ const App = (() => {
     // Update active screen when cloud database changes arrive
     let dataChangeTimer = null;
     DB.onDataChange((table) => {
-      if (['batches', 'stageRecords', 'master', 'lossTracker', 'recheckTracker', 'sales'].includes(table)) {
+      if (table === 'master') {
+        if (dataChangeTimer) clearTimeout(dataChangeTimer);
+        dataChangeTimer = setTimeout(() => {
+          if (currentModule === 'master') {
+            if (typeof MasterModule !== 'undefined') {
+              if (typeof MasterModule.renderStats === 'function') MasterModule.renderStats();
+              if (typeof MasterModule.renderTable === 'function') MasterModule.renderTable();
+            }
+          } else if (currentModule === 'dashboard') {
+            const activeModal = document.querySelector('.modal-overlay:not(.hidden)');
+            if (!activeModal && typeof renderDashboard === 'function') {
+              renderDashboard();
+            }
+          }
+        }, 200);
+      } else if (['batches', 'stageRecords', 'lossTracker', 'recheckTracker', 'sales'].includes(table)) {
         if (dataChangeTimer) clearTimeout(dataChangeTimer);
         dataChangeTimer = setTimeout(() => {
           if (currentModule === 'dashboard') {
@@ -2557,7 +2572,7 @@ function showAppShell(session) {
               <h2 style="font-size:10.5px; font-weight:800; margin:0; line-height:1.2; white-space:nowrap; text-align:center; letter-spacing:-0.2px;">
                 <span style="color:var(--jmpl-green, #1b7a43);">Janani Mouldings</span> <span style="color:#f97316; font-weight:700;">Private Limited</span>
               </h2>
-              <div style="display:flex; align-items:center; justify-content:center; gap:5px; margin-top:6px; cursor:pointer; padding:2px 8px; border-radius:12px; background:rgba(0,0,0,0.04);" onclick="if(typeof DB !== 'undefined' && DB.reconnect) DB.reconnect();" title="Click to refresh database connection">
+              <div style="display:flex; align-items:center; justify-content:center; gap:5px; margin-top:6px; cursor:pointer; padding:2px 8px; border-radius:12px; background:rgba(0,0,0,0.04);" onclick="if(typeof DB !== 'undefined' && DB.reconnect) DB.reconnect();" title="Online DB Connected (Click to sync & refresh master catalogue)">
                 <span id="sync-status-dot" style="width:8px; height:8px; border-radius:50%; background:#10b981; display:inline-block; transition:background 0.3s ease;"></span>
                 <span id="sync-status-text" style="font-size:10px; color:#10b981; font-weight:700; letter-spacing:0.3px; transition:color 0.3s ease;">SYNCED</span>
               </div>
@@ -2603,7 +2618,7 @@ function showAppShell(session) {
             </div>
           </div>
 
-          <div id="top-cloud-status-badge" style="display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:50%; background:rgba(16,185,129,0.12); border:1px solid rgba(16,185,129,0.3); cursor:pointer; transition:all 0.3s ease; margin-right:8px;" onclick="if(typeof DB !== 'undefined' && DB.reconnect) DB.reconnect();" title="Cloud Online (Click to test/refresh)">
+          <div id="top-cloud-status-badge" style="display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:50%; background:rgba(16,185,129,0.12); border:1px solid rgba(16,185,129,0.3); cursor:pointer; transition:all 0.3s ease; margin-right:8px;" onclick="if(typeof DB !== 'undefined' && DB.reconnect) DB.reconnect();" title="Online DB Connected (Click to sync & refresh master catalogue)">
             <span id="top-cloud-dot" style="width:10px; height:10px; border-radius:50%; background:#10b981; display:inline-block; transition:all 0.3s ease;"></span>
           </div>
           <span class="top-badge" id="top-badge-date">${new Date().toLocaleDateString('en-IN', {weekday:'short',day:'numeric',month:'short',year:'numeric'})}</span>

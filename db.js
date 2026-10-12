@@ -60,10 +60,19 @@ const DB = (() => {
     if (!_connectionHealthy) {
       return false;
     }
-    if (isInitialized && !db) {
+    if (!db) {
       return false;
     }
     return true;
+  }
+
+  async function waitForDb(maxWaitMs = 6000) {
+    if (db) return db;
+    const start = Date.now();
+    while (!db && (Date.now() - start < maxWaitMs)) {
+      await new Promise(r => setTimeout(r, 100));
+    }
+    return db;
   }
 
   function assertOnline(actionName = 'perform operation') {
@@ -83,7 +92,7 @@ const DB = (() => {
     _connectionHealthy = false;
     triggerSyncStateChange('connection', true);
     if (!silent && typeof showToast === 'function') {
-      showToast('Refreshing cloud connection...', 'info');
+      showToast('Syncing with Online DB...', 'info');
     }
     try {
       await db.disableNetwork();
@@ -91,14 +100,20 @@ const DB = (() => {
       await db.enableNetwork();
       _connectionHealthy = true;
       triggerSyncStateChange('connection', false);
+      // Force refresh master reference data on explicit reconnect/sync
+      await refreshMasterData();
       if (!silent && typeof showToast === 'function') {
-        showToast('Database connection active ✅', 'success');
+        const count = cache.master ? cache.master.length : 0;
+        showToast(`Online DB synced successfully! (${count} parts loaded) ✅`, 'success');
       }
-      console.log("[DB] Cloud Firestore connection refreshed successfully.");
+      console.log(`[DB] Cloud Firestore connection and Master data synced successfully (${cache.master?.length} parts).`);
     } catch (err) {
       console.warn("[DB] Reconnect error:", err);
       _connectionHealthy = false;
       triggerSyncStateChange('connection', true);
+      if (!silent && typeof showToast === 'function') {
+        showToast('Online sync warning: ' + err.message, 'warning');
+      }
     } finally {
       _isReconnecting = false;
     }
@@ -393,18 +408,22 @@ const DB = (() => {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
   }
 
-  // Smart Master Data Caching: TTL 12 hours. Prevents thousands of unnecessary Firestore reads on page reloads.
+  // Smart Master Data Caching with Cross-Device Cloud Sync
   async function syncMasterDataIfStale(force = false) {
     if (!db) return;
     const now = Date.now();
-    const lastSync = localStorage.getItem('jmpl_master_cache_time');
-    if (!force && lastSync && (now - Number(lastSync) < 12 * 60 * 60 * 1000) && cache.master && cache.master.length > 0) {
-      console.log("[DB] Master reference data served from local cache (0 DB reads).");
+    const lastSync = Number(localStorage.getItem('jmpl_master_cache_time') || 0);
+    const localCount = (cache.master || []).length;
+
+    // Check if we can safely serve from local cache:
+    // Only skip network if not forced, synced recently (under 4 hours), and we have the full catalogue (>= 303 items)
+    if (!force && lastSync && (now - lastSync < 4 * 60 * 60 * 1000) && localCount >= 303) {
+      console.log(`[DB] Master reference data served from local cache (${localCount} parts, 0 DB reads).`);
       return;
     }
 
     try {
-      console.log("[DB] Syncing master reference data from cloud Firestore...");
+      console.log(`[DB] Syncing master reference data from cloud Firestore (local: ${localCount} parts)...`);
       const masterTables = ['master', 'vendors', 'subcontractors', 'operators', 'inspectors', 'users', 'moulds'];
       const results = await Promise.all(masterTables.map(t => db.collection(t).get().catch(err => {
         console.warn(`[DB] Master fetch error on ${t}:`, err);
@@ -417,10 +436,12 @@ const DB = (() => {
           cache[t] = snap.docs.map(d => ({ id: d.id, ...d.data() }));
           rebuildIndexesForTable(t);
           saveLocal(t);
+          triggerDataChange(t);
         }
       });
-      localStorage.setItem('jmpl_master_cache_time', String(now));
-      console.log("[DB] Master reference data cached successfully.");
+      const syncTimestamp = Date.now();
+      localStorage.setItem('jmpl_master_cache_time', String(syncTimestamp));
+      console.log(`[DB] Master reference data cached successfully (${(cache.master || []).length} parts).`);
     } catch(err) {
       console.warn("[DB] Master data sync warning:", err);
     }
@@ -431,6 +452,27 @@ const DB = (() => {
     return syncMasterDataIfStale(true);
   }
 
+  // Broadcasts a lightweight master sync event to all connected machines (< 1KB)
+  async function notifyMasterSync() {
+    if (!db) return;
+    try {
+      const now = Date.now();
+      localStorage.setItem('jmpl_master_cache_time', String(now));
+      const user = (typeof Auth !== 'undefined' && Auth.getSession()) ? Auth.getSession().username : 'system';
+      const parts = cache.master || [];
+      const lastPart = parts.length > 0 ? (parts[parts.length - 1].partNo || parts[parts.length - 1].jmrefNo || '') : '';
+      await db.collection('metadata').doc('master_sync').set({
+        updatedAt: now,
+        count: parts.length,
+        lastPart: String(lastPart),
+        updatedBy: user
+      }, { merge: true });
+      console.log(`[DB] Master sync notification published to cloud (${parts.length} parts).`);
+    } catch(err) {
+      console.warn("[DB] Failed to notify master sync:", err);
+    }
+  }
+
   // On-Demand Module Loader: Loads heavy and module-specific collections strictly when needed.
   const _loadedModules = new Set();
   async function ensureModuleLoaded(moduleId, force = false) {
@@ -439,7 +481,32 @@ const DB = (() => {
     if (_loadedModules.has(moduleId)) return;
 
     try {
-      if (moduleId === 'mould-tracking') {
+      if (moduleId === 'master') {
+        _loadedModules.add(moduleId);
+        const [mSnap, mouldsSnap] = await Promise.all([
+          db.collection('master').get().catch(err => {
+            console.warn("[DB] Master fetch error on ensureModuleLoaded:", err);
+            return null;
+          }),
+          db.collection('moulds').get().catch(err => {
+            console.warn("[DB] Moulds fetch error on ensureModuleLoaded:", err);
+            return null;
+          })
+        ]);
+        if (mSnap && mSnap.docs && mSnap.docs.length > 0) {
+          cache.master = mSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+          rebuildIndexesForTable('master');
+          saveLocal('master');
+          triggerDataChange('master');
+        }
+        if (mouldsSnap && mouldsSnap.docs && mouldsSnap.docs.length > 0) {
+          cache.moulds = mouldsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+          rebuildIndexesForTable('moulds');
+          saveLocal('moulds');
+          triggerDataChange('moulds');
+        }
+        localStorage.setItem('jmpl_master_cache_time', String(Date.now()));
+      } else if (moduleId === 'mould-tracking') {
         _loadedModules.add(moduleId);
         const [mSnap, mmSnap, mmtSnap] = await Promise.all([
           db.collection('moulds').get().catch(() => null),
@@ -613,7 +680,27 @@ const DB = (() => {
       d14.setDate(d14.getDate() - 14);
       const cutoff14 = d14.toISOString().slice(0, 10);
 
-      // Refresh master data if local cache is empty or older than 12 hours (0 DB reads on fresh reload)
+      // Real-time Master Reference Data Sync: Watches a single lightweight metadata doc (1 read).
+      // Automatically refreshes parts catalogue when any other machine/admin modifies products.
+      try {
+        db.collection('metadata').doc('master_sync').onSnapshot(snap => {
+          if (!snap.exists) return;
+          const data = snap.data();
+          const remoteTime = Number(data?.updatedAt || 0);
+          const localTime = Number(localStorage.getItem('jmpl_master_cache_time') || 0);
+          const localCount = (cache.master || []).length;
+          const remoteCount = Number(data?.count || 0);
+
+          if (remoteTime > localTime || (remoteCount > 0 && Math.abs(remoteCount - localCount) > 0)) {
+            console.log(`[DB] Realtime master sync triggered from cloud (remote: ${remoteCount}, local: ${localCount}). Syncing...`);
+            refreshMasterData().catch(console.warn);
+          }
+        }, err => console.warn("[DB] Master metadata sync listener warning:", err));
+      } catch(e) {
+        console.warn("[DB] Setup master sync listener failed:", e);
+      }
+
+      // Refresh master data if local cache is empty or older than TTL or missing recent parts
       syncMasterDataIfStale();
 
       CORE_REALTIME_TABLES.forEach(table => {
@@ -1318,7 +1405,10 @@ const DB = (() => {
   }
 
   function sanitizeFirestoreDoc(obj) {
-    if (!obj || typeof obj !== 'object') return obj;
+    if (!obj || typeof obj !== 'object') {
+      if (typeof obj === 'number' && isNaN(obj)) return null;
+      return obj;
+    }
     if (Array.isArray(obj)) {
       return obj.map(item => sanitizeFirestoreDoc(item));
     }
@@ -1326,6 +1416,8 @@ const DB = (() => {
     for (const key of Object.keys(obj)) {
       const val = obj[key];
       if (val === undefined) {
+        clean[key] = null;
+      } else if (typeof val === 'number' && isNaN(val)) {
         clean[key] = null;
       } else if (val !== null && typeof val === 'object' && !(val instanceof Date)) {
         clean[key] = sanitizeFirestoreDoc(val);
@@ -1342,25 +1434,29 @@ const DB = (() => {
     triggerSyncStateChange(table, true);
 
     const executeOp = () => {
-      if (operation === 'delete') {
-        return db.collection(table).doc(id).delete();
-      }
-      let payload = docData;
-      if (!payload && operation === 'set' && cache[table]) {
-        const latest = cache[table].find(r => r && r.id === id);
-        if (latest) {
-          payload = latest;
+      try {
+        if (operation === 'delete') {
+          return db.collection(table).doc(id).delete();
         }
+        let payload = docData;
+        if (!payload && operation === 'set' && cache[table]) {
+          const latest = cache[table].find(r => r && r.id === id);
+          if (latest) {
+            payload = latest;
+          }
+        }
+        if (payload) {
+          payload = sanitizeFirestoreDoc({ ...payload });
+          delete payload.id;
+        }
+        return db.collection(table).doc(id).set(payload || {}, { merge: true });
+      } catch (err) {
+        return Promise.reject(err);
       }
-      if (payload) {
-        payload = sanitizeFirestoreDoc({ ...payload });
-        delete payload.id;
-      }
-      return db.collection(table).doc(id).set(payload || {}, { merge: true });
     };
 
     let opFinished = false;
-    const opPromise = executeOp().then(() => {
+    const opPromise = Promise.resolve().then(() => executeOp()).then(() => {
       opFinished = true;
       _connectionHealthy = true;
       triggerSyncStateChange(table, false);
@@ -1382,6 +1478,7 @@ const DB = (() => {
         triggerSyncStateChange(table, false);
       }).catch(retryErr => {
         console.warn(`[DB] Cloud sync background queue on ${table}/${id}:`, retryErr.message);
+        throw retryErr;
       });
     });
   }
@@ -1502,6 +1599,9 @@ const DB = (() => {
   }
 
   async function insertAsync(table, record) {
+    if (!db && typeof navigator !== 'undefined' && navigator.onLine !== false && !isInitialized) {
+      await waitForDb(6000);
+    }
     assertOnline('insert into ' + table);
 
     const id = record.id || genId();
@@ -1545,6 +1645,9 @@ const DB = (() => {
   }
 
   async function updateAsync(table, id, changes) {
+    if (!db && typeof navigator !== 'undefined' && navigator.onLine !== false && !isInitialized) {
+      await waitForDb(6000);
+    }
     assertOnline('update ' + table);
 
     const index = cache[table].findIndex(r => r.id === id);
@@ -1585,6 +1688,9 @@ const DB = (() => {
   }
 
   async function removeAsync(table, id) {
+    if (!db && typeof navigator !== 'undefined' && navigator.onLine !== false && !isInitialized) {
+      await waitForDb(6000);
+    }
     assertOnline('delete from ' + table);
 
     const prevItem = cache[table].find(r => r.id === id);
@@ -1729,6 +1835,41 @@ const DB = (() => {
     });
   }
 
+  async function syncMouldsForPartAsync(part) {
+    if (!part || !part.jmrefNo || !part.moulds || !part.moulds.length) return;
+    const existingMoulds = getAll('moulds');
+    for (const m of part.moulds) {
+      const mouldNo = Number(m.mouldNo);
+      if (isNaN(mouldNo)) continue;
+      const mouldType = m.mouldType || 'Yet to be assigned';
+      const cavity = m.cavities != null && !isNaN(Number(m.cavities)) ? Number(m.cavities) : null;
+      const mouldId = `${part.jmrefNo}-${mouldType.toUpperCase().replace(/\s+/g, '_')}-${String(mouldNo).padStart(2, '0')}`;
+      const existing = existingMoulds.find(em => em.jmrefNo === part.jmrefNo && Number(em.mouldNo) === mouldNo);
+      
+      const fields = {
+        jmrefNo: part.jmrefNo,
+        mouldNo: mouldNo,
+        mouldType: mouldType,
+        mouldId: mouldId,
+        cavity: cavity,
+        pmThreshold: existing ? (existing.pmThreshold || 10000) : 10000,
+        size: existing ? (existing.size || '300*300') : '300*300',
+        make: existing ? (existing.make || 'JMPL') : 'JMPL',
+        client: existing ? (existing.client || 'JMPL') : 'JMPL',
+        creationDate: existing ? (existing.creationDate || new Date().toISOString().slice(0, 10)) : new Date().toISOString().slice(0, 10),
+        layoutDiagram: existing ? (existing.layoutDiagram || '') : '',
+        rackDetails: existing ? (existing.rackDetails || '') : '',
+        notes: existing ? (existing.notes || '') : ''
+      };
+      
+      if (existing) {
+        await updateAsync('moulds', existing.id, fields);
+      } else {
+        await insertAsync('moulds', fields);
+      }
+    }
+  }
+
   // ── INVENTORY MASTER ──────────────────────────────────────
   const Master = {
     all: () => getAll('master'),
@@ -1744,14 +1885,38 @@ const DB = (() => {
     insert: (r) => {
       const res = insert('master', r);
       syncMouldsForPart(res);
+      notifyMasterSync();
       return res;
     },
     update: (id, c) => {
       const res = update('master', id, c);
       syncMouldsForPart(res);
+      notifyMasterSync();
       return res;
     },
-    remove: (id) => remove('master', id),
+    remove: (id) => {
+      const res = remove('master', id);
+      notifyMasterSync();
+      return res;
+    },
+    insertAsync: async (r) => {
+      const res = await insertAsync('master', r);
+      await syncMouldsForPartAsync(res);
+      await notifyMasterSync();
+      return res;
+    },
+    updateAsync: async (id, c) => {
+      const res = await updateAsync('master', id, c);
+      await syncMouldsForPartAsync(res);
+      await notifyMasterSync();
+      return res;
+    },
+    removeAsync: async (id) => {
+      const res = await removeAsync('master', id);
+      await notifyMasterSync();
+      return res;
+    },
+    notifySync: notifyMasterSync
   };
 
   // ── SUBCONTRACTORS ────────────────────────────────────────
@@ -3406,7 +3571,7 @@ const DB = (() => {
 
   return {
     initLocal, init, reconnect, isConnected: () => _connectionHealthy, isOnline, assertOnline, onSyncStateChange, onDataChange, genId, seedDefaults, clearTable,
-    insertAsync, updateAsync, removeAsync, fetchHistoricalForReport, ensureModuleLoaded, refreshMasterData,
+    insertAsync, updateAsync, removeAsync, fetchHistoricalForReport, ensureModuleLoaded, refreshMasterData, notifyMasterSync,
     Users, Master, Subcontractors, Vendors, Operators, Inspectors,
     Batches, StageRecords, LossTracker, RejectionTracker,
     RecheckTracker, StockUploads, Sales, StoreInventory,
