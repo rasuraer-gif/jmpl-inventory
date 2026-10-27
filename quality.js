@@ -165,6 +165,7 @@ const QualityModule = (() => {
         '<td><span class="badge badge-teal">' + (b.jmrefNo||'&#x2014;') + '</span></td>' +
         '<td class="font-semibold">' + formatNum(inputQty) + '</td>' +
         '<td>' + (recheckCount > 0 ? '<span class="badge badge-amber">' + recheckCount + ' rechecks</span>' : '<span class="badge badge-gray">&#x2014;</span>') + '</td>' +
+        '<td>' + App.getStageAgingChip(b, 'quality') + '</td>' +
         '<td class="text-muted text-sm">' + (b.createdAt||'').slice(0,10) + '</td>' +
         '<td><div class="flex gap-2">' +
         '<button class="btn btn-teal btn-xs" onclick="QualityModule.openPass(\'' + b.id + '\',' + inputQty + ')">Pass to Store</button>' +
@@ -190,9 +191,9 @@ const QualityModule = (() => {
         <div class="table-wrap">
           <table class="data-table">
             <thead>
-              <tr><th><input type="checkbox" onclick="App.toggleAllStageChecks(this)" style="cursor:pointer;"></th><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Input Qty</th><th>Rechecks</th><th>Received</th><th>Actions</th></tr>
+              <tr><th><input type="checkbox" onclick="App.toggleAllStageChecks(this)" style="cursor:pointer;"></th><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Input Qty</th><th>Rechecks</th><th>Stage Aging</th><th>Received</th><th>Actions</th></tr>
             </thead>
-            <tbody>${rows || '<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody>
+            <tbody>${rows || '<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody>
           </table>
         </div>
         ${totalPages > 1 ? `

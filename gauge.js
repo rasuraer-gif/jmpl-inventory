@@ -68,7 +68,7 @@ const GaugeModule = (() => {
 
     const rows = pageItems.map(b => {
       const inputQty = getInputQty(b.id);
-      return '<tr><td><input type="checkbox" class="bulk-stage-check" value="' + b.id + '" style="cursor:pointer;" onclick="event.stopPropagation()"></td><td class="font-semibold text-blue">' + b.batchNo + '</td><td>' + (b.partNo||'&#x2014;') + '</td><td><span class="badge badge-teal">' + (b.jmrefNo||'&#x2014;') + '</span></td><td class="font-semibold">' + formatNum(inputQty) + '</td><td class="text-muted text-sm">' + (b.createdAt||'').slice(0,10) + '</td><td><div class="flex gap-2"><button class="btn btn-primary btn-xs" onclick="GaugeModule.openProcess(\'' + b.id + '\',' + inputQty + ')">Inspect</button><button class="btn btn-danger btn-xs" onclick="GaugeModule.openReject(\'' + b.id + '\')">Reject</button></div></td></tr>';
+      return '<tr><td><input type="checkbox" class="bulk-stage-check" value="' + b.id + '" style="cursor:pointer;" onclick="event.stopPropagation()"></td><td class="font-semibold text-blue">' + b.batchNo + '</td><td>' + (b.partNo||'&#x2014;') + '</td><td><span class="badge badge-teal">' + (b.jmrefNo||'&#x2014;') + '</span></td><td class="font-semibold">' + formatNum(inputQty) + '</td><td>' + App.getStageAgingChip(b, 'gauge') + '</td><td class="text-muted text-sm">' + (b.createdAt||'').slice(0,10) + '</td><td><div class="flex gap-2"><button class="btn btn-primary btn-xs" onclick="GaugeModule.openProcess(\'' + b.id + '\',' + inputQty + ')">Inspect</button><button class="btn btn-danger btn-xs" onclick="GaugeModule.openReject(\'' + b.id + '\')">Reject</button></div></td></tr>';
     }).join('');
     return `
       <div class="card animate-in">
@@ -88,9 +88,9 @@ const GaugeModule = (() => {
         <div class="table-wrap">
           <table class="data-table">
             <thead>
-              <tr><th><input type="checkbox" onclick="App.toggleAllStageChecks(this)" style="cursor:pointer;"></th><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Input Qty</th><th>Received</th><th>Actions</th></tr>
+              <tr><th><input type="checkbox" onclick="App.toggleAllStageChecks(this)" style="cursor:pointer;"></th><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Input Qty</th><th>Stage Aging</th><th>Received</th><th>Actions</th></tr>
             </thead>
-            <tbody>${rows || '<tr><td colspan="7" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody>
+            <tbody>${rows || '<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody>
           </table>
         </div>
         ${totalPages > 1 ? `

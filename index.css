@@ -641,6 +641,61 @@ table.data-table td {
 .stage-chip.quality     { background: rgba(255,71,87,0.1);    color: var(--accent-red); }
 .stage-chip.store       { background: rgba(16,185,129,0.15);  color: var(--accent-green); }
 
+/* ── Stage Aging Chips (Normal, Warning, Stagnant Flashing Alert) ── */
+.stage-aging-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.25;
+  white-space: nowrap;
+  letter-spacing: 0.2px;
+  cursor: help;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.stage-aging-chip:hover {
+  transform: translateY(-1px);
+}
+
+.stage-aging-fresh {
+  background: rgba(16, 185, 129, 0.15);
+  color: #059669;
+  border: 1px solid rgba(16, 185, 129, 0.4);
+}
+
+.stage-aging-warning {
+  background: rgba(245, 158, 11, 0.15);
+  color: #b45309;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+}
+
+.stage-aging-overdue {
+  background: rgba(239, 68, 68, 0.22);
+  color: #dc2626;
+  border: 1.5px solid #ef4444;
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.4);
+  animation: stageAgingPulse 1.6s infinite ease-in-out;
+}
+
+@keyframes stageAgingPulse {
+  0%, 100% {
+    background-color: rgba(239, 68, 68, 0.28);
+    border-color: #ef4444;
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6);
+    color: #dc2626;
+  }
+  50% {
+    background-color: rgba(239, 68, 68, 0.08);
+    border-color: rgba(239, 68, 68, 0.35);
+    box-shadow: 0 0 12px 3px rgba(239, 68, 68, 0.5);
+    color: #b91c1c;
+  }
+}
+
 .status-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 5px; }
 .status-dot.active   { background: var(--accent-amber); }
 .status-dot.completed { background: var(--accent-green); }

@@ -267,7 +267,7 @@ const QuickMovementModule = (() => {
 
               <div class="form-group" style="flex:1;">
                 <label class="form-label">Good Output Qty (pcs) <span class="required">*</span></label>
-                <input type="number" id="quick-output-qty" class="form-control font-bold" style="font-size:16px; color:var(--primary);" placeholder="Enter good output qty" min="0" max="${_inputQty}" oninput="QuickMovementModule.calcLoss()" onkeydown="if(event.key==='Enter'){ QuickMovementModule.processMove(); event.preventDefault(); }">
+                <input type="number" id="quick-output-qty" class="form-control font-bold" style="font-size:16px; color:var(--primary);" placeholder="Enter good output qty" min="0" oninput="QuickMovementModule.calcLoss()" onkeydown="if(event.key==='Enter'){ QuickMovementModule.processMove(); event.preventDefault(); }">
               </div>
             </div>
 
@@ -334,11 +334,18 @@ const QuickMovementModule = (() => {
     const lossPct = _inputQty > 0 ? ((lossQty / _inputQty) * 100).toFixed(1) : 0;
 
     if (lossDisp) {
-      lossDisp.value = `${formatNum(lossQty)} pcs (${lossPct}%)`;
-      if (lossQty > 0) {
-        lossDisp.style.color = 'var(--accent-red,#ef4444)';
+      if (outVal > _inputQty) {
+        const gainQty = outVal - _inputQty;
+        const gainPct = _inputQty > 0 ? ((gainQty / _inputQty) * 100).toFixed(1) : 0;
+        lossDisp.value = `+${formatNum(gainQty)} pcs gain (+${gainPct}%)`;
+        lossDisp.style.color = 'var(--accent-teal,#10b981)';
       } else {
-        lossDisp.style.color = 'var(--text)';
+        lossDisp.value = `${formatNum(lossQty)} pcs (${lossPct}%)`;
+        if (lossQty > 0) {
+          lossDisp.style.color = 'var(--accent-red,#ef4444)';
+        } else {
+          lossDisp.style.color = 'var(--text)';
+        }
       }
     }
 
@@ -369,10 +376,6 @@ const QuickMovementModule = (() => {
     const outVal = parseInt(document.getElementById('quick-output-qty')?.value, 10);
     if (isNaN(outVal) || outVal < 0) {
       showToast('Please enter a valid Output Quantity', 'error');
-      return;
-    }
-    if (outVal > _inputQty) {
-      showToast(`Output Quantity (${outVal}) cannot exceed Input Quantity (${_inputQty})`, 'error');
       return;
     }
 

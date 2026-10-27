@@ -67,7 +67,9 @@ const AdminModule = (() => {
         { key: 'report_sub_performance', label: 'Report: Subcontractor & Vendor Scorecard' },
         { key: 'report_store_aging', label: 'Report: Store FIFO Aging' },
         { key: 'report_daily_summary', label: 'Report: Daily Production & Scrap' },
-        { key: 'report_analytics', label: 'Report: Production & Quality Analytics' }
+        { key: 'report_analytics', label: 'Report: Production & Quality Analytics' },
+        { key: 'report_cryo_deflash_trim', label: 'Report: Cryo, De-Flash & Trim' },
+        { key: 'report_process_leakage', label: 'Report: JMREF Process Leakage' }
       ]
     }
   ];

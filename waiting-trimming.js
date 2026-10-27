@@ -110,6 +110,7 @@ const WaitingTrimmingModule = (() => {
           <td><span class="badge badge-teal">${b.jmrefNo||'—'}</span></td>
           <td>${formatDate(b.productionDate || b.createdAt)}</td>
           <td class="font-semibold">${formatNum(inputQty)}</td>
+          <td>${App.getStageAgingChip(b, 'waiting-trimming', recordMap[b.id])}</td>
           <td>
             <div class="flex gap-1">
               <button class="btn btn-primary btn-xs" onclick="WaitingTrimmingModule.openProcess('${b.id}', ${inputQty})">Process &amp; Dispatch</button>
@@ -133,9 +134,9 @@ const WaitingTrimmingModule = (() => {
         <div class="table-wrap">
           <table class="data-table">
             <thead>
-              <tr><th>Batch</th><th>Part No</th><th>JMREF</th><th>Production Date</th><th>WIP Qty</th><th>Actions</th></tr>
+              <tr><th>Batch</th><th>Part No</th><th>JMREF</th><th>Production Date</th><th>WIP Qty</th><th>Stage Aging</th><th>Actions</th></tr>
             </thead>
-            <tbody>${rows || '<tr><td colspan="6" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody>
+            <tbody>${rows || '<tr><td colspan="7" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody>
           </table>
         </div>
         ${totalPages > 1 ? `

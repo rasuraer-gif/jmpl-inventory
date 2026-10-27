@@ -1564,7 +1564,7 @@ window.QuickMovementHandler = {
           </div>
           <div class="form-group" style="flex:1;">
             <label class="form-label text-xs font-bold" style="color:var(--success);">Output Qty <span class="required">*</span></label>
-            <input type="number" id="qm-exec-output-qty" class="form-control font-bold" value="${currentQty}" min="0" max="${currentQty}" autofocus oninput="QuickMovementHandler.calcLoss()">
+            <input type="number" id="qm-exec-output-qty" class="form-control font-bold" value="${currentQty}" min="0" autofocus oninput="QuickMovementHandler.calcLoss()">
           </div>
         </div>
 
@@ -1619,10 +1619,6 @@ window.QuickMovementHandler = {
 
     if (isNaN(outputQty) || outputQty < 0) {
       showToast('Please enter a valid Output Quantity', 'error');
-      return;
-    }
-    if (outputQty > inputQty) {
-      showToast(`Output Quantity (${outputQty}) cannot exceed Input Quantity (${inputQty})`, 'error');
       return;
     }
 

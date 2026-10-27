@@ -3442,11 +3442,13 @@ const DB = (() => {
       const fetchedBatchIds = new Set();
 
       // 1. Fetch Stage Records if date range is specified or for stage pending/aging reports
-      if (from || to || ['pending-batches', 'aging', 'sub-pending'].includes(reportKey)) {
+      if (from || to || ['pending-batches', 'aging', 'sub-pending', 'process-leakage', 'cryo-deflash-trim'].includes(reportKey)) {
         let qSr = db.collection('stageRecords');
-        const effectiveFrom = from || (['pending-batches', 'aging', 'sub-pending'].includes(reportKey) ? cutoff60 : null);
+        const effectiveFrom = (reportKey === 'process-leakage' || reportKey === 'cryo-deflash-trim')
+          ? (from && from < cutoff60 ? from : cutoff60)
+          : (from || (['pending-batches', 'aging', 'sub-pending'].includes(reportKey) ? cutoff60 : null));
         if (effectiveFrom) qSr = qSr.where('date', '>=', effectiveFrom);
-        if (to) qSr = qSr.where('date', '<=', to);
+        if (to && reportKey !== 'process-leakage') qSr = qSr.where('date', '<=', to);
         promises.push(
           qSr.get().then(snap => {
             const existingMap = idIndex.stageRecords || new Map();
@@ -3563,6 +3565,76 @@ const DB = (() => {
       const missingBatchIds = [...fetchedBatchIds].filter(id => id && !idIndex.batches?.has(id));
       if (missingBatchIds.length > 0 && typeof Batches.fetchByIds === 'function') {
         await Batches.fetchByIds(missingBatchIds);
+      }
+
+      // 4. For process leakage, ensure any completed batches have their full lifecycle stage records
+      if (reportKey === 'process-leakage' && db) {
+        const compBatches = cache.batches.filter(b => (b.status === 'completed' || b.currentStage === 'store') && !String(b.batchNo || '').toUpperCase().includes('STK-ADJ') && !String(b.batchNo || '').toUpperCase().includes('STK_ADJ'));
+        // Find completed batches whose stage trails are incomplete (missing finishing records)
+        const missingStageBatches = compBatches.filter(b => {
+          if (!b || !b.id) return false;
+          const recs = stageRecordsByBatchIndex.get(b.id);
+          if (!recs || recs.length < 3) return true;
+          const hasFinishing = recs.some(r => r.stage === 'visual' || r.movedTo === 'visual' || r.movedFrom === 'visual' || r.stage === 'trimming' || r.inspectorName);
+          return !hasFinishing;
+        }).slice(0, 150);
+
+        const missingBatchIds = [...new Set(missingStageBatches.map(b => b.id).filter(Boolean))];
+        const missingBatchNos = [...new Set(missingStageBatches.map(b => b.batchNo).filter(Boolean))];
+
+        // Also include parentBatchId and parentBatchNo if set on batches
+        missingStageBatches.forEach(b => {
+          if (b.parentBatchId) missingBatchIds.push(b.parentBatchId);
+          if (b.parentBatchNo) missingBatchNos.push(b.parentBatchNo);
+        });
+
+        const srPromises = [];
+
+        // Fetch by batchId chunks
+        for (let i = 0; i < missingBatchIds.length; i += 30) {
+          const chunk = missingBatchIds.slice(i, i + 30);
+          srPromises.push(
+            db.collection('stageRecords').where('batchId', 'in', chunk).get().then(snap => {
+              const existingMap = idIndex.stageRecords || new Map();
+              let chg = false;
+              snap.forEach(doc => {
+                if (!existingMap.has(doc.id)) {
+                  cache.stageRecords.push({ id: doc.id, ...doc.data() });
+                  chg = true;
+                }
+              });
+              if (chg) {
+                rebuildIndexesForTable('stageRecords');
+                saveLocal('stageRecords');
+              }
+            }).catch(e => console.warn('[DB] process-leakage stageRecords chunk fetch error:', e))
+          );
+        }
+
+        // Fetch by batchNo chunks
+        for (let i = 0; i < missingBatchNos.length; i += 30) {
+          const chunk = missingBatchNos.slice(i, i + 30);
+          srPromises.push(
+            db.collection('stageRecords').where('batchNo', 'in', chunk).get().then(snap => {
+              const existingMap = idIndex.stageRecords || new Map();
+              let chg = false;
+              snap.forEach(doc => {
+                if (!existingMap.has(doc.id)) {
+                  cache.stageRecords.push({ id: doc.id, ...doc.data() });
+                  chg = true;
+                }
+              });
+              if (chg) {
+                rebuildIndexesForTable('stageRecords');
+                saveLocal('stageRecords');
+              }
+            }).catch(e => console.warn('[DB] process-leakage stageRecords batchNo chunk error:', e))
+          );
+        }
+
+        if (srPromises.length > 0) {
+          await Promise.all(srPromises);
+        }
       }
     } catch (err) {
       console.warn('[DB] fetchHistoricalForReport error:', err);

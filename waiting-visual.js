@@ -115,6 +115,7 @@ const WaitingVisualModule = (() => {
           <td>${b.partNo||'—'}</td>
           <td><span class="badge badge-teal">${b.jmrefNo||'—'}</span></td>
           <td>${formatDate(b.productionDate || b.createdAt)}</td>
+          <td>${App.getStageAgingChip(b, 'waiting-visual', recordMap[b.id])}</td>
           <td class="font-semibold">${formatNum(inputQty)}</td>
           <td>
             ${b.rackNo ? `
@@ -171,9 +172,9 @@ const WaitingVisualModule = (() => {
         <div class="table-wrap">
           <table class="data-table">
             <thead>
-              <tr><th><input type="checkbox" onclick="App.toggleAllStageChecks(this)" style="cursor:pointer;"></th><th>Batch</th><th>Part No</th><th>JMREF</th><th>Production Date</th><th>WIP Qty</th><th>Rack Location</th><th>Actions</th></tr>
+              <tr><th><input type="checkbox" onclick="App.toggleAllStageChecks(this)" style="cursor:pointer;"></th><th>Batch</th><th>Part No</th><th>JMREF</th><th>Production Date</th><th>Stage Aging</th><th>WIP Qty</th><th>Rack Location</th><th>Actions</th></tr>
             </thead>
-            <tbody>${rows || '<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody>
+            <tbody>${rows || '<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody>
           </table>
         </div>
         ${paginationHtml}

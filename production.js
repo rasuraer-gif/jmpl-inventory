@@ -103,6 +103,7 @@ const ProductionModule = (() => {
           <td>${b.productionType==='subcontractor'?(sub?sub.name:'—'):'—'}</td>
           <td>${op?op.name:(b.operatorName||'—')}</td>
           <td class="font-semibold">${formatNum(b.initialQty)}</td>
+          <td>${App.getStageAgingChip(b, 'production')}</td>
           <td class="text-muted text-sm">${(b.createdAt||'').slice(0,10)}</td>
           <td>
             <div class="flex gap-2">
@@ -129,8 +130,8 @@ const ProductionModule = (() => {
         </div>
         <div class="table-wrap">
           <table class="data-table">
-            <thead><tr><th><input type="checkbox" onclick="ProductionModule.toggleAllActive(this)" style="cursor:pointer;"></th><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Type</th><th>Subcontractor</th><th>Operator</th><th>Initial Qty</th><th>Created</th><th>Actions</th></tr></thead>
-            <tbody>${rows || '<tr><td colspan="10" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody>
+            <thead><tr><th><input type="checkbox" onclick="ProductionModule.toggleAllActive(this)" style="cursor:pointer;"></th><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Type</th><th>Subcontractor</th><th>Operator</th><th>Initial Qty</th><th>Stage Aging</th><th>Created</th><th>Actions</th></tr></thead>
+            <tbody>${rows || '<tr><td colspan="11" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody>
           </table>
         </div>
         ${totalPages > 1 ? `

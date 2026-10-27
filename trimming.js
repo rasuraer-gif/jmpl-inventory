@@ -128,6 +128,7 @@ const TrimmingModule = (() => {
         <td><span class="badge badge-teal">${b.jmrefNo||'—'}</span></td>
         <td>${vendorName}</td>
         <td class="font-semibold">${formatNum(inputQty)}</td>
+        <td>${App.getStageAgingChip(b, 'trimming')}</td>
         <td class="text-muted text-sm">${(b.createdAt||'').slice(0,10)}</td>
         <td>
           <div class="flex gap-2">
@@ -138,7 +139,7 @@ const TrimmingModule = (() => {
       </tr>`;
     }).join('');
 
-    let tbodyHtml = '<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>';
+    let tbodyHtml = '<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>';
     if (filtered.length > 0) {
       tbodyHtml = rows + `
         <tr style="background: rgba(59, 130, 246, 0.05); font-weight: bold; border-top: 2px solid var(--border);">
@@ -148,6 +149,7 @@ const TrimmingModule = (() => {
           <td></td>
           <td></td>
           <td class="text-blue">${formatNum(totalWIP)}</td>
+          <td></td>
           <td></td>
           <td></td>
         </tr>`;
@@ -169,7 +171,7 @@ const TrimmingModule = (() => {
         </div>
       </div>
       </div>
-      <div class="table-wrap"><table class="data-table"><thead><tr><th><input type="checkbox" onclick="App.toggleAllStageChecks(this)" style="cursor:pointer;"></th><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Vendor</th><th>Input Qty</th><th>Received</th><th>Actions</th></tr></thead><tbody>${tbodyHtml}</tbody></table></div>
+      <div class="table-wrap"><table class="data-table"><thead><tr><th><input type="checkbox" onclick="App.toggleAllStageChecks(this)" style="cursor:pointer;"></th><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Vendor</th><th>Input Qty</th><th>Stage Aging</th><th>Received</th><th>Actions</th></tr></thead><tbody>${tbodyHtml}</tbody></table></div>
       ${totalPages > 1 ? `
       <div class="flex justify-between items-center p-4" style="border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover);">
         <div class="text-sm text-muted">

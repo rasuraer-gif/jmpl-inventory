@@ -642,6 +642,8 @@ const NAV = [
   { id:'rpt-analytics', label:'Production & Quality Analytics', icon:'📈', module:'report_analytics', section:'tools', parent:'reports', perm:'report_analytics' },
   { id:'rpt-stock-audit', label:'Stock Audit Discrepancy & Reconciliation', icon:'📊', module:'report_stock_audit', section:'tools', parent:'reports' },
   { id:'rpt-audit-missing', label:'Missing Batches Cross-Session Audit', icon:'🚨', module:'report_audit_missing', section:'tools', parent:'reports' },
+  { id:'rpt-cryo-deflash-trim', label:'Cryo, De-Flash & Trim JMREFs', icon:'❄️', module:'report_cryo_deflash_trim', section:'tools', parent:'reports', perm:'report_cryo_deflash_trim' },
+  { id:'rpt-process-leakage', label:'JMREF Process Leakage & Route Deviation', icon:'🔀', module:'report_process_leakage', section:'tools', parent:'reports', perm:'report_process_leakage' },
 
   { id:'print-batch',  label:'Print Label',        icon:'🖨️', module:'print-batch',  section:'tools', perm:'print-batch' },
   { id:'ai-agent',   label:'AI Assistant',        icon:'🤖', module:'ai-agent',  section:'tools', perm:'ai-agent' },
@@ -719,6 +721,8 @@ const App = (() => {
     report_analytics:  () => ReportsModule?.render('analytics'),
     report_stock_audit:() => ReportsModule?.render('stock-audit'),
     report_audit_missing:() => ReportsModule?.render('audit-missing-batches'),
+    report_cryo_deflash_trim: () => ReportsModule?.render('cryo-deflash-trim'),
+    report_process_leakage: () => ReportsModule?.render('process-leakage'),
     'print-batch':     () => PrintBatchModule?.render(),
   };
 
@@ -770,6 +774,7 @@ const App = (() => {
     report_analytics:'Production & Quality Visual Analytics Dashboard',
     report_stock_audit:'Stock Audit Discrepancy & Reconciliation Report',
     report_audit_missing:'Missing Batches Cross-Session Audit Report',
+    report_cryo_deflash_trim:'Cryo, De-Flash & Trim JMREFs Report',
   };
 
   function navigate(moduleId) {
@@ -1658,9 +1663,9 @@ const App = (() => {
       modal = document.createElement('div');
       modal.className = 'modal-overlay hidden';
       modal.id = 'genealogy-modal-overlay';
-      modal.style.zIndex = '1500';
       document.body.appendChild(modal);
     }
+    modal.style.zIndex = '3000';
 
     // Immediate feedback: loading spinner
     modal.innerHTML = `
@@ -2138,9 +2143,107 @@ const App = (() => {
     }
   });
 
-  return { navigate, init, toggleReportsMenu, openChangePasswordModal, changePassword, runQuickScan, showBatchGenealogy, formatBatchCell, applyBatchTagsToContainer, get current() { return currentModule; }, changeDashboardMonth: (val) => { dashboardMonth = val; renderDashboard(); }, toggleAllStageChecks, bulkPrintStageSelected, onGlobalSearchFocus, onGlobalSearchInput, selectBatchFromSearch, closeGlobalSearch, debounce };
+  // ── Stage Aging Calculation & Visual Chip ─────────────────
+  function getStageAgingChip(b, stageKey, stageRecord = null) {
+    if (!b) return '';
+    const currentStage = stageKey || b.currentStage || 'production';
+
+    let entryMs = null;
+
+    // 1. Check if caller passed a stage record
+    if (stageRecord) {
+      if (stageRecord.createdAt) {
+        const t = new Date(stageRecord.createdAt).getTime();
+        if (!isNaN(t)) entryMs = t;
+      }
+      if (!entryMs && stageRecord.date) {
+        const timeStr = stageRecord.time || '00:00:00';
+        const t = new Date(`${stageRecord.date}T${timeStr}`).getTime();
+        if (!isNaN(t)) entryMs = t;
+        else {
+          const t2 = new Date(stageRecord.date).getTime();
+          if (!isNaN(t2)) entryMs = t2;
+        }
+      }
+    }
+
+    // 2. Query DB.StageRecords for this batch if not provided
+    if (!entryMs && typeof DB !== 'undefined' && DB.StageRecords && typeof DB.StageRecords.byBatch === 'function') {
+      const recs = DB.StageRecords.byBatch(b.id);
+      for (let i = recs.length - 1; i >= 0; i--) {
+        const r = recs[i];
+        if (r.movedTo === currentStage || r.toStage === currentStage) {
+          if (r.createdAt) {
+            const t = new Date(r.createdAt).getTime();
+            if (!isNaN(t)) { entryMs = t; break; }
+          }
+          if (r.date) {
+            const timeStr = r.time || '00:00:00';
+            const t = new Date(`${r.date}T${timeStr}`).getTime();
+            if (!isNaN(t)) { entryMs = t; break; }
+            const t2 = new Date(r.date).getTime();
+            if (!isNaN(t2)) { entryMs = t2; break; }
+          }
+        }
+      }
+      if (!entryMs) {
+        for (let i = recs.length - 1; i >= 0; i--) {
+          const r = recs[i];
+          if (r.stage === currentStage) {
+            if (r.createdAt) {
+              const t = new Date(r.createdAt).getTime();
+              if (!isNaN(t)) { entryMs = t; break; }
+            }
+            if (r.date) {
+              const timeStr = r.time || '00:00:00';
+              const t = new Date(`${r.date}T${timeStr}`).getTime();
+              if (!isNaN(t)) { entryMs = t; break; }
+              const t2 = new Date(r.date).getTime();
+              if (!isNaN(t2)) { entryMs = t2; break; }
+            }
+          }
+        }
+      }
+    }
+
+    // 3. Fallback to batch timestamps
+    if (!entryMs) {
+      if (b.stageMovementDate) {
+        const t = new Date(b.stageMovementDate).getTime();
+        if (!isNaN(t)) entryMs = t;
+      } else if (b.createdAt) {
+        const t = new Date(b.createdAt).getTime();
+        if (!isNaN(t)) entryMs = t;
+      } else if (b.productionDate) {
+        const t = new Date(b.productionDate).getTime();
+        if (!isNaN(t)) entryMs = t;
+      }
+    }
+
+    if (!entryMs) {
+      entryMs = Date.now();
+    }
+
+    const elapsedMs = Math.max(0, Date.now() - entryMs);
+    const elapsedHours = elapsedMs / (1000 * 60 * 60);
+    const elapsedDays = Math.floor(elapsedHours / 24);
+
+    if (elapsedHours < 24) {
+      const h = Math.max(1, Math.round(elapsedHours));
+      return `<span class="stage-aging-chip stage-aging-fresh" title="🟢 Fresh (< 24 hrs): Normal WIP flow — in this stage for ${h} hr(s)">🟢 Fresh (${h}h)</span>`;
+    } else if (elapsedHours <= 72) {
+      const displayTime = elapsedDays >= 1 ? `${elapsedDays}d ${Math.round(elapsedHours % 24)}h` : `${Math.round(elapsedHours)}h`;
+      return `<span class="stage-aging-chip stage-aging-warning" title="🟡 Warning (24–72 hrs): Approaching bottleneck — in stage for ${Math.round(elapsedHours)} hrs (${elapsedDays} days)">🟡 Warning (${displayTime})</span>`;
+    } else {
+      const displayTime = `${elapsedDays}d`;
+      return `<span class="stage-aging-chip stage-aging-overdue" title="🔴 Overdue (> 72 hrs): Flashing alert indicating stagnant material requiring immediate floor attention! (${elapsedDays} days in stage)">🔴 Overdue (${displayTime})</span>`;
+    }
+  }
+
+  return { navigate, init, toggleReportsMenu, openChangePasswordModal, changePassword, runQuickScan, showBatchGenealogy, openBatchDetailsModal: showBatchGenealogy, formatBatchCell, applyBatchTagsToContainer, getStageAgingChip, get current() { return currentModule; }, changeDashboardMonth: (val) => { dashboardMonth = val; renderDashboard(); }, toggleAllStageChecks, bulkPrintStageSelected, onGlobalSearchFocus, onGlobalSearchInput, selectBatchFromSearch, closeGlobalSearch, debounce };
 })();
 window.App = App;
+window.getStageAgingChip = App.getStageAgingChip;
 
 // ── Login Page ─────────────────────────────────────────────
 function showLoginPage() {

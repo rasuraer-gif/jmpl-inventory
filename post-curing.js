@@ -76,6 +76,7 @@ const PostCuringModule = (() => {
           <td>${b.partNo||'—'}</td>
           <td><span class="badge badge-teal">${b.jmrefNo||'—'}</span></td>
           <td class="font-semibold">${formatNum(inputQty)}</td>
+          <td>${App.getStageAgingChip(b, 'post-curing')}</td>
           <td><span class="badge badge-blue">Ready</span></td>
           <td>
             <div class="flex gap-2">
@@ -104,9 +105,9 @@ const PostCuringModule = (() => {
         <div class="table-wrap">
           <table class="data-table">
             <thead>
-              <tr><th><input type="checkbox" onclick="App.toggleAllStageChecks(this)" style="cursor:pointer;"></th><th>Batch</th><th>Part No</th><th>JMREF</th><th>WIP Qty</th><th>Status</th><th>Actions</th></tr>
+              <tr><th><input type="checkbox" onclick="App.toggleAllStageChecks(this)" style="cursor:pointer;"></th><th>Batch</th><th>Part No</th><th>JMREF</th><th>WIP Qty</th><th>Stage Aging</th><th>Status</th><th>Actions</th></tr>
             </thead>
-            <tbody>${rows || '<tr><td colspan="7" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody>
+            <tbody>${rows || '<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody>
           </table>
         </div>
         ${totalPages > 1 ? `

@@ -87,6 +87,7 @@ const DeflashingModule = (() => {
         <td>${b.partNo||'—'}</td>
         <td><span class="badge badge-teal">${b.jmrefNo||'—'}</span></td>
         <td class="font-semibold">${formatNum(inputQty)}</td>
+        <td>${App.getStageAgingChip(b, 'deflashing')}</td>
         <td class="text-muted text-sm">${(b.createdAt||'').slice(0,10)}</td>
         <td>
           <div class="flex gap-2">
@@ -111,7 +112,7 @@ const DeflashingModule = (() => {
         </div>
       </div>
       </div>
-      <div class="table-wrap"><table class="data-table"><thead><tr><th><input type="checkbox" onclick="App.toggleAllStageChecks(this)" style="cursor:pointer;"></th><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Input Qty</th><th>Received</th><th>Actions</th></tr></thead><tbody>${rows || '<tr><td colspan="7" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody></table></div>
+      <div class="table-wrap"><table class="data-table"><thead><tr><th><input type="checkbox" onclick="App.toggleAllStageChecks(this)" style="cursor:pointer;"></th><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Input Qty</th><th>Stage Aging</th><th>Received</th><th>Actions</th></tr></thead><tbody>${rows || '<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-muted);">No matching batches found</td></tr>'}</tbody></table></div>
       ${totalPages > 1 ? `
       <div class="flex justify-between items-center p-4" style="border-top:1px solid var(--border); flex-wrap:wrap; gap:12px; background:var(--bg-glass-hover);">
         <div class="text-sm text-muted">

@@ -2363,8 +2363,8 @@ const ReportsModule = (() => {
     rows.push(['', '', '', '', 'TOTAL:', totalQty, '', '']);
 
     const html = `
-      <div style="display:flex; gap:16px; margin-bottom: 20px; flex-wrap:wrap;">
-        <div class="stat-card blue" style="flex:1; min-width: 140px;"><div class="stat-label">Pending Batches</div><div class="stat-value blue">${dataRows.length}</div></div>
+      <div class="stats-grid report-kpi-banner mb-4" style="display:flex; gap:16px; margin-bottom: 20px; flex-wrap:wrap;">
+        <div class="stat-card blue" style="flex:1; min-width: 140px;"><div class="stat-label">Total Batches</div><div class="stat-value blue">${dataRows.length}</div></div>
         <div class="stat-card amber" style="flex:1; min-width: 140px;"><div class="stat-label">Total Pending Quantity</div><div class="stat-value amber">${formatNum(totalQty)}</div></div>
       </div>
       <div class="table-wrap">
@@ -3028,8 +3028,8 @@ const ReportsModule = (() => {
     rows.push(['', '', '', '', '', '', 'TOTAL:', totalQty, '', '', '']);
 
     const html = `
-      <div style="display:flex; gap:16px; margin-bottom: 20px; flex-wrap:wrap;">
-        <div class="stat-card blue" style="flex:1; min-width: 140px;"><div class="stat-label">Pending Batches</div><div class="stat-value blue">${dataRows.length}</div></div>
+      <div class="stats-grid report-kpi-banner mb-4" style="display:flex; gap:16px; margin-bottom: 20px; flex-wrap:wrap;">
+        <div class="stat-card blue" style="flex:1; min-width: 140px;"><div class="stat-label">Total Batches</div><div class="stat-value blue">${dataRows.length}</div></div>
         <div class="stat-card amber" style="flex:1; min-width: 140px;"><div class="stat-label">Total Pending Quantity</div><div class="stat-value amber">${formatNum(totalQty)}</div></div>
       </div>
       <div class="table-wrap">
@@ -3630,6 +3630,50 @@ const ReportsModule = (() => {
         </select>
       </div>`;
 
+    const plDeviationFilter = `
+      <div class="form-group mb-0">
+        <label class="form-label">Deviation View</label>
+        <select class="form-control" id="rpt-pl-deviation">
+          <option value="deviations-only">⚠️ Specific Deviated Batches Only</option>
+          <option value="all">📋 All Completed Batches (Deviated + Normal)</option>
+          <option value="bypassed-deflash">🚨 Bypassed De-Flashing Only</option>
+          <option value="bypassed-cryo">🚨 Bypassed Cryogenic Only</option>
+        </select>
+      </div>`;
+
+    const plMouldFilter = `
+      <div class="form-group mb-0">
+        <label class="form-label">Mould No</label>
+        <select class="form-control" id="rpt-pl-mould">
+          <option value="">All Moulds</option>
+          <option value="1">Mould 1</option>
+          <option value="2">Mould 2</option>
+          <option value="3">Mould 3</option>
+          <option value="4">Mould 4</option>
+          <option value="5">Mould 5</option>
+        </select>
+      </div>`;
+
+    const plReprocessFilter = `
+      <div class="form-group mb-0">
+        <label class="form-label">Add Reprocessed Batches?</label>
+        <select class="form-control" id="rpt-pl-reprocess">
+          <option value="no">No (Exclude Reprocessed)</option>
+          <option value="yes">Yes (Include Reprocessed)</option>
+          <option value="only">Only Reprocessed Batches</option>
+        </select>
+      </div>`;
+
+    const plScopeBadge = `
+      <div class="form-group mb-0">
+        <label class="form-label">Audit Scope</label>
+        <div style="height:38px; display:flex; align-items:center;">
+          <span class="badge badge-green font-bold" style="font-size:11.5px; padding:6px 12px; border:1px solid rgba(16,185,129,0.3);">
+            ✅ Completed Batches Only
+          </span>
+        </div>
+      </div>`;
+
     const filterMap = {
       reprocess: [jmrefFilter, reprocessDestFilter, reprocessChildStatusFilter, dateRange].join(''),
       inventory: jmrefFilter,
@@ -3662,7 +3706,9 @@ const ReportsModule = (() => {
       'daily-summary': dateRange,
       'analytics': dateRange,
       'stock-audit': [auditSessionTitleFilter, dateRange, jmrefFilter].join(''),
-      'audit-missing-batches': [auditSessionTitleFilter, pendingStageFilter, auditMissingStatusFilter, jmrefFilter].join('')
+      'audit-missing-batches': [auditSessionTitleFilter, pendingStageFilter, auditMissingStatusFilter, jmrefFilter].join(''),
+      'cryo-deflash-trim': [jmrefFilter, '<div class="form-group mb-0"><label class="form-label">Flow / Status</label><select class="form-control" id="rpt-cft-wip"><option value="">All 3-Stage JMREFs</option><option value="wip">Has Active WIP on Floor</option><option value="completed">Completed Batches Only</option></select></div>', dateRange].join(''),
+      'process-leakage': [jmrefFilter, plDeviationFilter, plMouldFilter, plReprocessFilter, plScopeBadge, dateRange].join('')
     };
     return filterMap[report] || '';
   }
@@ -4088,7 +4134,7 @@ const ReportsModule = (() => {
     const statCards = `
       <div style="display:flex; gap:16px; margin-bottom: 24px; flex-wrap:wrap;">
         <div class="stat-card blue" style="flex:1; min-width: 140px;">
-          <div class="stat-label">Batches Found</div>
+          <div class="stat-label">Total Batches</div>
           <div class="stat-value blue">${formatNum(batchCards.length)}</div>
         </div>
         <div class="stat-card green" style="flex:1; min-width: 140px;">
@@ -4302,13 +4348,10 @@ const ReportsModule = (() => {
     const sessionMap = {};
     allSessions.forEach(s => { sessionMap[s.id] = s; });
 
-    // Identify target session: either the filtered one, or the latest active / recent session
+    const isAllSessions = !auditSessionId;
     let primarySession = null;
-    if (auditSessionId) {
-      primarySession = sessionMap[auditSessionId];
-    }
-    if (!primarySession) {
-      primarySession = allSessions.find(s => s.status === 'in_progress') || allSessions[0];
+    if (!isAllSessions) {
+      primarySession = sessionMap[auditSessionId] || allSessions[0];
     }
 
     // Pre-fetch all audit records across all sessions if available
@@ -4317,47 +4360,25 @@ const ReportsModule = (() => {
     }
 
     const allAuditRecords = DB.AuditRecords ? DB.AuditRecords.all() : [];
-    const primaryRecords = DB.AuditRecords ? DB.AuditRecords.bySession(primarySession.id) : [];
+    const allBatches = DB.Batches.all().filter(b => !b.isArchived);
 
-    // Pre-index verified batches in the primary session
-    const verifiedPrimaryIds = new Set(primaryRecords.map(r => r.batchId).filter(Boolean));
-    const verifiedPrimaryNos = new Set(primaryRecords.map(r => (r.batchNo || '').trim().toLowerCase()));
-
-    // Pre-index records in other sessions
-    const otherRecordsByBatchId = new Map();
-    const otherRecordsByBatchNo = new Map();
-
+    // Pre-index all audit records
+    const allRecordsByBatchId = new Map();
+    const allRecordsByBatchNo = new Map();
     for (let i = 0; i < allAuditRecords.length; i++) {
       const r = allAuditRecords[i];
-      if (r.sessionId === primarySession.id) continue;
       if (r.batchId) {
-        let list = otherRecordsByBatchId.get(r.batchId);
-        if (!list) { list = []; otherRecordsByBatchId.set(r.batchId, list); }
+        let list = allRecordsByBatchId.get(r.batchId);
+        if (!list) { list = []; allRecordsByBatchId.set(r.batchId, list); }
         list.push(r);
       }
       if (r.batchNo) {
         const clean = String(r.batchNo).trim().toLowerCase();
-        let list = otherRecordsByBatchNo.get(clean);
-        if (!list) { list = []; otherRecordsByBatchNo.set(clean, list); }
+        let list = allRecordsByBatchNo.get(clean);
+        if (!list) { list = []; allRecordsByBatchNo.set(clean, list); }
         list.push(r);
       }
     }
-
-    // Determine expected batches in the scope of primarySession
-    const allBatches = DB.Batches.all().filter(b => !b.isArchived);
-    const scope = primarySession.stageScope || 'all';
-
-    let expectedBatches = [];
-    if (scope === 'all') {
-      expectedBatches = allBatches.filter(b => b.status === 'active' || b.currentStage === 'store' || b.status === 'completed');
-    } else if (scope === 'store') {
-      expectedBatches = allBatches.filter(b => b.currentStage === 'store' || b.status === 'completed');
-    } else {
-      expectedBatches = allBatches.filter(b => b.currentStage === scope && b.status === 'active');
-    }
-
-    // Filter to missing / unscanned batches in primarySession
-    let missingList = expectedBatches.filter(b => !verifiedPrimaryIds.has(b.id) && !verifiedPrimaryNos.has((b.batchNo || '').trim().toLowerCase()));
 
     const masterMap = {};
     if (DB.Master) {
@@ -4377,6 +4398,7 @@ const ReportsModule = (() => {
 
     function calculateBatchQty(batch) {
       if (!batch) return 0;
+      if (batch.expectedQty != null) return Number(batch.expectedQty);
       if (batch.currentStage === 'store' || batch.status === 'completed') {
         if (batch.remainingQty != null) return Number(batch.remainingQty);
         if (batch.currentQty != null) return Number(batch.currentQty);
@@ -4404,12 +4426,89 @@ const ReportsModule = (() => {
       return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
+    let missingList = [];
+    if (isAllSessions) {
+      const missingBatchMap = new Map();
+      allSessions.forEach(sess => {
+        let sessMissing = [];
+        if (sess.status === 'completed' && Array.isArray(sess.snapshotMissingList) && sess.snapshotMissingList.length > 0) {
+          sessMissing = sess.snapshotMissingList;
+        } else {
+          const sessRecords = DB.AuditRecords ? DB.AuditRecords.bySession(sess.id) : [];
+          const verifiedIds = new Set(sessRecords.map(r => r.batchId).filter(Boolean));
+          const verifiedNos = new Set(sessRecords.map(r => (r.batchNo || '').trim().toLowerCase()));
+          const scope = sess.stageScope || 'all';
+          const cutoff = sess.completedAt || null;
+          const cutoffDate = (cutoff || sess.startedAt || '').slice(0, 10);
+
+          const expected = allBatches.filter(b => {
+            if (!b) return false;
+            const isVer = verifiedIds.has(b.id) || verifiedNos.has((b.batchNo || '').trim().toLowerCase());
+            if (!isVer && sess.status === 'completed' && cutoff) {
+              if (b.createdAt && b.createdAt > cutoff) return false;
+              if (b.productionDate && cutoffDate && b.productionDate > cutoffDate) return false;
+            }
+            if (b.isArchived && !isVer) return false;
+            if (isVer) return true;
+            if (scope === 'all') return b.status === 'active' || b.currentStage === 'store' || b.status === 'completed';
+            if (scope === 'store') return b.currentStage === 'store' || b.status === 'completed';
+            return b.currentStage === scope && b.status === 'active';
+          });
+
+          sessMissing = expected.filter(b => !verifiedIds.has(b.id) && !verifiedNos.has((b.batchNo || '').trim().toLowerCase()));
+        }
+
+        sessMissing.forEach(b => {
+          const key = b.id || (b.batchNo || '').trim().toLowerCase();
+          if (!key) return;
+          const sessTitle = sess.title || sess.id;
+          if (!missingBatchMap.has(key)) {
+            missingBatchMap.set(key, { ...b, missingInSessions: [sessTitle] });
+          } else {
+            const existing = missingBatchMap.get(key);
+            if (!existing.missingInSessions.includes(sessTitle)) {
+              existing.missingInSessions.push(sessTitle);
+            }
+          }
+        });
+      });
+      missingList = Array.from(missingBatchMap.values());
+    } else {
+      if (primarySession.status === 'completed' && Array.isArray(primarySession.snapshotMissingList) && primarySession.snapshotMissingList.length > 0) {
+        missingList = primarySession.snapshotMissingList.map(b => ({ ...b, missingInSessions: [primarySession.title || primarySession.id] }));
+      } else {
+        const primaryRecords = DB.AuditRecords ? DB.AuditRecords.bySession(primarySession.id) : [];
+        const verifiedPrimaryIds = new Set(primaryRecords.map(r => r.batchId).filter(Boolean));
+        const verifiedPrimaryNos = new Set(primaryRecords.map(r => (r.batchNo || '').trim().toLowerCase()));
+        const scope = primarySession.stageScope || 'all';
+        const cutoff = primarySession.completedAt || null;
+        const cutoffDate = (cutoff || primarySession.startedAt || '').slice(0, 10);
+
+        const expected = allBatches.filter(b => {
+          if (!b) return false;
+          const isVer = verifiedPrimaryIds.has(b.id) || verifiedPrimaryNos.has((b.batchNo || '').trim().toLowerCase());
+          if (!isVer && primarySession.status === 'completed' && cutoff) {
+            if (b.createdAt && b.createdAt > cutoff) return false;
+            if (b.productionDate && cutoffDate && b.productionDate > cutoffDate) return false;
+          }
+          if (b.isArchived && !isVer) return false;
+          if (isVer) return true;
+          if (scope === 'all') return b.status === 'active' || b.currentStage === 'store' || b.status === 'completed';
+          if (scope === 'store') return b.currentStage === 'store' || b.status === 'completed';
+          return b.currentStage === scope && b.status === 'active';
+        });
+
+        missingList = expected.filter(b => !verifiedPrimaryIds.has(b.id) && !verifiedPrimaryNos.has((b.batchNo || '').trim().toLowerCase()))
+          .map(b => ({ ...b, missingInSessions: [primarySession.title || primarySession.id] }));
+      }
+    }
+
     // Cross-validate missing batches
     let enrichedItems = missingList.map(b => {
       const bId = b.id;
       const cleanNo = String(b.batchNo || '').trim().toLowerCase();
-      const matchesById = otherRecordsByBatchId.get(bId) || [];
-      const matchesByNo = otherRecordsByBatchNo.get(cleanNo) || [];
+      const matchesById = (allRecordsByBatchId.get(bId) || []).filter(r => isAllSessions ? true : r.sessionId !== primarySession.id);
+      const matchesByNo = (allRecordsByBatchNo.get(cleanNo) || []).filter(r => isAllSessions ? true : r.sessionId !== primarySession.id);
 
       const seen = new Set();
       const otherMatches = [];
@@ -4434,6 +4533,7 @@ const ReportsModule = (() => {
 
       return {
         batch: b,
+        missingInSessions: b.missingInSessions || (primarySession ? [primarySession.title || primarySession.id] : []),
         expQty,
         unitPrice,
         deficitValue,
@@ -4539,7 +4639,21 @@ const ReportsModule = (() => {
     });
 
     // Prepare table headers and data rows for display & export
-    const headers = [
+    const headers = isAllSessions ? [
+      '#',
+      'Batch No',
+      'JMREF No',
+      'Part No',
+      'Expected Stage',
+      'Expected Pcs',
+      'Unscanned in Session(s)',
+      'Cross-Session Audit Status',
+      'Validated Session',
+      'Scanned Stage Elsewhere',
+      'Counted Pcs Elsewhere',
+      'Auditor & Date',
+      'Deficit Value (₹)'
+    ] : [
       '#',
       'Batch No',
       'JMREF No',
@@ -4564,63 +4678,80 @@ const ReportsModule = (() => {
         statusText = item.hasStageMismatch ? 'Stage Shift (Found Elsewhere)' : 'Validated in Other Session';
       }
 
-      return [
+      const row = [
         idx + 1,
         b.batchNo || '-',
         b.jmrefNo || '-',
         b.partNo || '-',
         STAGE_LABELS[b.currentStage] || b.currentStage || '-',
-        formatNum(item.expQty),
+        formatNum(item.expQty)
+      ];
+
+      if (isAllSessions) {
+        row.push((item.missingInSessions || []).join('; '));
+      }
+
+      row.push(
         statusText,
         sess ? (sess.title || sess.id) : '—',
         rec ? (STAGE_LABELS[rec.scannedStage] || rec.scannedStage) : '—',
         rec ? formatNum(rec.countedQty) : '—',
         rec ? `${rec.scannedBy || '—'} (${(rec.scannedAt || '').slice(0, 10)})` : '—',
         item.isActualMissing ? `₹${formatNum(Math.round(item.deficitValue))}` : '₹0'
-      ];
+      );
+
+      return row;
     });
 
     // UI HTML construction
     const summaryCards = `
-      <div style="background:linear-gradient(135deg, rgba(239,68,68,0.06), rgba(245,158,11,0.06)); border:1px solid rgba(239,68,68,0.2); border-radius:12px; padding:16px 20px; margin-bottom:20px;">
+      <div style="background:linear-gradient(135deg, ${isAllSessions ? 'rgba(37,99,235,0.06), rgba(16,185,129,0.06)' : 'rgba(239,68,68,0.06), rgba(245,158,11,0.06)'}); border:1px solid ${isAllSessions ? 'rgba(37,99,235,0.2)' : 'rgba(239,68,68,0.2)'}; border-radius:12px; padding:16px 20px; margin-bottom:20px;">
         <div class="flex items-center justify-between" style="flex-wrap:wrap; gap:12px;">
           <div>
             <div class="flex items-center gap-2">
-              <span style="font-size:20px;">🚨</span>
+              <span style="font-size:20px;">${isAllSessions ? '🌐' : '🚨'}</span>
               <h3 class="font-bold" style="font-size:16px; margin:0; color:var(--text-main);">
-                Audited Session: <span class="text-blue">${safeEscape(primarySession.title || primarySession.id)}</span>
+                ${isAllSessions 
+                  ? `Factory-Wide Consolidated Audit Reconciliation (Across All <span class="text-blue">${allSessions.length}</span> Monthly Sessions)` 
+                  : `Audited Session: <span class="text-blue">${safeEscape(primarySession.title || primarySession.id)}</span>`}
               </h3>
-              <span class="badge ${primarySession.status === 'in_progress' ? 'badge-green' : 'badge-gray'}">
-                ${primarySession.status === 'in_progress' ? '🟢 Active' : '🔒 Closed'}
-              </span>
+              ${isAllSessions ? `
+                <span class="badge badge-blue">Enterprise Master</span>
+              ` : `
+                <span class="badge ${primarySession.status === 'in_progress' ? 'badge-green' : 'badge-gray'}">
+                  ${primarySession.status === 'in_progress' ? '🟢 Active' : '🔒 Closed'}
+                </span>
+              `}
             </div>
             <div class="text-xs text-muted mt-1">
-              Scope: <strong>${primarySession.stageScope === 'all' ? 'All Factory & Store' : (STAGE_LABELS[primarySession.stageScope] || primarySession.stageScope)}</strong> | 
-              Auditor: <strong>${safeEscape(primarySession.auditorName || '—')}</strong> | 
-              Started: <strong>${(primarySession.startedAt || '').slice(0, 10)}</strong>
+              ${isAllSessions 
+                ? `Cross-checking all factory stages across all recorded sessions. Identifies batches scanned in any monthly session vs. actual missing everywhere.`
+                : `Scope: <strong>${primarySession.stageScope === 'all' ? 'All Factory & Store' : (STAGE_LABELS[primarySession.stageScope] || primarySession.stageScope)}</strong> | Auditor: <strong>${safeEscape(primarySession.auditorName || '—')}</strong> | Started: <strong>${(primarySession.startedAt || '').slice(0, 10)}</strong>`}
             </div>
           </div>
           <div class="text-xs font-semibold text-muted">
-            Cross-matched across <strong class="text-blue">${allSessions.length - 1}</strong> other audit session(s)
+            ${isAllSessions 
+              ? `Total Monthly Sessions Analyzed: <strong class="text-blue">${allSessions.length}</strong>`
+              : `Cross-matched across <strong class="text-blue">${allSessions.length - 1}</strong> other audit session(s)`}
           </div>
         </div>
       </div>
 
       <div class="stats-grid mb-6" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:16px;">
         <div class="stat-card" style="border-left:4px solid #ef4444;">
-          <div class="stat-label">Missing in Session</div>
+          <div class="stat-label">${isAllSessions ? 'Unscanned Batches Across Sessions' : 'Missing in Session'}</div>
           <div class="stat-value text-danger">${formatNum(totalMissingInSession)}</div>
-          <div class="text-xs text-muted mt-1">Unscanned during this audit</div>
+          <div class="text-xs text-muted mt-1">${isAllSessions ? 'Total unique batches unscanned in registered session' : 'Unscanned during this audit'}</div>
         </div>
         <div class="stat-card" style="border-left:4px solid #10b981;">
           <div class="stat-label">Validated in Other Sessions</div>
           <div class="stat-value text-success">${formatNum(totalValidatedElsewhere)}</div>
-          <div class="text-xs text-muted mt-1">Physical count confirmed elsewhere</div>
+          <div class="text-xs text-muted mt-1">Physical count confirmed on factory floor</div>
         </div>
         <div class="stat-card" style="border-left:4px solid #dc2626;">
           <div class="stat-label">🚨 Actual Missing Everywhere</div>
           <div class="stat-value text-danger font-bold">${formatNum(totalActualMissing)}</div>
-          <div class="text-xs text-danger mt-1 font-semibold">True physical floor deficit</div>
+          <div class="text-xs text-danger mt-1 font-semibold">True physical floor deficit (Unscanned in ALL sessions)</div>
         </div>
         <div class="stat-card" style="border-left:4px solid #f59e0b;">
           <div class="stat-label">Actual Deficit Pieces</div>
@@ -4703,6 +4834,7 @@ const ReportsModule = (() => {
                 <th>Part No</th>
                 <th>Expected Stage</th>
                 <th>Expected Pcs</th>
+                ${isAllSessions ? '<th>Unscanned In Session(s)</th>' : ''}
                 <th>Cross-Session Audit Status</th>
                 <th>Validated Session</th>
                 <th>Scanned Stage</th>
@@ -4713,7 +4845,7 @@ const ReportsModule = (() => {
             </thead>
             <tbody>
               ${enrichedItems.length === 0 ? `
-                <tr><td colspan="12" class="text-center text-muted py-4">No missing batches match the current filter criteria.</td></tr>
+                <tr><td colspan="${isAllSessions ? 13 : 12}" class="text-center text-muted py-4">No missing batches match the current filter criteria.</td></tr>
               ` : enrichedItems.map((item, idx) => {
                 const b = item.batch;
                 const rec = item.latestRec;
@@ -4740,6 +4872,11 @@ const ReportsModule = (() => {
                     <td class="font-semibold text-xs">${safeEscape(b.partNo || '—')}</td>
                     <td><span class="stage-chip ${b.currentStage}">${STAGE_LABELS[b.currentStage] || b.currentStage}</span></td>
                     <td class="font-bold">${formatNum(item.expQty)}</td>
+                    ${isAllSessions ? `
+                      <td class="text-xs">
+                        ${(item.missingInSessions || []).map(s => `<span class="badge badge-gray" style="font-size:10px; display:inline-block; margin:1px 0;" title="${safeEscape(s)}">${safeEscape(s.length > 20 ? s.slice(0, 18) + '...' : s)}</span>`).join(' ')}
+                      </td>
+                    ` : ''}
                     <td>${statusBadge}</td>
                     <td class="text-xs">
                       ${sess ? `<span class="font-semibold text-blue" title="${safeEscape(sess.title || sess.id)}">${safeEscape((sess.title || sess.id).slice(0, 24))}</span>` : '<span class="text-muted">—</span>'}
@@ -4934,6 +5071,1523 @@ const ReportsModule = (() => {
     return { html, headers, dataRows };
   }
 
+  // ── 3-Stage Process Report (Cryogenic, Manual De-Flashing & Trimming) ──
+  function renderCryoDeflashTrimReport(filters) {
+    const { from, to, jmref, cftWip } = filters || {};
+    const master = (typeof DB !== 'undefined' && DB.Master) ? DB.Master.all() : [];
+    const batches = (typeof DB !== 'undefined' && DB.Batches) 
+      ? (DB.Batches.allIncludeArchived ? DB.Batches.allIncludeArchived() : DB.Batches.all()) 
+      : [];
+    const stageRecs = (typeof DB !== 'undefined' && DB.StageRecords) ? DB.StageRecords.all() : [];
+
+    function isThreeStageFlow(pf) {
+      if (!pf) return false;
+      const u = String(pf).toUpperCase().replace(/\s+/g, '');
+      const hasCryo = u.includes('C') || u.includes('CRYO');
+      const hasFlash = u.includes('F') || u.includes('FL') || u.includes('FLASH') || u.includes('DEFLASH');
+      const hasTrim = u.includes('T') || u.includes('TRIM');
+      return hasCryo && hasFlash && hasTrim;
+    }
+
+    // Index Master parts by upper-case JMREF
+    const masterMap = new Map();
+    master.forEach(m => {
+      if (m.jmrefNo) {
+        masterMap.set(m.jmrefNo.trim().toUpperCase(), m);
+      }
+    });
+
+    // Index stage records by batchId
+    const stageRecsByBatch = new Map();
+    stageRecs.forEach(r => {
+      if (!r.batchId) return;
+      if (!stageRecsByBatch.has(r.batchId)) stageRecsByBatch.set(r.batchId, []);
+      stageRecsByBatch.get(r.batchId).push(r);
+    });
+
+    // Collect all batches that have moved through all 3 stages (Cryogenic, DE Flashing, and Trimming)
+    const actualBatches = [];
+
+    batches.forEach(b => {
+      if (!b.batchNo) return;
+      const jKey = (b.jmrefNo || '').trim().toUpperCase();
+      const recs = stageRecsByBatch.get(b.id) || [];
+
+      const cryoRecs = recs.filter(r => r.stage === 'cryogenic' || r.movedTo === 'cryogenic');
+      const deflashRecs = recs.filter(r => r.stage === 'deflashing' || r.movedTo === 'deflashing');
+      const trimRecs = recs.filter(r => r.stage === 'trimming' || r.movedTo === 'trimming' || r.stage === 'waiting-trimming');
+
+      const hasCryo = cryoRecs.length > 0;
+      const hasDeflash = deflashRecs.length > 0;
+      const hasTrim = trimRecs.length > 0;
+
+      // Filter: must have moved through all three stages Cryogenic, DE Flashing, and Trimming
+      if (hasCryo && hasDeflash && hasTrim) {
+        // Last recorded movement dates
+        const lastCryo = cryoRecs[cryoRecs.length - 1];
+        const cryoDate = (lastCryo.date || lastCryo.createdAt || '').slice(0, 10);
+        const cryoIn = cryoRecs.reduce((s, r) => s + (Number(r.inputQty) || 0), 0);
+        const cryoOut = cryoRecs.reduce((s, r) => s + (Number(r.outputQty) || 0), 0);
+        const cryoLoss = cryoRecs.reduce((s, r) => s + (Number(r.lossQty) || 0), 0);
+
+        const lastDeflash = deflashRecs[deflashRecs.length - 1];
+        const deflashDate = (lastDeflash.date || lastDeflash.createdAt || '').slice(0, 10);
+        const deflashIn = deflashRecs.reduce((s, r) => s + (Number(r.inputQty) || 0), 0);
+        const deflashOut = deflashRecs.reduce((s, r) => s + (Number(r.outputQty) || 0), 0);
+        const deflashLoss = deflashRecs.reduce((s, r) => s + (Number(r.lossQty) || 0), 0);
+
+        const lastTrim = trimRecs[trimRecs.length - 1];
+        const trimDate = (lastTrim.date || lastTrim.createdAt || '').slice(0, 10);
+        const trimIn = trimRecs.reduce((s, r) => s + (Number(r.inputQty) || 0), 0);
+        const trimOut = trimRecs.reduce((s, r) => s + (Number(r.outputQty) || 0), 0);
+        const trimLoss = trimRecs.reduce((s, r) => s + (Number(r.lossQty) || 0), 0);
+
+        const mPart = masterMap.get(jKey) || {};
+        const initQty = Number(b.initialQty || deflashIn || cryoIn || 0);
+        const bTotal3Loss = cryoLoss + deflashLoss + trimLoss;
+        const bLossPct = initQty > 0 ? ((bTotal3Loss / initQty) * 100).toFixed(1) + '%' : '0.0%';
+
+        actualBatches.push({
+          batchId: b.id,
+          batchNo: b.batchNo,
+          jmrefNo: b.jmrefNo || jKey,
+          partNo: mPart.partNo || b.partNo || '—',
+          description: mPart.description || b.description || '—',
+          prodDate: (b.productionDate || b.createdAt || '').slice(0, 10),
+          cryoDate, cryoIn, cryoOut, cryoLoss,
+          deflashDate, deflashIn, deflashOut, deflashLoss,
+          trimDate, trimIn, trimOut, trimLoss,
+          totalLoss: bTotal3Loss,
+          scrapPct: bLossPct,
+          currentStage: b.currentStage || 'production',
+          currentQty: Number(b.remainingQty !== undefined ? b.remainingQty : b.initialQty || 0),
+          status: b.status === 'completed' ? 'Completed' : (b.status === 'rejected' ? 'Rejected' : 'Active WIP'),
+          batchObj: b
+        });
+      }
+    });
+
+    // Apply Filters
+    let filteredBatches = actualBatches;
+
+    if (from || to) {
+      filteredBatches = filteredBatches.filter(b => {
+        const d = b.prodDate;
+        if (from && d < from) return false;
+        if (to && d > to) return false;
+        return true;
+      });
+    }
+
+    if (jmref) {
+      const q = jmref.toLowerCase();
+      filteredBatches = filteredBatches.filter(b =>
+        b.jmrefNo.toLowerCase().includes(q) ||
+        b.partNo.toLowerCase().includes(q) ||
+        b.description.toLowerCase().includes(q) ||
+        b.batchNo.toLowerCase().includes(q)
+      );
+    }
+
+    if (cftWip === 'wip') {
+      filteredBatches = filteredBatches.filter(b => b.status === 'Active WIP');
+    } else if (cftWip === 'completed') {
+      filteredBatches = filteredBatches.filter(b => b.status === 'Completed');
+    }
+
+    // Sort: newest production date first, then batchNo
+    filteredBatches.sort((a, b) => b.prodDate.localeCompare(a.prodDate) || b.batchNo.localeCompare(a.batchNo));
+
+    // Calculate Summary Metrics
+    const totalBatchesCount = filteredBatches.length;
+    const uniqueJmrefs = new Set(filteredBatches.map(b => b.jmrefNo)).size;
+    const activeWipBatches = filteredBatches.filter(b => b.status === 'Active WIP').length;
+    const activeWipQty = filteredBatches.filter(b => b.status === 'Active WIP').reduce((s, b) => s + b.currentQty, 0);
+
+    const totalCryoLoss = filteredBatches.reduce((s, b) => s + b.cryoLoss, 0);
+    const totalCryoInput = filteredBatches.reduce((s, b) => s + b.cryoIn, 0);
+    const cryoRate = totalCryoInput > 0 ? ((totalCryoLoss / totalCryoInput) * 100).toFixed(1) + '%' : '0.0%';
+
+    const totalDeflashLoss = filteredBatches.reduce((s, b) => s + b.deflashLoss, 0);
+    const totalDeflashInput = filteredBatches.reduce((s, b) => s + b.deflashIn, 0);
+    const deflashRate = totalDeflashInput > 0 ? ((totalDeflashLoss / totalDeflashInput) * 100).toFixed(1) + '%' : '0.0%';
+
+    const totalTrimLoss = filteredBatches.reduce((s, b) => s + b.trimLoss, 0);
+    const totalTrimInput = filteredBatches.reduce((s, b) => s + b.trimIn, 0);
+    const trimRate = totalTrimInput > 0 ? ((totalTrimLoss / totalTrimInput) * 100).toFixed(1) + '%' : '0.0%';
+
+    const total3StageLoss = totalCryoLoss + totalDeflashLoss + totalTrimLoss;
+    const totalInitQty = filteredBatches.reduce((s, b) => s + Number(b.batchObj?.initialQty || b.deflashIn || b.cryoIn || 0), 0);
+    const combinedRate = totalInitQty > 0 ? ((total3StageLoss / totalInitQty) * 100).toFixed(1) + '%' : '0.0%';
+
+    // KPI Banner
+    const summaryCards = `
+      <div class="stats-grid report-kpi-banner mb-6" style="grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px;">
+        <div class="stat-card blue">
+          <div class="stat-label">📦 Total Batches (All 3 Stages)</div>
+          <div class="stat-value text-blue">${formatNum(totalBatchesCount)}</div>
+        </div>
+        <div class="stat-card teal">
+          <div class="stat-label">🏷️ Unique JMREFs</div>
+          <div class="stat-value text-teal">${formatNum(uniqueJmrefs)}</div>
+        </div>
+        <div class="stat-card amber">
+          <div class="stat-label">⏳ Active Floor WIP</div>
+          <div class="stat-value text-amber">${formatNum(activeWipQty)} pcs <span style="font-size:11px;font-weight:600;">(${activeWipBatches} b)</span></div>
+        </div>
+        <div class="stat-card blue">
+          <div class="stat-label">❄️ Cryogenic Scrap</div>
+          <div class="stat-value text-blue">${formatNum(totalCryoLoss)} <span style="font-size:11px;font-weight:600;">(${cryoRate})</span></div>
+        </div>
+        <div class="stat-card amber">
+          <div class="stat-label">🔧 De-Flashing Scrap</div>
+          <div class="stat-value text-amber">${formatNum(totalDeflashLoss)} <span style="font-size:11px;font-weight:600;">(${deflashRate})</span></div>
+        </div>
+        <div class="stat-card red">
+          <div class="stat-label">✂️ Trimming Scrap</div>
+          <div class="stat-value text-danger">${formatNum(totalTrimLoss)} <span style="font-size:11px;font-weight:600;">(${trimRate})</span></div>
+        </div>
+        <div class="stat-card red" style="border-left:4px solid var(--accent-red);">
+          <div class="stat-label">📉 Combined 3-Stage Loss</div>
+          <div class="stat-value text-danger">${formatNum(total3StageLoss)} <span style="font-size:11px;font-weight:600;">(${combinedRate})</span></div>
+        </div>
+      </div>
+    `;
+
+    // Export Headers & Rows
+    const headers = [
+      '#',
+      'Batch No',
+      'JMREF No',
+      'Part No',
+      'Description',
+      'Production Date',
+      'Cryogenic Date',
+      'Cryo Input Qty',
+      'Cryo Output Qty',
+      'Cryo Loss Qty',
+      'DE Flashing Date',
+      'DE Flash Input Qty',
+      'DE Flash Output Qty',
+      'DE Flash Loss Qty',
+      'Trimming Date',
+      'Trimming Input Qty',
+      'Trimming Output Qty',
+      'Trimming Loss Qty',
+      'Combined 3-Stage Loss (Pcs)',
+      'Combined Scrap %',
+      'Current Stage',
+      'Current Qty (Pcs)',
+      'Status'
+    ];
+
+    const dataRows = filteredBatches.map((r, i) => [
+      i + 1,
+      r.batchNo,
+      r.jmrefNo,
+      r.partNo,
+      r.description,
+      r.prodDate || '—',
+      r.cryoDate || '—',
+      r.cryoIn,
+      r.cryoOut,
+      r.cryoLoss,
+      r.deflashDate || '—',
+      r.deflashIn,
+      r.deflashOut,
+      r.deflashLoss,
+      r.trimDate || '—',
+      r.trimIn,
+      r.trimOut,
+      r.trimLoss,
+      r.totalLoss,
+      r.scrapPct,
+      STAGE_LABELS[r.currentStage] || r.currentStage,
+      r.currentQty,
+      r.status
+    ]);
+
+    // Table HTML Rows
+    const htmlRows = filteredBatches.map((r, i) => {
+      const isRecheck = !!(r.batchObj?.recheckCount && r.batchObj.recheckCount > 0);
+      return `
+        <tr>
+          <td class="text-muted text-xs">${i + 1}</td>
+          <td>
+            <a href="javascript:void(0)" onclick="App.openBatchDetailsModal ? App.openBatchDetailsModal('${escapeHtml(r.batchNo)}') : null" class="font-bold text-blue hover:underline" title="Click to view Batch History & Genealogy">
+              ${escapeHtml(r.batchNo)}
+            </a>
+            ${isRecheck ? '<span class="badge badge-amber" style="font-size:9.5px; margin-left:4px;">RECHECK</span>' : ''}
+          </td>
+          <td><span class="badge badge-teal font-bold">${escapeHtml(r.jmrefNo)}</span></td>
+          <td class="font-semibold text-xs">${escapeHtml(r.partNo)}</td>
+          <td class="font-bold text-xs" style="white-space:nowrap;">${r.prodDate ? formatDate(r.prodDate) : '—'}</td>
+          <td style="font-size:11.5px; min-width:140px;">
+            <div class="font-semibold text-blue">📅 ${r.cryoDate ? formatDate(r.cryoDate) : '—'}</div>
+            <div class="text-xs text-muted" style="margin-top:2px;">
+              ${formatNum(r.cryoIn)} ➔ ${formatNum(r.cryoOut)}
+              ${r.cryoLoss > 0 ? `<span class="text-danger font-semibold">(-${formatNum(r.cryoLoss)})</span>` : ''}
+            </div>
+          </td>
+          <td style="font-size:11.5px; min-width:140px;">
+            <div class="font-semibold text-amber">📅 ${r.deflashDate ? formatDate(r.deflashDate) : '—'}</div>
+            <div class="text-xs text-muted" style="margin-top:2px;">
+              ${formatNum(r.deflashIn)} ➔ ${formatNum(r.deflashOut)}
+              ${r.deflashLoss > 0 ? `<span class="text-danger font-semibold">(-${formatNum(r.deflashLoss)})</span>` : ''}
+            </div>
+          </td>
+          <td style="font-size:11.5px; min-width:140px;">
+            <div class="font-semibold text-purple">📅 ${r.trimDate ? formatDate(r.trimDate) : '—'}</div>
+            <div class="text-xs text-muted" style="margin-top:2px;">
+              ${formatNum(r.trimIn)} ➔ ${formatNum(r.trimOut)}
+              ${r.trimLoss > 0 ? `<span class="text-danger font-semibold">(-${formatNum(r.trimLoss)})</span>` : ''}
+            </div>
+          </td>
+          <td class="font-bold text-danger" style="white-space:nowrap;">
+            ${formatNum(r.totalLoss)} <span style="font-size:10.5px; font-weight:600;">(${r.scrapPct})</span>
+          </td>
+          <td style="white-space:nowrap;">
+            <span class="stage-chip ${r.currentStage}">${STAGE_LABELS[r.currentStage] || r.currentStage}</span>
+            ${(typeof App !== 'undefined' && App.getStageAgingChip && r.status === 'Active WIP') ? `<div style="margin-top:3px;">${App.getStageAgingChip(r.batchObj, r.currentStage)}</div>` : ''}
+          </td>
+          <td class="font-bold text-amber">${formatNum(r.currentQty)}</td>
+          <td>
+            <span class="badge ${r.status === 'Completed' ? 'badge-green' : (r.status === 'Rejected' ? 'badge-red' : 'badge-amber')} font-bold">${r.status}</span>
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    const totalRowHtml = `
+      <tr class="total-row font-bold text-danger" style="background:var(--bg-glass-hover); border-top:2px solid var(--border);">
+        <td colspan="5" style="text-align:right;">TOTALS (${filteredBatches.length} Batches across ${uniqueJmrefs} JMREFs):</td>
+        <td style="font-size:11.5px; color:var(--accent-blue);">Total Cryo Loss: ${formatNum(totalCryoLoss)} (${cryoRate})</td>
+        <td style="font-size:11.5px; color:var(--accent-amber);">Total De-Flash Loss: ${formatNum(totalDeflashLoss)} (${deflashRate})</td>
+        <td style="font-size:11.5px; color:var(--accent-purple);">Total Trim Loss: ${formatNum(totalTrimLoss)} (${trimRate})</td>
+        <td class="text-danger">${formatNum(total3StageLoss)} (${combinedRate})</td>
+        <td colspan="2" class="text-amber">Floor WIP: ${formatNum(activeWipQty)} pcs (${activeWipBatches} b)</td>
+        <td></td>
+      </tr>
+    `;
+
+    const html = `
+      ${summaryCards}
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Batch No</th>
+              <th>JMREF No</th>
+              <th>Part No</th>
+              <th>Production Date</th>
+              <th>❄️ Cryogenic (Date &amp; Flow)</th>
+              <th>🔧 DE Flashing (Date &amp; Flow)</th>
+              <th>✂️ Trimming (Date &amp; Flow)</th>
+              <th>📉 Combined 3-Stage Loss</th>
+              <th>Current Stage</th>
+              <th>WIP Qty</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${htmlRows || '<tr><td colspan="12" style="text-align:center;padding:36px;color:var(--text-muted);"><div style="font-size:26px;margin-bottom:8px;">🔍</div><div>No batches found that have moved through all three stages (Cryogenic, DE Flashing, and Trimming) matching the filter criteria.</div></td></tr>'}
+            ${filteredBatches.length > 0 ? totalRowHtml : ''}
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    return { html, headers, dataRows };
+  }
+
+  // ── Global Cache for Process Leakage Mould Groups ─────────────
+  let activeProcessLeakageMap = {};
+  let currentDeviatedModalData = null;
+
+  function formatRouteBadges(routeStr) {
+    if (!routeStr || routeStr === 'Direct to Store') {
+      return '<span class="badge badge-gray font-semibold" style="font-size:10.5px;">Direct to Store</span>';
+    }
+    const parts = routeStr.split(' ➔ ');
+    return parts.map(s => {
+      if (s === 'Cryo') return '<span class="badge badge-blue font-semibold" style="font-size:10.5px;">❄️ Cryo</span>';
+      if (s === 'De-Flash') return '<span class="badge badge-amber font-semibold" style="font-size:10.5px;">🔧 De-Flash</span>';
+      if (s === 'Trim') return '<span class="badge badge-purple font-semibold" style="font-size:10.5px;">✂️ Trim</span>';
+      if (s === 'Post-Cure') return '<span class="badge badge-teal font-semibold" style="font-size:10.5px;">♨️ Post-Cure</span>';
+      if (s === 'Vis') return '<span class="badge badge-green font-semibold" style="font-size:10.5px;">👁️ Vis</span>';
+      if (s === 'QC') return '<span class="badge badge-teal font-semibold" style="font-size:10.5px;">⭐ QC</span>';
+      return `<span class="badge badge-gray font-semibold" style="font-size:10.5px;">${s}</span>`;
+    }).join(' <span style="color:var(--text-muted);font-weight:bold;margin:0 2px;">➔</span> ');
+  }
+
+  // ── JMREF & Mould Process Leakage & Route Deviation Report ──
+  function renderProcessLeakageReport(filters) {
+    const { from, to, jmref, plMould, plDeviation, plReprocess } = filters || {};
+    const batches = (typeof DB !== 'undefined' && DB.Batches) 
+      ? (DB.Batches.allIncludeArchived ? DB.Batches.allIncludeArchived() : DB.Batches.all()) 
+      : [];
+    const stageRecs = (typeof DB !== 'undefined' && DB.StageRecords) ? DB.StageRecords.all() : [];
+    const master = (typeof DB !== 'undefined' && DB.Master) ? DB.Master.all() : [];
+
+    // Helper to identify STK-ADJ (Stock adjustment / reconciliation) batches
+    function isStkAdjBatch(b) {
+      if (!b) return false;
+      const bNo = String(b.batchNo || '').toUpperCase();
+      if (bNo.includes('STK-ADJ') || bNo.includes('STK_ADJ') || bNo.includes('STKADJ') || bNo.startsWith('STK-ADJ-') || bNo.includes('-REC-')) return true;
+      if (b.isStockAdjustment || b.isStockUpload) return true;
+      const n = String(b.notes || '').toLowerCase();
+      if (n.includes('direct store stock reconciliation') || n.includes('stock reconciliation') || n.includes('closed via stock') || n.includes('zeroed via stock') || n.includes('zeroing') || n.includes('stock adjustment') || n.includes('stock upload')) return true;
+      return false;
+    }
+
+    // Helper to identify reprocessed batches
+    function isReprocessBatch(b) {
+      if (!b) return false;
+      if (b.isReprocess === true || b.isReprocess === 'true') return true;
+      if (b.batchType === 'reprocess') return true;
+      if (b.batchNo && (b.batchNo.includes('-REP') || b.batchNo.includes('-REC-') || /[-_]REP\d*$/i.test(b.batchNo))) return true;
+      if (b.reprocessDestination) return true;
+      if (b.notes && /reprocess/i.test(b.notes)) return true;
+      return false;
+    }
+
+    // Filter strictly for completed production batches (excluding stock adjustments / reconciliations)
+    let completedBatches = batches.filter(b => b.batchNo && (b.status === 'completed' || b.currentStage === 'store') && !isStkAdjBatch(b));
+
+    // Apply Reprocessed Batches Filter Option: 'no' (default: Exclude Reprocessed), 'yes' (Include Reprocessed), 'only' (Reprocessed Batches Only)
+    const reprocessMode = plReprocess || 'no';
+    if (reprocessMode === 'no' || reprocessMode === 'exclude') {
+      completedBatches = completedBatches.filter(b => !isReprocessBatch(b));
+    } else if (reprocessMode === 'only') {
+      completedBatches = completedBatches.filter(b => isReprocessBatch(b));
+    }
+
+    // Master lookup for part details
+    const masterMap = new Map();
+    const masterPartMap = new Map();
+    master.forEach(m => {
+      if (m.jmrefNo) masterMap.set(m.jmrefNo.trim().toUpperCase(), m);
+      if (m.partNo) masterPartMap.set(m.partNo.trim().toUpperCase(), m);
+    });
+
+    // 1. Index all stage records by both batchId and batchNo (case-insensitive)
+    const stageRecsByBatchId = new Map();
+    const stageRecsByBatchNo = new Map();
+
+    stageRecs.forEach(r => {
+      if (r.batchId) {
+        if (!stageRecsByBatchId.has(r.batchId)) stageRecsByBatchId.set(r.batchId, []);
+        stageRecsByBatchId.get(r.batchId).push(r);
+      }
+      if (r.batchNo) {
+        const k = String(r.batchNo).trim().toUpperCase();
+        if (!stageRecsByBatchNo.has(k)) stageRecsByBatchNo.set(k, []);
+        stageRecsByBatchNo.get(k).push(r);
+      }
+    });
+
+    // 2. Index all batches by ID and batchNo for genealogy and parent resolution
+    const batchById = new Map();
+    const batchByNo = new Map();
+    batches.forEach(b => {
+      if (b.id) batchById.set(b.id, b);
+      if (b.batchNo) batchByNo.set(String(b.batchNo).trim().toUpperCase(), b);
+    });
+
+    // Helper to resolve parent batch (e.g. 25200-360726-22-D-S for sub-batch 25200-360726-22-D-S-1)
+    function getParentBatchSync(b) {
+      if (!b) return null;
+      if (b.parentBatchId && batchById.has(b.parentBatchId)) return batchById.get(b.parentBatchId);
+      if (b.parentBatchNo) {
+        const pNo = String(b.parentBatchNo).trim().toUpperCase();
+        if (batchByNo.has(pNo)) return batchByNo.get(pNo);
+      }
+      if (b.notes) {
+        const regexes = [
+          /pool batch:\s*([^\s\.,;]+)/i,
+          /created from batch\s*([^\s\.,;]+)/i,
+          /stock upload batch\s*([^\s\.,;]+)/i,
+          /parent batch:\s*([^\s\.,;]+)/i,
+          /reprocessed from\s*([^\s\.,;]+)/i,
+          /split from\s*([^\s\.,;]+)/i
+        ];
+        for (const regex of regexes) {
+          const match = b.notes.match(regex);
+          if (match) {
+            const pNo = match[1].trim().toUpperCase();
+            if (batchByNo.has(pNo)) return batchByNo.get(pNo);
+          }
+        }
+      }
+      if (b.batchNo) {
+        const bNo = String(b.batchNo).trim();
+        const baseMatch = bNo.match(/^(.+?)(?:-\d+|-REP\d*)$/i);
+        if (baseMatch && baseMatch[1] && baseMatch[1].toUpperCase() !== bNo.toUpperCase()) {
+          const pNo = baseMatch[1].toUpperCase();
+          if (batchByNo.has(pNo)) return batchByNo.get(pNo);
+        }
+      }
+      return null;
+    }
+
+    // Helper to get all stage records for a batch including parent stages
+    function getBatchStageRecords(b) {
+      const recs = [];
+      const seenDocIds = new Set();
+
+      const addRec = (r) => {
+        if (!r) return;
+        const key = r.id || `${r.batchId || ''}_${r.stage || ''}_${r.date || ''}_${r.movedTo || ''}_${r.movedFrom || ''}_${r.createdAt || ''}`;
+        if (!seenDocIds.has(key)) {
+          seenDocIds.add(key);
+          recs.push(r);
+        }
+      };
+
+      const bId = b.id ? String(b.id).trim() : '';
+      const bKey = b.batchNo ? String(b.batchNo).trim().toUpperCase() : '';
+
+      // 1. Records matching batchId
+      if (bId && stageRecsByBatchId.has(bId)) {
+        stageRecsByBatchId.get(bId).forEach(addRec);
+      }
+      // 2. Records matching batchNo
+      if (bKey && stageRecsByBatchNo.has(bKey)) {
+        stageRecsByBatchNo.get(bKey).forEach(addRec);
+      }
+
+      // 3. Direct lookup on parentBatchId and parentBatchNo if stored on b
+      if (b.parentBatchId) {
+        const pId = String(b.parentBatchId).trim();
+        if (stageRecsByBatchId.has(pId)) {
+          stageRecsByBatchId.get(pId).forEach(addRec);
+        }
+      }
+      if (b.parentBatchNo) {
+        const pKey = String(b.parentBatchNo).trim().toUpperCase();
+        if (stageRecsByBatchNo.has(pKey)) {
+          stageRecsByBatchNo.get(pKey).forEach(addRec);
+        }
+      }
+
+      // 4. Notes regex lookup for parent / pool batch
+      if (b.notes) {
+        const regexes = [
+          /pool batch:\s*([^\s\.,;]+)/i,
+          /created from batch\s*([^\s\.,;]+)/i,
+          /stock upload batch\s*([^\s\.,;]+)/i,
+          /parent batch:\s*([^\s\.,;]+)/i,
+          /reprocessed from\s*([^\s\.,;]+)/i,
+          /split from\s*([^\s\.,;]+)/i
+        ];
+        for (const regex of regexes) {
+          const match = b.notes.match(regex);
+          if (match) {
+            const pKey = match[1].trim().toUpperCase();
+            if (stageRecsByBatchNo.has(pKey)) {
+              stageRecsByBatchNo.get(pKey).forEach(addRec);
+            }
+          }
+        }
+      }
+
+      // 5. Base batch number prefix (e.g. 25247-SAP/708/430926-30-D-S for 25247-SAP/708/430926-30-D-S-1)
+      if (bKey) {
+        const baseMatch = bKey.match(/^(.+?)(?:-\d+|-REP\d*)$/i);
+        if (baseMatch && baseMatch[1] && baseMatch[1] !== bKey) {
+          const baseKey = baseMatch[1].trim().toUpperCase();
+          if (stageRecsByBatchNo.has(baseKey)) {
+            stageRecsByBatchNo.get(baseKey).forEach(addRec);
+          }
+        }
+      }
+
+      // 6. Inherit parent batch stage records from parent object if found
+      const parent = getParentBatchSync(b);
+      if (parent) {
+        if (parent.id && stageRecsByBatchId.has(String(parent.id).trim())) {
+          stageRecsByBatchId.get(String(parent.id).trim()).forEach(addRec);
+        }
+        if (parent.batchNo) {
+          const pKey = String(parent.batchNo).trim().toUpperCase();
+          if (stageRecsByBatchNo.has(pKey)) {
+            stageRecsByBatchNo.get(pKey).forEach(addRec);
+          }
+        }
+      }
+
+      // 7. Check child batches created from b (e.g. split sub-batches)
+      if (bId || bKey) {
+        batches.forEach(cb => {
+          if (!cb || cb.id === b.id) return;
+          const isChild = (cb.parentBatchId && cb.parentBatchId === b.id) ||
+                          (cb.parentBatchNo && String(cb.parentBatchNo).trim().toUpperCase() === bKey) ||
+                          (cb.notes && bKey && cb.notes.toUpperCase().includes(bKey)) ||
+                          (cb.batchNo && bKey && String(cb.batchNo).trim().toUpperCase().startsWith(bKey + '-'));
+          if (isChild) {
+            if (cb.id && stageRecsByBatchId.has(String(cb.id).trim())) {
+              stageRecsByBatchId.get(String(cb.id).trim()).forEach(addRec);
+            }
+            if (cb.batchNo) {
+              const cbKey = String(cb.batchNo).trim().toUpperCase();
+              if (stageRecsByBatchNo.has(cbKey)) {
+                stageRecsByBatchNo.get(cbKey).forEach(addRec);
+              }
+            }
+          }
+        });
+      }
+
+      const getSortTime = (r) => {
+        if (r.createdAt) return r.createdAt;
+        if (r.date && r.time) return `${r.date}T${r.time}`;
+        if (r.date) return r.date;
+        return '';
+      };
+      recs.sort((x, y) => {
+        const cmp = getSortTime(x).localeCompare(getSortTime(y));
+        if (cmp !== 0) return cmp;
+        return (x.id || '').localeCompare(y.id || '');
+      });
+      return recs;
+    }
+
+    // Analyze each completed batch's actual finishing path
+    const analyzedBatches = [];
+
+    completedBatches.forEach(b => {
+      const jKey = (b.jmrefNo || '').trim().toUpperCase();
+      const pKey = (b.partNo || '').trim().toUpperCase();
+      const mPart = masterMap.get(jKey) || masterPartMap.get(pKey) || {};
+      const mouldNo = String(b.mouldNo != null && b.mouldNo !== '' ? b.mouldNo : '1');
+
+      const recs = getBatchStageRecords(b);
+
+      // Check each stage activity records
+      const cryoRecs = recs.filter(r => r.stage === 'cryogenic' || r.movedTo === 'cryogenic' || r.movedFrom === 'cryogenic');
+      const deflashRecs = recs.filter(r => r.stage === 'deflashing' || r.movedTo === 'deflashing' || r.movedFrom === 'deflashing');
+      const trimRecs = recs.filter(r => r.stage === 'trimming' || r.movedTo === 'trimming' || r.movedFrom === 'trimming' || r.stage === 'waiting-trimming' || r.movedTo === 'waiting-trimming' || r.movedFrom === 'waiting-trimming');
+      const postCureRecs = recs.filter(r => r.stage === 'post-curing' || r.movedTo === 'post-curing' || r.movedFrom === 'post-curing');
+      const visRecs = recs.filter(r => r.stage === 'visual' || r.movedTo === 'visual' || r.movedFrom === 'visual' || r.stage === 'waiting-visual' || r.movedTo === 'waiting-visual' || r.movedFrom === 'waiting-visual' || r.inspectorName);
+      const qcRecs = recs.filter(r => r.stage === 'quality' || r.movedTo === 'quality' || r.movedFrom === 'quality');
+      const gaugeRecs = recs.filter(r => r.stage === 'gauge' || r.movedTo === 'gauge' || r.movedFrom === 'gauge');
+
+      // A batch has passed visual if it has visual records, an assigned inspector, reached Gauge/Quality, or moved from visual
+      const hasInspector = !!(b.inspectorName && b.inspectorName !== '—' && b.inspectorName !== '-');
+      const hasVisDetected = (visRecs.length > 0) || hasInspector || (qcRecs.length > 0) || (gaugeRecs.length > 0);
+
+      // Track chronological sequence of finishing & inspection stages taking latest stages on reverse/duplicate movements
+      function mapStageKey(s) {
+        if (!s) return null;
+        const str = String(s).trim().toLowerCase();
+        if (str === 'production' || str === 'moulding') return 'Prod';
+        if (str === 'cryogenic') return 'Cryo';
+        if (str === 'deflashing') return 'De-Flash';
+        if (str === 'waiting-trimming' || str === 'trimming') return 'Trim';
+        if (str === 'post-curing') return 'Post-Cure';
+        if (str === 'waiting-visual' || str === 'visual' || str === 'gauge') return 'Vis';
+        if (str === 'quality') return 'QC';
+        if (str === 'store') return 'Store';
+        return null;
+      }
+
+      let visitedStages = [];
+      const pushStage = (st) => {
+        if (!st || st === 'Prod' || st === 'Store') return;
+        const idx = visitedStages.indexOf(st);
+        if (idx !== -1) {
+          if (idx < visitedStages.length - 1) {
+            // Ping-pong / duplicate movement: batch rolled back to this earlier stage.
+            // Discard subsequent invalidated stages and restart forward progression from this latest stage.
+            visitedStages = visitedStages.slice(0, idx + 1);
+          }
+        } else {
+          if (st === 'QC' && !visitedStages.includes('Vis')) {
+            visitedStages.push('Vis');
+          }
+          visitedStages.push(st);
+        }
+      };
+
+      recs.forEach(r => {
+        const from = mapStageKey(r.movedFrom);
+        const to = mapStageKey(r.movedTo);
+        const st = mapStageKey(r.stage);
+
+        // If batch moved back to Production, reset active finishing stages
+        if (to === 'Prod' || (st === 'Prod' && (!to || to === 'Prod'))) {
+          visitedStages = [];
+          return;
+        }
+
+        // If batch moves OUT of Production to a finishing stage
+        if ((from === 'Prod' || st === 'Prod') && to && to !== 'Prod') {
+          visitedStages = [];
+          pushStage(to);
+          return;
+        }
+
+        if (from && from !== 'Prod' && from !== 'Store' && !visitedStages.includes(from)) {
+          pushStage(from);
+        }
+        if (st && st !== 'Prod' && st !== 'Store' && !visitedStages.includes(st)) {
+          pushStage(st);
+        }
+        if (to && to !== 'Prod' && to !== 'Store') {
+          pushStage(to);
+        }
+
+        if (r.inspectorName && !visitedStages.includes('Vis')) {
+          pushStage('Vis');
+        }
+      });
+
+      // Ensure Vis is recognized in visitedStages if hasVisDetected is true
+      if (hasVisDetected && !visitedStages.includes('Vis')) {
+        const qcIdx = visitedStages.indexOf('QC');
+        if (qcIdx !== -1) {
+          visitedStages.splice(qcIdx, 0, 'Vis');
+        } else {
+          visitedStages.push('Vis');
+        }
+      }
+
+      const hasCryo = visitedStages.includes('Cryo');
+      const hasDeflash = visitedStages.includes('De-Flash');
+      const hasTrim = visitedStages.includes('Trim');
+      const hasPostCure = visitedStages.includes('Post-Cure');
+      const hasVis = visitedStages.includes('Vis');
+      const hasQc = visitedStages.includes('QC');
+
+      const cryoDate = hasCryo && cryoRecs.length ? (cryoRecs[cryoRecs.length - 1].date || cryoRecs[cryoRecs.length - 1].createdAt || '').slice(0, 10) : '';
+      const deflashDate = hasDeflash && deflashRecs.length ? (deflashRecs[deflashRecs.length - 1].date || deflashRecs[deflashRecs.length - 1].createdAt || '').slice(0, 10) : '';
+      const trimDate = hasTrim && trimRecs.length ? (trimRecs[trimRecs.length - 1].date || trimRecs[trimRecs.length - 1].createdAt || '').slice(0, 10) : '';
+      const postCureDate = hasPostCure && postCureRecs.length ? (postCureRecs[postCureRecs.length - 1].date || postCureRecs[postCureRecs.length - 1].createdAt || '').slice(0, 10) : '';
+      const qcDate = hasQc && qcRecs.length ? (qcRecs[qcRecs.length - 1].date || qcRecs[qcRecs.length - 1].createdAt || '').slice(0, 10) : '';
+      const visDate = hasVis
+        ? (visRecs.length ? (visRecs[visRecs.length - 1].date || visRecs[visRecs.length - 1].createdAt || '').slice(0, 10) : (qcDate || trimDate || (b.productionDate || b.completedAt || b.createdAt || '').slice(0, 10)))
+        : '';
+
+      const cryoLoss = cryoRecs.reduce((s, r) => s + (Number(r.lossQty) || 0), 0);
+      const cryoIn = cryoRecs.length ? Number(cryoRecs[cryoRecs.length - 1].inputQty || cryoRecs[0].inputQty || 0) : 0;
+      const cryoOut = cryoRecs.length ? Number(cryoRecs[cryoRecs.length - 1].outputQty || 0) : 0;
+
+      const deflashLoss = deflashRecs.reduce((s, r) => s + (Number(r.lossQty) || 0), 0);
+      const deflashIn = deflashRecs.length ? Number(deflashRecs[deflashRecs.length - 1].inputQty || deflashRecs[0].inputQty || 0) : 0;
+      const deflashOut = deflashRecs.length ? Number(deflashRecs[deflashRecs.length - 1].outputQty || 0) : 0;
+
+      const trimLoss = trimRecs.reduce((s, r) => s + (Number(r.lossQty) || 0), 0);
+      const trimIn = trimRecs.length ? Number(trimRecs[trimRecs.length - 1].inputQty || trimRecs[0].inputQty || 0) : 0;
+      const trimOut = trimRecs.length ? Number(trimRecs[trimRecs.length - 1].outputQty || 0) : 0;
+
+      const visLoss = visRecs.reduce((s, r) => s + (Number(r.lossQty) || 0), 0);
+      const visIn = visRecs.length ? Number(visRecs[visRecs.length - 1].inputQty || visRecs[0].inputQty || 0) : 0;
+      const visOut = visRecs.length ? Number(visRecs[visRecs.length - 1].outputQty || 0) : 0;
+
+      const totalScrap = cryoLoss + deflashLoss + trimLoss + visLoss;
+      const initQty = Number(b.initialQty || b.remainingQty || cryoIn || deflashIn || trimIn || visIn || 0);
+      const scrapPct = initQty > 0 ? ((totalScrap / initQty) * 100).toFixed(1) + '%' : '0.0%';
+
+      let routeKey = '';
+      if (visitedStages.length === 0) {
+        routeKey = 'Direct to Store';
+      } else {
+        routeKey = visitedStages.join(' ➔ ');
+      }
+
+      const prodDate = (b.productionDate || b.completedAt || b.createdAt || '').slice(0, 10);
+      const currentQty = Number(b.remainingQty !== undefined ? b.remainingQty : b.initialQty || 0);
+
+      analyzedBatches.push({
+        batchId: b.id,
+        batchNo: b.batchNo,
+        jmrefNo: b.jmrefNo || mPart.jmrefNo || '—',
+        mouldNo,
+        partNo: b.partNo || mPart.partNo || '—',
+        description: b.description || mPart.description || '—',
+        prodDate,
+        visitedStages,
+        routeKey,
+        hasCryo, cryoDate, cryoIn, cryoOut, cryoLoss,
+        hasDeflash, deflashDate, deflashIn, deflashOut, deflashLoss,
+        hasTrim, trimDate, trimIn, trimOut, trimLoss,
+        hasPostCure, postCureDate,
+        hasVis, visDate, visIn, visOut, visLoss,
+        totalScrap, scrapPct,
+        currentStage: b.currentStage || 'store',
+        currentQty,
+        status: 'Completed',
+        isReprocessBatch: isReprocessBatch(b),
+        batchObj: b
+      });
+    });
+
+    // Group completed batches by JMREF & Mould to establish the Major Normal Route
+    const mouldGroups = new Map();
+    analyzedBatches.forEach(b => {
+      const gKey = `${(b.jmrefNo || '').trim().toUpperCase()}__M${b.mouldNo}`;
+      if (!mouldGroups.has(gKey)) {
+        mouldGroups.set(gKey, {
+          groupKey: gKey,
+          jmrefNo: b.jmrefNo,
+          mouldNo: b.mouldNo,
+          partNo: b.partNo,
+          description: b.description,
+          allBatches: [],
+          allRoutesMap: new Map(),
+          allDatesByRoute: new Map(),
+        });
+      }
+      const grp = mouldGroups.get(gKey);
+      grp.allBatches.push(b);
+      grp.allRoutesMap.set(b.routeKey, (grp.allRoutesMap.get(b.routeKey) || 0) + 1);
+      if (!grp.allDatesByRoute.has(b.routeKey)) grp.allDatesByRoute.set(b.routeKey, new Set());
+      if (b.prodDate) grp.allDatesByRoute.get(b.routeKey).add(b.prodDate);
+    });
+
+    // Determine the Major Normal Route for each Mould across all completed batches
+    mouldGroups.forEach(grp => {
+      // Major completed batches route wins (prioritizing finishing stages over direct-to-store)
+      const routeEntries = Array.from(grp.allRoutesMap.entries()).sort((a, b) => {
+        const aIsDirect = (a[0] === 'Direct to Store');
+        const bIsDirect = (b[0] === 'Direct to Store');
+        if (!aIsDirect && bIsDirect) return -1;
+        if (aIsDirect && !bIsDirect) return 1;
+        return b[1] - a[1]; // higher batch count wins
+      });
+
+      grp.dominantRoute = routeEntries.length ? routeEntries[0][0] : 'Cryo ➔ Trim ➔ Vis';
+      grp.dominantRouteDisplay = formatRouteBadges(grp.dominantRoute);
+
+      grp.allBatches.forEach(b => {
+        b.group = grp;
+        b.isDominant = (b.routeKey === grp.dominantRoute);
+        b.routeDisplay = formatRouteBadges(b.routeKey);
+
+        const dominantHasDeflash = grp.dominantRoute.includes('De-Flash');
+        const dominantHasCryo = grp.dominantRoute.includes('Cryo');
+        const dominantHasTrim = grp.dominantRoute.includes('Trim');
+        const dominantHasVis = grp.dominantRoute.includes('Vis');
+
+        if (b.isDominant) {
+          b.leakageClass = 'normal';
+          b.leakageStatus = 'Major Normal Route';
+          b.leakageBadge = '<span class="badge badge-teal font-semibold" style="font-size:10.5px;">🟢 Major Normal Route</span>';
+        } else if (dominantHasDeflash && !b.routeKey.includes('De-Flash')) {
+          b.leakageClass = 'bypassed-deflash';
+          b.leakageStatus = '🚨 Bypassed: Manual DE Flashing';
+          b.leakageBadge = '<span class="badge badge-red font-bold animate-pulse" style="font-size:10.5px; background:#dc2626; color:#fff;">🚨 Bypassed DE Flashing</span>';
+        } else if (dominantHasCryo && !b.routeKey.includes('Cryo')) {
+          b.leakageClass = 'bypassed-cryo';
+          b.leakageStatus = '🚨 Bypassed: Cryogenic';
+          b.leakageBadge = '<span class="badge badge-red font-bold animate-pulse" style="font-size:10.5px; background:#dc2626; color:#fff;">🚨 Bypassed Cryogenic</span>';
+        } else if (dominantHasTrim && !b.routeKey.includes('Trim')) {
+          b.leakageClass = 'bypassed-trim';
+          b.leakageStatus = '🚨 Bypassed: Trimming';
+          b.leakageBadge = '<span class="badge badge-red font-bold animate-pulse" style="font-size:10.5px; background:#dc2626; color:#fff;">🚨 Bypassed Trimming</span>';
+        } else if (dominantHasVis && !b.routeKey.includes('Vis')) {
+          b.leakageClass = 'bypassed-vis';
+          b.leakageStatus = '🚨 Bypassed: Visual Inspection';
+          b.leakageBadge = '<span class="badge badge-red font-bold animate-pulse" style="font-size:10.5px; background:#dc2626; color:#fff;">🚨 Bypassed Visual</span>';
+        } else if (!dominantHasDeflash && b.routeKey.includes('De-Flash')) {
+          b.leakageClass = 'added-deflash';
+          b.leakageStatus = '🟡 Extra Manual DE Flashing Added';
+          b.leakageBadge = '<span class="badge badge-amber font-bold" style="font-size:10.5px;">🟡 Added DE Flashing</span>';
+        } else {
+          b.leakageClass = 'divergent-route';
+          b.leakageStatus = '⚠️ Alternate Process Route';
+          b.leakageBadge = '<span class="badge badge-amber font-bold" style="font-size:10.5px;">⚠️ Route Deviation</span>';
+        }
+      });
+    });
+
+    // Save in global memory for instant popup modal access
+    activeProcessLeakageMap = {};
+    mouldGroups.forEach(grp => {
+      activeProcessLeakageMap[grp.groupKey] = grp;
+    });
+    if (typeof window !== 'undefined') {
+      window._activeProcessLeakageMap = activeProcessLeakageMap;
+    }
+
+    // Apply Filter Criteria
+    let filteredGroups = Array.from(mouldGroups.values());
+
+    if (jmref) {
+      const q = jmref.toLowerCase();
+      filteredGroups = filteredGroups.filter(g =>
+        (g.jmrefNo || '').toLowerCase().includes(q) ||
+        (g.partNo || '').toLowerCase().includes(q) ||
+        (g.description || '').toLowerCase().includes(q) ||
+        (`mould ${g.mouldNo}`).toLowerCase().includes(q) ||
+        g.allBatches.some(b => b.batchNo.toLowerCase().includes(q))
+      );
+    }
+
+    if (plMould) {
+      filteredGroups = filteredGroups.filter(g => String(g.mouldNo) === String(plMould));
+    }
+
+    // Compute period-specific batches, routes, and dates strictly based on From Date and To Date
+    filteredGroups.forEach(g => {
+      g.periodBatches = g.allBatches.filter(b => {
+        if (from && b.prodDate && b.prodDate < from) return false;
+        if (to && b.prodDate && b.prodDate > to) return false;
+        return true;
+      });
+
+      g.periodRoutesMap = new Map();
+      g.periodDatesByRoute = new Map();
+
+      g.periodBatches.forEach(b => {
+        g.periodRoutesMap.set(b.routeKey, (g.periodRoutesMap.get(b.routeKey) || 0) + 1);
+        if (!g.periodDatesByRoute.has(b.routeKey)) g.periodDatesByRoute.set(b.routeKey, new Set());
+        if (b.prodDate) g.periodDatesByRoute.get(b.routeKey).add(b.prodDate);
+      });
+
+      g.periodDeviatedBatches = g.periodBatches.filter(b => !b.isDominant);
+      g.hasPeriodLeakage = (g.periodRoutesMap.size > 1) || (g.periodDeviatedBatches.length > 0);
+      g.periodTotalQty = g.periodBatches.reduce((s, b) => s + b.currentQty, 0);
+      g.periodTotalScrap = g.periodBatches.reduce((s, b) => s + b.totalScrap, 0);
+
+      // Display Batches for Table 2
+      g.displayBatches = g.periodBatches.filter(b => {
+        if (plDeviation === 'bypassed-deflash' && b.leakageClass !== 'bypassed-deflash') return false;
+        if (plDeviation === 'bypassed-cryo' && b.leakageClass !== 'bypassed-cryo') return false;
+        if (plDeviation === 'all') return true;
+        // Default: display only the specific batches that deviated
+        return !b.isDominant;
+      });
+
+      // Alias batches to periodBatches for popup modal
+      g.batches = g.periodBatches;
+      g.hasLeakage = g.hasPeriodLeakage;
+      g.distinctRoutesCount = g.periodRoutesMap.size;
+      g.deviatedBatchesCount = g.periodDeviatedBatches.length;
+    });
+
+    // Exclude groups with no batches in the filtered period
+    filteredGroups = filteredGroups.filter(g => g.periodBatches.length > 0);
+
+    // Apply deviation filter
+    if (plDeviation === 'bypassed-deflash') {
+      filteredGroups = filteredGroups.filter(g => g.periodBatches.some(b => b.leakageClass === 'bypassed-deflash'));
+    } else if (plDeviation === 'bypassed-cryo') {
+      filteredGroups = filteredGroups.filter(g => g.periodBatches.some(b => b.leakageClass === 'bypassed-cryo'));
+    } else if (plDeviation === 'all') {
+      // Show all groups with batches in period
+    } else {
+      // Default: 'deviations-only' (Show only moulds with actual route deviations in the filtered period)
+      filteredGroups = filteredGroups.filter(g => g.hasPeriodLeakage && g.periodDeviatedBatches.length > 0);
+    }
+
+    // Sort groups: highest count of period deviated batches first
+    filteredGroups.sort((a, b) => (b.periodDeviatedBatches.length - a.periodDeviatedBatches.length) || a.jmrefNo.localeCompare(b.jmrefNo));
+
+    const allDisplayBatches = [];
+    filteredGroups.forEach(g => {
+      allDisplayBatches.push(...g.displayBatches);
+    });
+    allDisplayBatches.sort((a, b) => b.prodDate.localeCompare(a.prodDate) || b.batchNo.localeCompare(a.batchNo));
+
+    // Summary Metrics strictly based on filtered period
+    const totalCompletedBatches = filteredGroups.reduce((s, g) => s + g.periodBatches.length, 0);
+    const uniqueJmrefsWithLeakage = new Set(filteredGroups.filter(g => g.hasPeriodLeakage).map(g => g.jmrefNo)).size;
+    const mouldsWithLeakageCount = filteredGroups.filter(g => g.hasPeriodLeakage).length;
+    const deviatedBatchesCount = allDisplayBatches.filter(b => !b.isDominant).length;
+    const deviatedScrapQty = allDisplayBatches.filter(b => !b.isDominant).reduce((s, b) => s + b.totalScrap, 0);
+    const totalCompletedQty = filteredGroups.reduce((s, g) => s + g.periodTotalQty, 0);
+
+    // Summary Cards (Strict compliance: "Total Completed Batches", NEVER "Total Records")
+    const summaryCards = `
+      <div class="stats-grid report-kpi-banner mb-6" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px;">
+        <div class="stat-card blue">
+          <div class="stat-label">📦 Total Completed Batches</div>
+          <div class="stat-value text-blue">${formatNum(totalCompletedBatches)}</div>
+        </div>
+        <div class="stat-card red" style="border-left:4px solid var(--accent-red);">
+          <div class="stat-label">🚨 JMREFs with Process Leakage</div>
+          <div class="stat-value text-danger">${formatNum(uniqueJmrefsWithLeakage)}</div>
+        </div>
+        <div class="stat-card amber">
+          <div class="stat-label">🛠️ Moulds with Route Deviations</div>
+          <div class="stat-value text-amber">${formatNum(mouldsWithLeakageCount)}</div>
+        </div>
+        <div class="stat-card red">
+          <div class="stat-label">⚠️ Specific Deviated Batches</div>
+          <div class="stat-value text-danger">${formatNum(deviatedBatchesCount)}</div>
+        </div>
+        <div class="stat-card purple">
+          <div class="stat-label">📉 Scrap on Deviated Batches</div>
+          <div class="stat-value text-purple">${formatNum(deviatedScrapQty)} pcs</div>
+        </div>
+        <div class="stat-card teal">
+          <div class="stat-label">🏪 Completed Qty Audited</div>
+          <div class="stat-value text-teal">${formatNum(totalCompletedQty)} pcs</div>
+        </div>
+      </div>
+    `;
+
+    // Process Leakage Context Banner
+    const noticeBanner = `
+      <div class="card mb-6" style="background:rgba(239, 68, 68, 0.05); border:1px solid rgba(239, 68, 68, 0.25); padding:14px 18px; border-radius:8px;">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span style="font-size:20px;">🔀</span>
+          <div>
+            <div class="font-bold text-danger" style="font-size:13.5px;">Floor Process Leakage &amp; Actual Route Deviation Monitor (Completed Batches)</div>
+            <div class="text-xs text-muted" style="margin-top:2px;">
+              Highlights specific completed batches that departed from their mould's <strong>Major Normal Route</strong> (e.g. <code>Cryo ➔ Trim ➔ Vis</code>). Detected Finishing Routes and Dates are based strictly on the selected date filter. Click on any deviated flow badge to inspect all grouped batches in an internal popup modal.
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Table 1: JMREF & Mould Route Divergence Summary Rows
+    const groupRowsHtml = filteredGroups.map((g, i) => {
+      const routeBreakdownHtml = Array.from(g.periodRoutesMap.entries()).map(([rKey, count]) => {
+        const isDom = (rKey === g.dominantRoute);
+        const datesArr = Array.from(g.periodDatesByRoute.get(rKey) || []).sort();
+        const dateRangeStr = datesArr.length ? (datesArr.length === 1 ? formatDate(datesArr[0]) : `${formatDate(datesArr[0])} to ${formatDate(datesArr[datesArr.length - 1])}`) : 'No Date';
+        const pct = ((count / g.periodBatches.length) * 100).toFixed(0);
+
+        if (isDom) {
+          return `
+            <div style="margin-bottom:6px; font-size:12px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+              <span class="badge badge-teal font-bold" style="white-space:nowrap; padding:4px 9px; font-size:11.5px;">
+                ${rKey} (${count} batches &bull; ${pct}%)
+              </span>
+              <span class="text-xs text-muted">📅 ${dateRangeStr}</span>
+              <span class="badge badge-teal font-bold" style="font-size:9.5px; padding:1px 6px;">MAJOR NORMAL</span>
+            </div>
+          `;
+        }
+
+        // Deviated Flow with click-to-open popup
+        return `
+          <div style="margin-bottom:6px; font-size:12px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+            <button type="button" class="btn btn-xs" onclick="ReportsModule.openDeviatedBatchesModal('${escapeHtml(g.groupKey)}', '${escapeHtml(rKey)}')" style="background:rgba(239, 68, 68, 0.12); color:#dc2626; border:1px solid rgba(239, 68, 68, 0.35); font-weight:700; font-size:11.5px; padding:3px 9px; cursor:pointer; display:inline-flex; align-items:center; gap:6px; border-radius:4px;" title="Click to view all ${count} batches in this deviated flow">
+              <span>⚠️ ${rKey}</span>
+              <span class="badge badge-red font-bold" style="font-size:10px; padding:1px 6px; background:#dc2626; color:#fff;">${count} Batches 🔍</span>
+            </button>
+            <span class="text-xs text-muted">📅 ${dateRangeStr}</span>
+            <span class="badge badge-red font-bold" style="font-size:9.5px; padding:1px 6px; background:#dc2626; color:#fff;">DEVIATED FLOW</span>
+          </div>
+        `;
+      }).join('');
+
+      return `
+        <tr>
+          <td class="text-muted text-xs">${i + 1}</td>
+          <td>
+            <div style="display:flex; align-items:center; gap:6px;">
+              <span class="badge badge-teal font-bold">${escapeHtml(g.jmrefNo)}</span>
+              <span class="badge badge-gray font-bold" style="font-size:10px;">M#${g.mouldNo}</span>
+            </div>
+          </td>
+          <td>
+            <div class="font-bold text-xs">${escapeHtml(g.partNo)}</div>
+            <div class="text-xs text-muted" style="max-width:220px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(g.description)}</div>
+          </td>
+          <td style="min-width:180px;">
+            <div style="display:flex; align-items:center; flex-wrap:wrap; gap:2px;">
+              ${g.dominantRouteDisplay}
+            </div>
+          </td>
+          <td style="white-space:nowrap;">
+            ${g.hasPeriodLeakage ? `<span class="badge badge-red font-bold animate-pulse" style="background:#dc2626; color:#fff;">🚨 ${g.periodRoutesMap.size} Conflicting Routes</span>` : '<span class="badge badge-green font-semibold">✅ 1 Consistent Route</span>'}
+          </td>
+          <td style="min-width:260px;">
+            ${routeBreakdownHtml}
+          </td>
+          <td class="font-bold text-center">${g.periodBatches.length}</td>
+          <td class="font-bold text-center">
+            ${g.periodDeviatedBatches.length > 0 ? `
+              <button type="button" class="btn btn-xs btn-danger" onclick="ReportsModule.openDeviatedBatchesModal('${escapeHtml(g.groupKey)}')" style="font-weight:700; font-size:11px; padding:3px 8px; cursor:pointer; border-radius:4px;" title="Click to inspect all ${g.periodDeviatedBatches.length} deviated batches for this mould in a popup">
+                🚨 ${g.periodDeviatedBatches.length} Batches 🔍
+              </button>
+            ` : '<span class="text-muted">0</span>'}
+          </td>
+          <td class="font-bold text-teal text-right">${formatNum(g.periodTotalQty)}</td>
+          <td class="font-bold text-danger text-right">${formatNum(g.periodTotalScrap)}</td>
+        </tr>
+      `;
+    }).join('');
+
+    // Table 2: Detailed Deviated Batches Audit Table Rows
+    const batchRowsHtml = allDisplayBatches.map((b, i) => {
+      const isRecheck = !!(b.batchObj?.recheckCount && b.batchObj.recheckCount > 0);
+      return `
+        <tr>
+          <td class="text-muted text-xs">${i + 1}</td>
+          <td>
+            <a href="javascript:void(0)" onclick="App.showBatchGenealogy ? App.showBatchGenealogy('${escapeHtml(b.batchNo)}') : null" class="font-bold text-blue hover:underline" title="Click to view Batch History & Genealogy">
+              ${escapeHtml(b.batchNo)}
+            </a>
+            ${isRecheck ? '<span class="badge badge-amber" style="font-size:9.5px; margin-left:4px;">RECHECK</span>' : ''}
+            ${b.isReprocessBatch ? '<span class="badge badge-purple font-semibold" style="font-size:9.5px; margin-left:4px;">REPROCESS</span>' : ''}
+          </td>
+          <td>
+            <span class="badge badge-teal font-bold">${escapeHtml(b.jmrefNo)}</span>
+            <span class="badge badge-gray text-xs" style="margin-left:2px;">M#${b.mouldNo}</span>
+          </td>
+          <td class="font-semibold text-xs">${escapeHtml(b.partNo)}</td>
+          <td class="font-bold text-xs" style="white-space:nowrap;">${b.prodDate ? formatDate(b.prodDate) : '—'}</td>
+          <td style="min-width:160px; font-size:11.5px;">
+            <div style="display:flex; align-items:center; flex-wrap:wrap; gap:2px;">
+              ${b.group.dominantRouteDisplay}
+            </div>
+          </td>
+          <td style="min-width:160px; font-size:11.5px; background:rgba(239, 68, 68, 0.04);">
+            <div style="display:flex; align-items:center; flex-wrap:wrap; gap:2px;">
+              ${b.routeDisplay}
+            </div>
+          </td>
+          <td>${b.leakageBadge}</td>
+          <td style="font-size:11.5px; min-width:125px;">
+            ${b.hasCryo ? `
+              <div class="font-semibold text-blue">📅 ${b.cryoDate ? formatDate(b.cryoDate) : 'Done'}</div>
+              <div class="text-xs text-muted">${formatNum(b.cryoIn)} ➔ ${formatNum(b.cryoOut)} ${b.cryoLoss > 0 ? `<span class="text-danger font-semibold">(-${formatNum(b.cryoLoss)})</span>` : ''}</div>
+            ` : '<span class="badge badge-red font-bold" style="font-size:10px; background:#dc2626; color:#fff;">❌ BYPASSED</span>'}
+          </td>
+          <td style="font-size:11.5px; min-width:125px;">
+            ${b.hasDeflash ? `
+              <div class="font-semibold text-amber">📅 ${b.deflashDate ? formatDate(b.deflashDate) : 'Done'}</div>
+              <div class="text-xs text-muted">${formatNum(b.deflashIn)} ➔ ${formatNum(b.deflashOut)} ${b.deflashLoss > 0 ? `<span class="text-danger font-semibold">(-${formatNum(b.deflashLoss)})</span>` : ''}</div>
+            ` : (b.group.hasPeriodLeakage && b.group.dominantRoute.includes('De-Flash') ? '<span class="badge badge-red font-bold" style="font-size:10px; background:#dc2626; color:#fff;">❌ BYPASSED</span>' : '<span class="text-muted text-xs">—</span>')}
+          </td>
+          <td style="font-size:11.5px; min-width:125px;">
+            ${b.hasTrim ? `
+              <div class="font-semibold text-purple">📅 ${b.trimDate ? formatDate(b.trimDate) : 'Done'}</div>
+              <div class="text-xs text-muted">${formatNum(b.trimIn)} ➔ ${formatNum(b.trimOut)} ${b.trimLoss > 0 ? `<span class="text-danger font-semibold">(-${formatNum(b.trimLoss)})</span>` : ''}</div>
+            ` : (b.group.hasPeriodLeakage && b.group.dominantRoute.includes('Trim') ? '<span class="badge badge-red font-bold" style="font-size:10px; background:#dc2626; color:#fff;">❌ BYPASSED</span>' : '<span class="text-muted text-xs">—</span>')}
+          </td>
+          <td style="font-size:11.5px; min-width:125px;">
+            ${b.hasVis ? `
+              <div class="font-semibold text-green">📅 ${b.visDate ? formatDate(b.visDate) : 'Done'}</div>
+              <div class="text-xs text-muted">${formatNum(b.visIn)} ➔ ${formatNum(b.visOut)} ${b.visLoss > 0 ? `<span class="text-danger font-semibold">(-${formatNum(b.visLoss)})</span>` : ''}</div>
+            ` : (b.group.hasPeriodLeakage && b.group.dominantRoute.includes('Vis') ? '<span class="badge badge-red font-bold" style="font-size:10px; background:#dc2626; color:#fff;">❌ BYPASSED</span>' : '<span class="text-muted text-xs">—</span>')}
+          </td>
+          <td class="font-bold text-danger" style="white-space:nowrap;">
+            ${formatNum(b.totalScrap)} <span style="font-size:10.5px; font-weight:600;">(${b.scrapPct})</span>
+          </td>
+          <td class="font-bold text-teal">${formatNum(b.currentQty)}</td>
+          <td>
+            <span class="badge badge-green font-bold">Store (Completed)</span>
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    const totalBatchRowHtml = `
+      <tr class="total-row font-bold text-danger" style="background:var(--bg-glass-hover); border-top:2px solid var(--border);">
+        <td colspan="5" style="text-align:right;">TOTALS (${allDisplayBatches.length} Specific Batches Displayed):</td>
+        <td colspan="3" class="text-amber">Deviated Batches: ${deviatedBatchesCount}</td>
+        <td colspan="4"></td>
+        <td class="text-danger">${formatNum(allDisplayBatches.reduce((s, b) => s + b.totalScrap, 0))} pcs</td>
+        <td class="text-teal">${formatNum(allDisplayBatches.reduce((s, b) => s + b.currentQty, 0))} pcs</td>
+        <td></td>
+      </tr>
+    `;
+
+    // Export Headers & Data Rows
+    const headers = [
+      '#',
+      'Batch No',
+      'JMREF No',
+      'Mould No',
+      'Part No',
+      'Description',
+      'Production Date',
+      'Major Normal Route',
+      'Specific Batch Deviated Route',
+      'Deviation / Leakage Type',
+      'Cryogenic Date',
+      'Cryo In',
+      'Cryo Out',
+      'Cryo Loss',
+      'DE Flashing Date',
+      'DE Flash In',
+      'DE Flash Out',
+      'DE Flash Loss',
+      'Trimming Date',
+      'Trim In',
+      'Trim Out',
+      'Trim Loss',
+      'Visual Date',
+      'Visual In',
+      'Visual Out',
+      'Visual Loss',
+      'Combined Scrap Loss',
+      'Scrap %',
+      'Completed Qty (Pcs)',
+      'Reprocess Batch',
+      'Status'
+    ];
+
+    const dataRows = allDisplayBatches.map((b, i) => [
+      i + 1,
+      b.batchNo,
+      b.jmrefNo,
+      b.mouldNo,
+      b.partNo,
+      b.description,
+      b.prodDate || '—',
+      b.group.dominantRoute,
+      b.routeKey,
+      b.leakageStatus,
+      b.cryoDate || '—',
+      b.cryoIn,
+      b.cryoOut,
+      b.cryoLoss,
+      b.deflashDate || '—',
+      b.deflashIn,
+      b.deflashOut,
+      b.deflashLoss,
+      b.trimDate || '—',
+      b.trimIn,
+      b.trimOut,
+      b.trimLoss,
+      b.visDate || '—',
+      b.visIn,
+      b.visOut,
+      b.visLoss,
+      b.totalScrap,
+      b.scrapPct,
+      b.currentQty,
+      b.isReprocessBatch ? 'Yes' : 'No',
+      b.status
+    ]);
+
+    const html = `
+      ${summaryCards}
+      ${noticeBanner}
+
+      <!-- Section 1: JMREF & Mould Divergence Summary -->
+      <div class="card mb-6" style="border:1px solid var(--border);">
+        <div class="card-header" style="background:var(--bg-glass-hover); border-bottom:1px solid var(--border); padding:12px 18px; display:flex; justify-content:space-between; align-items:center;">
+          <h4 class="font-bold" style="font-size:14px; margin:0;">🔀 Section 1: JMREF &amp; Mould Route Inconsistency Summary</h4>
+          <span class="text-xs text-muted">${filteredGroups.length} Mould Groups Displayed</span>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>JMREF &amp; Mould</th>
+                <th>Part Details</th>
+                <th>Major Normal Route</th>
+                <th>Route Inconsistency</th>
+                <th>Detected Finishing Routes &amp; Dates</th>
+                <th style="text-align:center;">Total Completed</th>
+                <th style="text-align:center;">Deviations</th>
+                <th style="text-align:right;">Completed Qty</th>
+                <th style="text-align:right;">Total Scrap</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${groupRowsHtml || '<tr><td colspan="10" style="text-align:center;padding:32px;color:var(--text-muted);"><div style="font-size:24px;margin-bottom:6px;">✅</div><div>No JMREF or Mould process leakages detected in completed batches matching your filter criteria. All completed batches followed consistent finishing routes.</div></td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Section 2: Specific Deviated Batches & Their Deviation Routes -->
+      <div class="card" style="border:1px solid var(--border);">
+        <div class="card-header" style="background:var(--bg-glass-hover); border-bottom:1px solid var(--border); padding:12px 18px; display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <h4 class="font-bold text-danger" style="font-size:14px; margin:0;">🚨 Section 2: Specific Deviated Batches &amp; Their Deviation Routes</h4>
+            <div class="text-xs text-muted" style="margin-top:2px;">Specific completed batches that departed from their mould's Major Normal Route</div>
+          </div>
+          <span class="text-xs text-muted font-bold">${allDisplayBatches.length} Specific Batches</span>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Batch No</th>
+                <th>JMREF &amp; Mould</th>
+                <th>Part Details</th>
+                <th>Production Date</th>
+                <th>Major Normal Route</th>
+                <th>🚨 Specific Batch Deviated Route</th>
+                <th>Deviation / Leakage Type</th>
+                <th>❄️ Cryogenic</th>
+                <th>🔧 DE Flashing</th>
+                <th>✂️ Trimming</th>
+                <th>👁️ Visual</th>
+                <th>Scrap Loss</th>
+                <th>Completed Qty</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${batchRowsHtml || '<tr><td colspan="15" style="text-align:center;padding:36px;color:var(--text-muted);"><div style="font-size:26px;margin-bottom:8px;">✅</div><div>No deviated batches found matching the selected criteria. All completed batches followed their mould\'s Major Normal Route!</div></td></tr>'}
+              ${allDisplayBatches.length > 0 ? totalBatchRowHtml : ''}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+
+    return { html, headers, dataRows };
+  }
+
+  // ── Render Modal Rows for Deviated Batches Popup ─────────────
+  function renderDeviatedModalRows(batches, query) {
+    const q = (query || '').toLowerCase().trim();
+    const filtered = q ? batches.filter(b => b.batchNo.toLowerCase().includes(q) || (b.prodDate || '').includes(q)) : batches;
+
+    if (!filtered.length) {
+      return '<tr><td colspan="12" style="text-align:center; padding:32px; color:var(--text-muted); font-size:13px;">🔍 No batches matching your search query.</td></tr>';
+    }
+
+    return filtered.map((b, i) => {
+      const isRecheck = !!(b.batchObj?.recheckCount && b.batchObj.recheckCount > 0);
+      return `
+        <tr>
+          <td class="text-muted text-xs">${i + 1}</td>
+          <td>
+            <a href="javascript:void(0)" onclick="App.showBatchGenealogy ? App.showBatchGenealogy('${escapeHtml(b.batchNo)}') : null" class="font-bold text-blue hover:underline" title="Click to view Batch Genealogy">
+              ${escapeHtml(b.batchNo)}
+            </a>
+            ${isRecheck ? '<span class="badge badge-amber" style="font-size:9.5px; margin-left:4px;">RECHECK</span>' : ''}
+            ${b.isReprocessBatch ? '<span class="badge badge-purple font-semibold" style="font-size:9.5px; margin-left:4px;">REPROCESS</span>' : ''}
+          </td>
+          <td class="font-bold text-xs" style="white-space:nowrap;">${b.prodDate ? formatDate(b.prodDate) : '—'}</td>
+          <td style="min-width:160px; font-size:11.5px;">
+            <div style="display:flex; align-items:center; flex-wrap:wrap; gap:2px;">
+              ${b.routeDisplay}
+            </div>
+          </td>
+          <td>${b.leakageBadge}</td>
+          <td style="font-size:11.5px; min-width:120px;">
+            ${b.hasCryo ? `
+              <div class="font-semibold text-blue">📅 ${b.cryoDate ? formatDate(b.cryoDate) : 'Done'}</div>
+              <div class="text-xs text-muted">${formatNum(b.cryoIn)}➔${formatNum(b.cryoOut)} ${b.cryoLoss > 0 ? `<span class="text-danger font-semibold">(-${formatNum(b.cryoLoss)})</span>` : ''}</div>
+            ` : '<span class="badge badge-red font-bold" style="font-size:10px; background:#dc2626; color:#fff;">❌ BYPASSED</span>'}
+          </td>
+          <td style="font-size:11.5px; min-width:120px;">
+            ${b.hasDeflash ? `
+              <div class="font-semibold text-amber">📅 ${b.deflashDate ? formatDate(b.deflashDate) : 'Done'}</div>
+              <div class="text-xs text-muted">${formatNum(b.deflashIn)}➔${formatNum(b.deflashOut)} ${b.deflashLoss > 0 ? `<span class="text-danger font-semibold">(-${formatNum(b.deflashLoss)})</span>` : ''}</div>
+            ` : (b.group.hasLeakage && b.group.dominantRoute.includes('De-Flash') ? '<span class="badge badge-red font-bold" style="font-size:10px; background:#dc2626; color:#fff;">❌ BYPASSED</span>' : '<span class="text-muted text-xs">—</span>')}
+          </td>
+          <td style="font-size:11.5px; min-width:120px;">
+            ${b.hasTrim ? `
+              <div class="font-semibold text-purple">📅 ${b.trimDate ? formatDate(b.trimDate) : 'Done'}</div>
+              <div class="text-xs text-muted">${formatNum(b.trimIn)}➔${formatNum(b.trimOut)} ${b.trimLoss > 0 ? `<span class="text-danger font-semibold">(-${formatNum(b.trimLoss)})</span>` : ''}</div>
+            ` : (b.group.hasLeakage && b.group.dominantRoute.includes('Trim') ? '<span class="badge badge-red font-bold" style="font-size:10px; background:#dc2626; color:#fff;">❌ BYPASSED</span>' : '<span class="text-muted text-xs">—</span>')}
+          </td>
+          <td style="font-size:11.5px; min-width:120px;">
+            ${b.hasVis ? `
+              <div class="font-semibold text-green">📅 ${b.visDate ? formatDate(b.visDate) : 'Done'}</div>
+              <div class="text-xs text-muted">${formatNum(b.visIn)}➔${formatNum(b.visOut)} ${b.visLoss > 0 ? `<span class="text-danger font-semibold">(-${formatNum(b.visLoss)})</span>` : ''}</div>
+            ` : (b.group.hasLeakage && b.group.dominantRoute.includes('Vis') ? '<span class="badge badge-red font-bold" style="font-size:10px; background:#dc2626; color:#fff;">❌ BYPASSED</span>' : '<span class="text-muted text-xs">—</span>')}
+          </td>
+          <td class="font-bold text-danger" style="white-space:nowrap;">
+            ${formatNum(b.totalScrap)} <span style="font-size:10.5px; font-weight:600;">(${b.scrapPct})</span>
+          </td>
+          <td class="font-bold text-teal">${formatNum(b.currentQty)}</td>
+          <td><span class="badge badge-green font-bold">Store</span></td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  // ── Open Deviated Batches Popup Modal ──────────────────────
+  function openDeviatedBatchesModal(groupKey, specificRouteKey) {
+    const group = activeProcessLeakageMap[groupKey];
+    if (!group) {
+      showToast('No record found for this mould group', 'info');
+      return;
+    }
+
+    let targetBatches = group.periodBatches || group.batches;
+    let flowTitle = '';
+    if (specificRouteKey) {
+      targetBatches = targetBatches.filter(b => b.routeKey === specificRouteKey);
+      flowTitle = specificRouteKey;
+    } else {
+      targetBatches = targetBatches.filter(b => !b.isDominant);
+      flowTitle = 'All Deviated Flows';
+    }
+
+    if (!targetBatches.length) {
+      showToast('No batches found for this flow', 'info');
+      return;
+    }
+
+    currentDeviatedModalData = {
+      groupKey,
+      specificRouteKey,
+      group,
+      batches: targetBatches
+    };
+
+    const existing = document.getElementById('deviated-batches-modal');
+    if (existing) existing.remove();
+
+    const totalQty = targetBatches.reduce((s, b) => s + b.currentQty, 0);
+    const totalScrap = targetBatches.reduce((s, b) => s + b.totalScrap, 0);
+
+    const modal = document.createElement('div');
+    modal.className = 'modal-overlay';
+    modal.id = 'deviated-batches-modal';
+    modal.style.zIndex = '2200';
+    modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
+
+    const renderedRows = renderDeviatedModalRows(targetBatches, '');
+
+    modal.innerHTML = `
+      <div class="modal modal-lg" style="max-width: 1100px; border-radius: 14px; width: 95%; max-height: 90vh; display: flex; flex-direction: column; box-shadow:0 24px 48px rgba(0,0,0,0.5);">
+        <div class="modal-header" style="flex-shrink: 0; padding: 14px 20px; border-bottom: 1px solid var(--border);">
+          <div>
+            <h3 style="margin:0; font-size:16px; font-weight:700; display:flex; align-items:center; gap:8px;">
+              <span>🚨 Deviated Batches Audit</span>
+              <span class="badge badge-teal font-bold">${escapeHtml(group.jmrefNo)}</span>
+              <span class="badge badge-gray font-bold">Mould #${group.mouldNo}</span>
+            </h3>
+            <p class="text-xs text-muted mt-1" style="margin:2px 0 0 0;">
+              Part: <strong>${escapeHtml(group.partNo)}</strong> &bull; ${escapeHtml(group.description)}
+            </p>
+          </div>
+          <button class="modal-close" onclick="document.getElementById('deviated-batches-modal').remove()">✕</button>
+        </div>
+
+        <!-- Flow Comparison Strip -->
+        <div style="background:var(--bg-glass-hover); border-bottom:1px solid var(--border); padding:10px 20px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
+          <div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap; font-size:12px;">
+            <div>
+              <span class="text-muted font-semibold">Major Normal Route:</span>
+              <span style="margin-left:4px;">${group.dominantRouteDisplay}</span>
+            </div>
+            <div style="color:var(--text-muted);">➔</div>
+            <div>
+              <span class="text-danger font-bold">Deviated Flow Taken:</span>
+              <span class="badge badge-red font-bold" style="margin-left:4px; background:#dc2626; color:#fff; font-size:11px;">⚠️ ${flowTitle}</span>
+            </div>
+          </div>
+          <div style="display:flex; align-items:center; gap:12px; font-size:12px;">
+            <span class="badge badge-blue font-bold">${targetBatches.length} Completed Batches</span>
+            <span class="badge badge-teal font-bold">${formatNum(totalQty)} Pcs</span>
+            <span class="badge badge-red font-bold">${formatNum(totalScrap)} Pcs Scrap</span>
+          </div>
+        </div>
+
+        <!-- Search Bar -->
+        <div style="padding:10px 20px; border-bottom:1px solid var(--border); display:flex; gap:10px; align-items:center;">
+          <input type="text" id="deviated-modal-search" class="form-control" placeholder="🔍 Search batch number or production date in this list..." oninput="ReportsModule.filterDeviatedModalBatches(this.value)" style="flex:1; height:34px; font-size:12px;">
+          <button class="btn btn-secondary btn-sm" onclick="ReportsModule.exportDeviatedBatchesCSV()">⬇️ Export CSV</button>
+        </div>
+
+        <!-- Modal Body / Table -->
+        <div class="modal-body" style="flex: 1; overflow-y: auto; padding: 0;">
+          <table class="data-table" style="margin: 0; width: 100%;">
+            <thead style="position: sticky; top: 0; z-index: 10; background: var(--bg-surface);">
+              <tr>
+                <th>#</th>
+                <th>Batch No</th>
+                <th>Production Date</th>
+                <th>Deviated Flow Traversed</th>
+                <th>Deviation Flag</th>
+                <th>❄️ Cryo</th>
+                <th>🔧 DE Flashing</th>
+                <th>✂️ Trimming</th>
+                <th>👁️ Visual</th>
+                <th>Scrap Loss</th>
+                <th>Completed Qty</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="deviated-modal-tbody">
+              ${renderedRows}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="modal-footer" style="flex-shrink: 0; padding: 10px 20px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end;">
+          <button class="btn btn-secondary" onclick="document.getElementById('deviated-batches-modal').remove()">Close</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(modal);
+  }
+
+  // ── Filter batches inside Deviated Batches Popup Modal ───────
+  function filterDeviatedModalBatches(query) {
+    if (!currentDeviatedModalData) return;
+    const tbody = document.getElementById('deviated-modal-tbody');
+    if (tbody) {
+      tbody.innerHTML = renderDeviatedModalRows(currentDeviatedModalData.batches, query);
+    }
+  }
+
+  // ── Export Deviated Batches from Popup to CSV ────────────────
+  function exportDeviatedBatchesCSV() {
+    if (!currentDeviatedModalData || !currentDeviatedModalData.batches.length) {
+      showToast('No batches to export', 'warning');
+      return;
+    }
+    const { group, batches, specificRouteKey } = currentDeviatedModalData;
+    const rows = batches.map((b, i) => [
+      i + 1,
+      b.batchNo,
+      b.jmrefNo,
+      b.mouldNo,
+      b.partNo,
+      b.prodDate || '',
+      group.dominantRoute,
+      b.routeKey,
+      b.leakageStatus,
+      b.cryoDate || '',
+      b.cryoIn,
+      b.cryoOut,
+      b.cryoLoss,
+      b.deflashDate || '',
+      b.deflashIn,
+      b.deflashOut,
+      b.deflashLoss,
+      b.trimDate || '',
+      b.trimIn,
+      b.trimOut,
+      b.trimLoss,
+      b.visDate || '',
+      b.visIn,
+      b.visOut,
+      b.visLoss,
+      b.totalScrap,
+      b.scrapPct,
+      b.currentQty,
+      b.isReprocessBatch ? 'Yes' : 'No',
+      'Completed'
+    ]);
+
+    const headers = [
+      '#', 'Batch No', 'JMREF No', 'Mould No', 'Part No', 'Production Date',
+      'Major Normal Route', 'Deviated Route', 'Deviation Status',
+      'Cryo Date', 'Cryo In', 'Cryo Out', 'Cryo Loss',
+      'DE Flash Date', 'DE Flash In', 'DE Flash Out', 'DE Flash Loss',
+      'Trim Date', 'Trim In', 'Trim Out', 'Trim Loss',
+      'Visual Date', 'Visual In', 'Visual Out', 'Visual Loss',
+      'Total Scrap', 'Scrap %', 'Completed Qty', 'Reprocess Batch', 'Status'
+    ];
+
+    const csvContent = [headers.join(','), ...rows.map(r => r.map(v => `"${String(v !== undefined && v !== null ? v : '').replace(/"/g, '""')}"`).join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Deviated_Batches_${group.jmrefNo}_M${group.mouldNo}_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('Deviated batches CSV exported successfully', 'success');
+  }
+
+
   const savedFilters = {};
   const savedResults = {};
 
@@ -4957,6 +6611,11 @@ const ReportsModule = (() => {
       auditStatus: g('rpt-audit-status'),
       status: g('rpt-status'),
       excludeAdmin: g('rpt-exclude-admin'),
+      cftWip: g('rpt-cft-wip'),
+      plDeviation: g('rpt-pl-deviation'),
+      plMould: g('rpt-pl-mould'),
+      plReprocess: g('rpt-pl-reprocess'),
+      plStatus: g('rpt-pl-status'),
     };
   }
 
@@ -4986,6 +6645,11 @@ const ReportsModule = (() => {
     setVal('rpt-audit-status', saved.auditStatus);
     setVal('rpt-status', saved.status);
     setVal('rpt-exclude-admin', saved.excludeAdmin);
+    setVal('rpt-cft-wip', saved.cftWip);
+    setVal('rpt-pl-deviation', saved.plDeviation);
+    setVal('rpt-pl-mould', saved.plMould);
+    setVal('rpt-pl-reprocess', saved.plReprocess);
+    setVal('rpt-pl-status', saved.plStatus);
   }
 
   function restoreSavedResult(reportKey) {
@@ -5003,9 +6667,10 @@ const ReportsModule = (() => {
       return true;
     }
 
-    output.dataset.headers = JSON.stringify(result.headers || []);
-    output.dataset.rows    = JSON.stringify(result.dataRows || []);
-    output.dataset.filters = JSON.stringify(filters || {});
+    output.dataset.headers   = JSON.stringify(result.headers || []);
+    output.dataset.rows      = JSON.stringify(result.dataRows || []);
+    output.dataset.filters   = JSON.stringify(filters || {});
+    output.dataset.reportKey = reportKey;
 
     paginateReportTables(output, result.html);
 
@@ -5082,6 +6747,8 @@ const ReportsModule = (() => {
       case 'analytics':       result = renderAnalytics(filters); break;
       case 'stock-audit':     result = renderStockAuditReport(filters); break;
       case 'audit-missing-batches': result = renderAuditMissingCrossSessionReport(filters); break;
+      case 'cryo-deflash-trim': result = renderCryoDeflashTrimReport(filters); break;
+      case 'process-leakage': result = renderProcessLeakageReport(filters); break;
       default: result = emptyState('Unknown report');
     }
 
@@ -5101,9 +6768,10 @@ const ReportsModule = (() => {
     }
     
     // Store for export
-    output.dataset.headers = JSON.stringify(result.headers || []);
-    output.dataset.rows    = JSON.stringify(result.dataRows || []);
-    output.dataset.filters = JSON.stringify(filters || {});
+    output.dataset.headers   = JSON.stringify(result.headers || []);
+    output.dataset.rows      = JSON.stringify(result.dataRows || []);
+    output.dataset.filters   = JSON.stringify(filters || {});
+    output.dataset.reportKey = reportKey;
 
     // Paginate table rows dynamically if they exceed 50 entries
     paginateReportTables(output, result.html);
@@ -5147,7 +6815,9 @@ const ReportsModule = (() => {
     { key:'daily-summary', label:'📊 Daily Production & Scrap Summary', desc:'Daily overview of total pieces molded, completed, reprocessed, and scrap rates across all stages' },
     { key:'analytics', label:'📈 Production & Quality Analytics', desc:'Interactive visual charts showing WIP bottlenecks, daily production yield trends, and top defective parts' },
     { key:'stock-audit', label:'📊 Stock Audit Discrepancy & Reconciliation', desc:'Monthly physical stock audit variance, exact match rates, and financial discrepancy report' },
-    { key:'audit-missing-batches', label:'🚨 Missing Batches Cross-Session Audit', desc:'Actual missing batches by stage verified against all monthly stock taking sessions' }
+    { key:'audit-missing-batches', label:'🚨 Missing Batches Cross-Session Audit', desc:'Actual missing batches by stage verified against all monthly stock taking sessions' },
+    { key:'cryo-deflash-trim', label:'❄️🔧✂️ 3-Stage Process (Cryo, De-Flash & Trim)', desc:'JMREFs that undergo all three processes: Cryogenic Deflashing, Manual DE Flashing, and Trimming, with live WIP & scrap tracking' },
+    { key:'process-leakage', label:'🔀 JMREF & Mould Process Leakage Report', desc:'Identify JMREFs and Moulds where batches follow inconsistent finishing processes (e.g. Cryo+Trim today vs Cryo+De-Flash+Trim yesterday) to detect process leakage and SOP bypass' }
   ];
 
   // ── Render ────────────────────────────────────────────────
@@ -6074,7 +7744,25 @@ const ReportsModule = (() => {
       return '';
     }
 
-    const totalRecords = dataRows.length;
+    if (container.dataset.reportKey === 'sub-pending' || container.dataset.reportKey === 'pending-batches') {
+      return '';
+    }
+
+    // Exclude any bottom TOTAL summary row when counting batches and totals
+    const isSummaryRow = (r) => {
+      if (!r) return true;
+      if (Array.isArray(r)) {
+        const str = r.join(' ').toLowerCase();
+        return str.includes('total:') || (r[0] === '' && /total/i.test(str));
+      }
+      if (typeof r === 'object') {
+        return !!(r.isTotal || (r.batchNo && String(r.batchNo).toLowerCase().includes('total')));
+      }
+      return false;
+    };
+
+    const actualBatchRows = dataRows.filter(r => !isSummaryRow(r));
+    const totalBatches = actualBatchRows.length;
     let qtyTotal = 0;
     let hasQty = false;
     let qtyColName = '';
@@ -6092,7 +7780,7 @@ const ReportsModule = (() => {
       if (!hasQty && (/qty|pieces|output|input|wip|store|produced|stock|total/i.test(hLower)) && !/loss|scrap|reject|rate|%|price|cost|val/i.test(hLower)) {
         hasQty = true;
         qtyColName = h;
-        dataRows.forEach(r => {
+        actualBatchRows.forEach(r => {
           if (!r || r[idx] == null) return;
           const v = parseFloat(String(r[idx]).replace(/[₹$,\s]/g, ''));
           if (!isNaN(v)) qtyTotal += v;
@@ -6101,7 +7789,7 @@ const ReportsModule = (() => {
       if (!hasLoss && (/loss|scrap|reject/i.test(hLower)) && !/%|rate/i.test(hLower)) {
         hasLoss = true;
         lossColName = h;
-        dataRows.forEach(r => {
+        actualBatchRows.forEach(r => {
           if (!r || r[idx] == null) return;
           const v = parseFloat(String(r[idx]).replace(/[₹$,\s]/g, ''));
           if (!isNaN(v)) lossTotal += v;
@@ -6110,7 +7798,7 @@ const ReportsModule = (() => {
       if (!hasVal && (/price|amount|val|cost|₹/i.test(hLower)) && !/%|rate/i.test(hLower)) {
         hasVal = true;
         valColName = h;
-        dataRows.forEach(r => {
+        actualBatchRows.forEach(r => {
           if (!r || r[idx] == null) return;
           const v = parseFloat(String(r[idx]).replace(/[₹$,\s]/g, ''));
           if (!isNaN(v)) valTotal += v;
@@ -6121,8 +7809,8 @@ const ReportsModule = (() => {
     const cards = [];
     cards.push(`
       <div class="stat-card blue" style="padding: 12px 16px; border-radius: 8px; border-left: 4px solid var(--accent-blue);">
-        <div class="stat-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px;">📋 Total Records</div>
-        <div class="stat-value blue" style="font-size: 20px; font-weight: 800; margin-top: 4px;">${formatNum(totalRecords)}</div>
+        <div class="stat-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px;">📦 Total Batches</div>
+        <div class="stat-value blue" style="font-size: 20px; font-weight: 800; margin-top: 4px;">${formatNum(totalBatches)}</div>
       </div>
     `);
 
@@ -6154,7 +7842,7 @@ const ReportsModule = (() => {
       `);
     }
 
-    if (cards.length > 1) {
+    if (cards.length >= 1) {
       return `
         <div class="stats-grid report-kpi-banner no-print mb-4" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px;">
           ${cards.join('')}
@@ -6772,6 +8460,7 @@ const ReportsModule = (() => {
   window.exportCSV = exportCSV;
   window.exportExcel = exportExcel;
   window.applyDatePreset = applyDatePreset;
+  window.openDeviatedBatchesModal = openDeviatedBatchesModal;
 
-  return { render, filterAging, showPartBatches, closePartBatches, openDefectiveBatchesModal, filterDefectiveModalBatches, openDailySummaryBatchesModal, filterDailySummaryModalBatches, exportCSV, exportExcel, applyDatePreset };
+  return { render, filterAging, showPartBatches, closePartBatches, openDefectiveBatchesModal, filterDeviatedModalBatches, openDailySummaryBatchesModal, filterDailySummaryModalBatches, openDeviatedBatchesModal, filterDeviatedModalBatches, exportDeviatedBatchesCSV, exportCSV, exportExcel, applyDatePreset };
 })();
