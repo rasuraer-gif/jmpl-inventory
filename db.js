@@ -3059,9 +3059,27 @@ const DB = (() => {
     all: () => getAll('auditSessions'),
     find: (id) => findById('auditSessions', id),
     active: () => getAll('auditSessions').filter(s => s.status === 'in_progress'),
+    fetchRemote: async () => {
+      if (!db) return getAll('auditSessions');
+      try {
+        const snap = await db.collection('auditSessions').get();
+        if (snap && snap.docs) {
+          cache.auditSessions = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          rebuildIndexesForTable('auditSessions');
+          saveLocal('auditSessions');
+          triggerDataChange('auditSessions');
+        }
+      } catch (e) {
+        console.warn('fetchRemote auditSessions error:', e);
+      }
+      return getAll('auditSessions');
+    },
     insert: (r) => insert('auditSessions', r),
+    insertAsync: (r) => insertAsync('auditSessions', r),
     update: (id, c) => update('auditSessions', id, c),
-    remove: (id) => remove('auditSessions', id)
+    updateAsync: (id, c) => updateAsync('auditSessions', id, c),
+    remove: (id) => remove('auditSessions', id),
+    removeAsync: (id) => removeAsync('auditSessions', id)
   };
 
   let _activeAuditSessionListener = null;

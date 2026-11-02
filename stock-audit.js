@@ -141,7 +141,7 @@ const StockAuditModule = (() => {
 
     // 3. Prioritize this user's active in_progress session
     const myInProgress = sessions.filter(s => s.status === 'in_progress' && isUserSession(s))
-      .sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
+      .sort((a, b) => (b.startedAt || b.createdAt || b.date || b.id || '').localeCompare(a.startedAt || a.createdAt || a.date || a.id || ''));
     if (myInProgress.length > 0) {
       currentSessionId = myInProgress[0].id;
       try { localStorage.setItem(`jmpl_audit_active_session_${userKey}`, currentSessionId); } catch (e) {}
@@ -150,7 +150,7 @@ const StockAuditModule = (() => {
 
     // 4. Any other in_progress session
     const anyInProgress = sessions.filter(x => x.status === 'in_progress')
-      .sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
+      .sort((a, b) => (b.startedAt || b.createdAt || b.date || b.id || '').localeCompare(a.startedAt || a.createdAt || a.date || a.id || ''));
     if (anyInProgress.length > 0) {
       currentSessionId = anyInProgress[0].id;
       try { localStorage.setItem(`jmpl_audit_active_session_${userKey}`, currentSessionId); } catch (e) {}
@@ -158,7 +158,7 @@ const StockAuditModule = (() => {
     }
 
     // 5. Fallback to latest overall session
-    const sorted = [...sessions].sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
+    const sorted = [...sessions].sort((a, b) => (b.startedAt || b.createdAt || b.date || b.id || '').localeCompare(a.startedAt || a.createdAt || a.date || a.id || ''));
     currentSessionId = sorted[0].id;
     try { localStorage.setItem(`jmpl_audit_active_session_${userKey}`, currentSessionId); } catch (e) {}
     return sorted[0];
@@ -441,11 +441,63 @@ const StockAuditModule = (() => {
     if (session && session.stageScope && session.stageScope !== 'all') {
       pinnedAuditingStage = session.stageScope;
     }
-    const allSessions = DB.AuditSessions.all().sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
+    const allSessions = DB.AuditSessions.all().sort((a, b) => {
+      if (a.status === 'in_progress' && b.status !== 'in_progress') return -1;
+      if (a.status !== 'in_progress' && b.status === 'in_progress') return 1;
+      const dateA = a.startedAt || a.createdAt || a.date || a.id || '';
+      const dateB = b.startedAt || b.createdAt || b.date || b.id || '';
+      return dateB.localeCompare(dateA);
+    });
     const metrics = getSessionMetrics(session);
     const currentUser = getCurrentUser();
-    const mySessions = allSessions.filter(isUserSession);
-    const otherSessions = allSessions.filter(s => !isUserSession(s));
+
+    const inProgressSessions = allSessions.filter(s => s.status === 'in_progress');
+    const completedSessions = allSessions.filter(s => s.status !== 'in_progress');
+
+    const formatSessionOption = (s) => {
+      const isSelected = session && session.id === s.id ? 'selected' : '';
+      const statusIcon = s.status === 'in_progress' ? '🟢' : '🔒';
+      const scopeLabel = s.stageScope === 'all' ? 'All Stages' : (STAGE_LABELS[s.stageScope] || s.stageScope || 'All');
+      const rawDate = s.startedAt || s.createdAt || s.date || '';
+      const dateStr = rawDate ? (rawDate.length > 10 ? rawDate.slice(0, 10) : rawDate) : 'No Date';
+      const auditor = s.auditorName || s.createdBy || 'Auditor';
+      const isMine = isUserSession(s);
+      const myTag = isMine ? ' [My Session]' : '';
+      const title = s.title || ('Audit #' + s.id);
+      return `<option value="${s.id}" ${isSelected}>${statusIcon} ${title} [${scopeLabel}] • ${dateStr} (${auditor})${myTag}</option>`;
+    };
+
+    let sessionOptionsHtml = '';
+    if (allSessions.length === 0) {
+      sessionOptionsHtml = '<option value="">No Audit Sessions Found</option>';
+      if (typeof DB !== 'undefined' && DB.AuditSessions && typeof DB.AuditSessions.fetchRemote === 'function' && !render._hasTriggeredRemoteFetch) {
+        render._hasTriggeredRemoteFetch = true;
+        DB.AuditSessions.fetchRemote().then(() => {
+          render();
+        }).catch(() => {});
+      }
+    } else if (inProgressSessions.length > 0 && completedSessions.length > 0) {
+      sessionOptionsHtml = `
+        <optgroup label="🟢 Active In-Progress Sessions (${inProgressSessions.length})">
+          ${inProgressSessions.map(formatSessionOption).join('')}
+        </optgroup>
+        <optgroup label="🔒 Completed / Finalized Sessions (${completedSessions.length})">
+          ${completedSessions.map(formatSessionOption).join('')}
+        </optgroup>
+      `;
+    } else if (inProgressSessions.length > 0) {
+      sessionOptionsHtml = `
+        <optgroup label="🟢 Active In-Progress Sessions (${inProgressSessions.length})">
+          ${inProgressSessions.map(formatSessionOption).join('')}
+        </optgroup>
+      `;
+    } else {
+      sessionOptionsHtml = `
+        <optgroup label="🔒 Completed / Finalized Sessions (${completedSessions.length})">
+          ${completedSessions.map(formatSessionOption).join('')}
+        </optgroup>
+      `;
+    }
 
     el.innerHTML = `
       <div class="animate-in" style="display:flex; flex-direction:column; gap:20px;">
@@ -463,31 +515,9 @@ const StockAuditModule = (() => {
             </div>
 
             <div class="flex items-center gap-2" style="flex-wrap:wrap;">
-              <div class="form-group mb-0" style="min-width:260px;">
+              <div class="form-group mb-0" style="min-width:280px; max-width:460px;">
                 <select id="audit-session-select" class="form-control" onchange="StockAuditModule.switchSession(this.value)" style="font-weight:600;">
-                  ${allSessions.length === 0 ? '<option value="">No Audit Sessions Found</option>' : ''}
-                  ${mySessions.length > 0 && otherSessions.length > 0 ? `
-                    <optgroup label="👤 My Audit Sessions (${mySessions.length})">
-                      ${mySessions.map(s => `
-                        <option value="${s.id}" ${session && session.id === s.id ? 'selected' : ''}>
-                          ${s.status === 'in_progress' ? '🟢' : '🔒'} ${s.title || 'Audit ' + s.id} (${s.stageScope === 'all' ? 'All Stages' : (STAGE_LABELS[s.stageScope] || s.stageScope)})
-                        </option>
-                      `).join('')}
-                    </optgroup>
-                    <optgroup label="👥 Other Team Sessions (${otherSessions.length})">
-                      ${otherSessions.map(s => `
-                        <option value="${s.id}" ${session && session.id === s.id ? 'selected' : ''}>
-                          ${s.status === 'in_progress' ? '🟢' : '🔒'} ${s.title || 'Audit ' + s.id} (${s.stageScope === 'all' ? 'All Stages' : (STAGE_LABELS[s.stageScope] || s.stageScope)}) — ${s.auditorName || s.createdBy || 'Auditor'}
-                        </option>
-                      `).join('')}
-                    </optgroup>
-                  ` : `
-                    ${allSessions.map(s => `
-                      <option value="${s.id}" ${session && session.id === s.id ? 'selected' : ''}>
-                        ${s.status === 'in_progress' ? '🟢' : '🔒'} ${s.title || 'Audit ' + s.id} (${s.stageScope === 'all' ? 'All Stages' : (STAGE_LABELS[s.stageScope] || s.stageScope)})${s.auditorName ? ' — ' + s.auditorName : ''}
-                      </option>
-                    `).join('')}
-                  `}
+                  ${sessionOptionsHtml}
                 </select>
               </div>
               
@@ -1552,7 +1582,13 @@ const StockAuditModule = (() => {
   }
 
   function renderSessionsTab() {
-    const allSessions = DB.AuditSessions.all().sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
+    const allSessions = DB.AuditSessions.all().sort((a, b) => {
+      if (a.status === 'in_progress' && b.status !== 'in_progress') return -1;
+      if (a.status !== 'in_progress' && b.status === 'in_progress') return 1;
+      const dateA = a.startedAt || a.createdAt || a.date || a.id || '';
+      const dateB = b.startedAt || b.createdAt || b.date || b.id || '';
+      return dateB.localeCompare(dateA);
+    });
     const currentUser = getCurrentUser();
     const mySessions = allSessions.filter(isUserSession);
     const inProgressSessions = allSessions.filter(s => s.status === 'in_progress');

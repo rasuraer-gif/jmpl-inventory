@@ -3576,12 +3576,46 @@ const ReportsModule = (() => {
         </select>
       </div>`;
 
+    const auditSessionsList = (typeof DB !== 'undefined' && DB.AuditSessions ? DB.AuditSessions.all() : [])
+      .sort((a, b) => {
+        if (a.status === 'in_progress' && b.status !== 'in_progress') return -1;
+        if (a.status !== 'in_progress' && b.status === 'in_progress') return 1;
+        const dateA = a.startedAt || a.createdAt || a.date || a.id || '';
+        const dateB = b.startedAt || b.createdAt || b.date || b.id || '';
+        return dateB.localeCompare(dateA);
+      });
+
+    const inProgressAuditSessions = auditSessionsList.filter(s => s.status === 'in_progress');
+    const closedAuditSessions = auditSessionsList.filter(s => s.status !== 'in_progress');
+
+    const formatRptAuditOption = (s) => {
+      const icon = s.status === 'in_progress' ? '🟢' : '🔒';
+      const rawDate = s.startedAt || s.createdAt || s.date || '';
+      const dateStr = rawDate ? (rawDate.length > 10 ? rawDate.slice(0, 10) : rawDate) : '';
+      const auditor = s.auditorName || s.createdBy || '';
+      const scopeLabel = s.stageScope === 'all' ? 'All Stages' : (STAGE_LABELS[s.stageScope] || s.stageScope || '');
+      return `<option value="${s.id}">${icon} ${s.title || 'Audit #' + s.id}${scopeLabel ? ' [' + scopeLabel + ']' : ''}${dateStr ? ' • ' + dateStr : ''}${auditor ? ' (' + auditor + ')' : ''}</option>`;
+    };
+
+    let rptAuditOptionsHtml = '<option value="">All Audit Sessions</option>';
+    if (inProgressAuditSessions.length > 0 && closedAuditSessions.length > 0) {
+      rptAuditOptionsHtml += `
+        <optgroup label="🟢 Active In-Progress Sessions (${inProgressAuditSessions.length})">
+          ${inProgressAuditSessions.map(formatRptAuditOption).join('')}
+        </optgroup>
+        <optgroup label="🔒 Completed / Finalized Sessions (${closedAuditSessions.length})">
+          ${closedAuditSessions.map(formatRptAuditOption).join('')}
+        </optgroup>
+      `;
+    } else {
+      rptAuditOptionsHtml += auditSessionsList.map(formatRptAuditOption).join('');
+    }
+
     const auditSessionTitleFilter = `
       <div class="form-group mb-0">
         <label class="form-label">Audit Session Title</label>
         <select class="form-control" id="rpt-audit-session">
-          <option value="">All Audit Sessions</option>
-          ${(typeof DB !== 'undefined' && DB.AuditSessions ? DB.AuditSessions.all() : []).map(s => `<option value="${s.id}">${s.title || s.id} (${(s.startedAt || '').slice(0, 10)})</option>`).join('')}
+          ${rptAuditOptionsHtml}
         </select>
       </div>`;
 
@@ -4340,7 +4374,13 @@ const ReportsModule = (() => {
   function renderAuditMissingCrossSessionReport(filters) {
     const { auditSessionId, pendingStage, auditStatus, jmref } = filters || {};
 
-    const allSessions = DB.AuditSessions ? DB.AuditSessions.all().sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || '')) : [];
+    const allSessions = DB.AuditSessions ? DB.AuditSessions.all().sort((a, b) => {
+      if (a.status === 'in_progress' && b.status !== 'in_progress') return -1;
+      if (a.status !== 'in_progress' && b.status === 'in_progress') return 1;
+      const dateA = a.startedAt || a.createdAt || a.date || a.id || '';
+      const dateB = b.startedAt || b.createdAt || b.date || b.id || '';
+      return dateB.localeCompare(dateA);
+    }) : [];
     if (!allSessions || allSessions.length === 0) {
       return emptyState('No stock audit sessions found. Please create a stock taking session first.');
     }

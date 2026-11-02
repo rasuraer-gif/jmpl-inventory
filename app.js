@@ -804,7 +804,11 @@ const App = (() => {
 
     // Trigger on-demand background fetch for module-specific data if not yet loaded
     if (typeof DB !== 'undefined' && typeof DB.ensureModuleLoaded === 'function') {
-      DB.ensureModuleLoaded(moduleId).catch(console.warn);
+      DB.ensureModuleLoaded(moduleId).then(() => {
+        if (moduleId === 'stock-audit' && currentModule === 'stock-audit' && typeof StockAuditModule !== 'undefined' && typeof StockAuditModule.render === 'function') {
+          StockAuditModule.render();
+        }
+      }).catch(console.warn);
     }
 
     // Update active nav
@@ -907,6 +911,10 @@ const App = (() => {
       } else if (table === 'moulds' && currentModule === 'mould-tracking') {
         if (typeof MouldTrackingModule !== 'undefined' && typeof MouldTrackingModule.render === 'function') {
           MouldTrackingModule.render();
+        }
+      } else if (table === 'auditSessions' && currentModule === 'stock-audit') {
+        if (typeof StockAuditModule !== 'undefined' && typeof StockAuditModule.render === 'function') {
+          StockAuditModule.render();
         }
       }
     });
