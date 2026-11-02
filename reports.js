@@ -4079,8 +4079,8 @@ const ReportsModule = (() => {
       ]);
 
       const entriesHtml = g.records.map(e => {
-        const u = users.find(usr => usr.id === e.recordedBy);
-        const recordedByName = u ? u.name : (e.recordedBy || '—');
+        const u = users.find(usr => usr.id === e.recordedBy || usr.username === e.recordedBy);
+        const recordedByName = u ? u.name : (e.recordedByName || e.userName || (e.notes && e.notes.includes('Quick') ? 'Admin (⚡ Quick Move)' : (e.recordedBy || '—')));
         const lossQ = Number(e.lossQty || 0);
         const lossValStr = lossQ > 0 
           ? `-${formatNum(lossQ)}${g.unitPrice > 0 ? ` <span class="text-xs" style="color:var(--accent-red); font-weight:600;">(₹${formatNum(Math.round(lossQ * g.unitPrice))})</span>` : ''}` 

@@ -703,15 +703,16 @@ const StockAuditModule = (() => {
                 <select id="audit-floor-stage-lock" class="form-control form-control-sm" style="display:inline-block; width:auto; margin-left:4px;" onchange="StockAuditModule.updateAuditingStage(this.value)">
                   <option value="auto" ${pinnedAuditingStage === 'auto' ? 'selected' : ''}>⚡ Auto-detect registered stage</option>
                   <option value="store" ${pinnedAuditingStage === 'store' ? 'selected' : ''}>Store</option>
+                  <option value="production" ${pinnedAuditingStage === 'production' ? 'selected' : ''}>Production / Moulding</option>
+                  <option value="cryogenic" ${pinnedAuditingStage === 'cryogenic' ? 'selected' : ''}>Cryogenic</option>
+                  <option value="deflashing" ${pinnedAuditingStage === 'deflashing' ? 'selected' : ''}>Flash Removal</option>
+                  <option value="waiting-trimming" ${pinnedAuditingStage === 'waiting-trimming' ? 'selected' : ''}>Waiting for Trimming</option>
+                  <option value="trimming" ${pinnedAuditingStage === 'trimming' ? 'selected' : ''}>Trimming</option>
+                  <option value="post-curing" ${pinnedAuditingStage === 'post-curing' ? 'selected' : ''}>Post Curing</option>
                   <option value="waiting-visual" ${pinnedAuditingStage === 'waiting-visual' ? 'selected' : ''}>Waiting for Visual</option>
                   <option value="visual" ${pinnedAuditingStage === 'visual' ? 'selected' : ''}>Visual Inspection</option>
                   <option value="gauge" ${pinnedAuditingStage === 'gauge' ? 'selected' : ''}>Gauge Inspection</option>
                   <option value="quality" ${pinnedAuditingStage === 'quality' ? 'selected' : ''}>Quality Final</option>
-                  <option value="production" ${pinnedAuditingStage === 'production' ? 'selected' : ''}>Production / Moulding</option>
-                  <option value="cryogenic" ${pinnedAuditingStage === 'cryogenic' ? 'selected' : ''}>Cryogenic</option>
-                  <option value="deflashing" ${pinnedAuditingStage === 'deflashing' ? 'selected' : ''}>Flash Removal</option>
-                  <option value="trimming" ${pinnedAuditingStage === 'trimming' ? 'selected' : ''}>Trimming</option>
-                  <option value="post-curing" ${pinnedAuditingStage === 'post-curing' ? 'selected' : ''}>Post Curing</option>
                 </select>
               `}
             </div>
@@ -1704,6 +1705,7 @@ const StockAuditModule = (() => {
                   <option value="production">🏭 Moulding / Production Stage</option>
                   <option value="cryogenic">❄️ Cryogenic Deflashing</option>
                   <option value="deflashing">🔧 Manual DE Flashing</option>
+                  <option value="waiting-trimming">⏳ Waiting for Trimming</option>
                   <option value="trimming">✂️ Trimming Stage</option>
                   <option value="post-curing">🔥 Post Curing</option>
                   <option value="waiting-visual">⏳ Waiting for Visual Inspection</option>
@@ -1722,15 +1724,16 @@ const StockAuditModule = (() => {
                 <select id="new-audit-stage" class="form-control" disabled style="font-weight:600; background:var(--bg-glass-hover);" onchange="StockAuditModule.onAuditStageChange(this.value)">
                   <option value="all">🏢 All Factory Stages &amp; Finished Goods Store</option>
                   <option value="store">🏪 Store / Finished Goods</option>
+                  <option value="production">🏭 Moulding / Production</option>
+                  <option value="cryogenic">❄️ Cryogenic Deflashing</option>
+                  <option value="deflashing">🔧 Manual DE Flashing</option>
+                  <option value="waiting-trimming">⏳ Waiting for Trimming</option>
+                  <option value="trimming">✂️ Trimming Stage</option>
+                  <option value="post-curing">🔥 Post Curing</option>
                   <option value="waiting-visual">⏳ Waiting for Visual Inspection</option>
                   <option value="visual">👁️ Visual Inspection Department</option>
                   <option value="gauge">📏 Gauge Inspection</option>
                   <option value="quality">⭐ Quality Final QC</option>
-                  <option value="production">🏭 Moulding / Production</option>
-                  <option value="cryogenic">❄️ Cryogenic Deflashing</option>
-                  <option value="deflashing">🔧 Manual DE Flashing</option>
-                  <option value="trimming">✂️ Trimming Stage</option>
-                  <option value="post-curing">🔥 Post Curing</option>
                 </select>
                 <p class="text-xs text-muted mt-1" id="new-audit-stage-help">Audit stage is locked to all stages for full factory audit.</p>
               </div>
@@ -1788,15 +1791,16 @@ const StockAuditModule = (() => {
                 <label class="form-label">Physical Stage Scanned At <span class="required">*</span></label>
                 <select id="v-physical-stage" class="form-control" onchange="StockAuditModule.checkStageMismatch()">
                   <option value="store">Store</option>
+                  <option value="production">Production / Moulding</option>
+                  <option value="cryogenic">Cryogenic</option>
+                  <option value="deflashing">Flash Removal</option>
+                  <option value="waiting-trimming">Waiting for Trimming</option>
+                  <option value="trimming">Trimming</option>
+                  <option value="post-curing">Post Curing</option>
                   <option value="waiting-visual">Waiting for Visual</option>
                   <option value="visual">Visual Inspection</option>
                   <option value="gauge">Gauge Inspection</option>
                   <option value="quality">Quality Final</option>
-                  <option value="production">Production / Moulding</option>
-                  <option value="cryogenic">Cryogenic</option>
-                  <option value="deflashing">Flash Removal</option>
-                  <option value="trimming">Trimming</option>
-                  <option value="post-curing">Post Curing</option>
                 </select>
                 <div id="v-stage-mismatch-alert" class="text-xs text-purple font-bold mt-1 hidden">
                   ⚠️ Note: Stage differs from registered system location!

@@ -1637,6 +1637,10 @@ window.QuickMovementHandler = {
 
     const fromStage = batch.currentStage || batch.stage || 'production';
 
+    const session = typeof Auth !== 'undefined' ? Auth.getSession() : null;
+    const currentUserId = session?.userId || session?.id || session?.username || 'admin';
+    const currentUserName = session?.name || session?.username || 'Admin';
+
     const updateFields = {
       stage: nextStageKey,
       currentStage: nextStageKey,
@@ -1653,11 +1657,14 @@ window.QuickMovementHandler = {
 
     DB.Batches.update(batchId, updateFields);
 
+    const stageNote = comments ? `${comments} (⚡ Quick Movement)` : `⚡ Quick Movement from ${STAGE_LABELS[fromStage] || fromStage} ➔ ${STAGE_LABELS[nextStageKey] || nextStageKey}`;
+
     DB.StageRecords.insert({
       batchId: batchId,
       batchNo: batch.batchNo,
       jmrefNo: batch.jmrefNo,
       partNo: batch.partNo,
+      stage: fromStage,
       movedFrom: fromStage,
       movedTo: nextStageKey,
       inputQty: inputQty,
@@ -1665,10 +1672,39 @@ window.QuickMovementHandler = {
       lossQty: lossQty,
       lossPercent: lossPct,
       vendorId: vendorId || '',
+      recordedBy: currentUserId,
+      recordedByName: currentUserName,
+      userId: currentUserId,
+      userName: currentUserName,
+      notes: stageNote,
       remarks: comments,
+      actionType: 'quick_movement',
       date: today(),
       createdAt: nowISO()
     });
+
+    if (nextStageKey === 'store') {
+      DB.StageRecords.insert({
+        batchId: batchId,
+        batchNo: batch.batchNo,
+        jmrefNo: batch.jmrefNo,
+        partNo: batch.partNo,
+        stage: 'store',
+        movedFrom: fromStage,
+        movedTo: 'store',
+        inputQty: outputQty,
+        outputQty: 0,
+        lossQty: 0,
+        recordedBy: currentUserId,
+        recordedByName: currentUserName,
+        userId: currentUserId,
+        userName: currentUserName,
+        notes: 'Received in Store via ⚡ Quick Movement',
+        actionType: 'quick_movement',
+        date: today(),
+        createdAt: nowISO()
+      });
+    }
 
     if (lossQty > 0) {
       DB.LossTracker.insert({
@@ -1679,6 +1715,9 @@ window.QuickMovementHandler = {
         lossQty: lossQty,
         lossPercent: lossPct,
         reason: comments || 'Quick Move scrap loss',
+        recordedBy: currentUserId,
+        recordedByName: currentUserName,
+        userId: currentUserId,
         date: today(),
         createdAt: nowISO()
       });

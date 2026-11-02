@@ -1849,19 +1849,64 @@ const App = (() => {
         routeText = (fromLabel === toLabel) ? fromLabel : `${fromLabel} ➔ ${toLabel}`;
       }
 
+      // Detect if this record or batch is part of Quick Movement
+      const isQuickMoveRecord = !!(
+        (r.actionType && r.actionType.toLowerCase().includes('quick')) ||
+        (r.notes && r.notes.toLowerCase().includes('quick')) ||
+        (r.remarks && r.remarks.toLowerCase().includes('quick')) ||
+        r.lossPercent !== undefined
+      );
+
+      const part = DB.Master.find(b.partId) || DB.Master.all().find(p => p.jmrefNo === b.jmrefNo) || {};
+      const isQuickMoveBatch = isQuickMoveRecord || !!(
+        part.quickMovementEnabled ||
+        (window.QuickMovementHandler && typeof QuickMovementHandler.isQuickMoveConfigured === 'function' && QuickMovementHandler.isQuickMoveConfigured(b))
+      );
+
       let changedBy = '—';
       const uid = r.recordedBy || r.userId || r.createdBy || r.movedBy || r.uploadedBy;
-      if (uid) {
+      if (uid && uid !== 'unknown' && uid !== '—' && uid !== '-') {
         const u = DB.Users.find(uid) || allUsers.find(usr => usr.id === uid || usr.username === uid || usr.name === uid);
         if (u) {
           changedBy = u.name || u.username || uid;
         } else {
           changedBy = uid;
         }
+      } else if (r.recordedByName || r.userName) {
+        changedBy = r.recordedByName || r.userName;
       } else if (r.inspectorName) {
         changedBy = r.inspectorName;
       } else if (r.operatorName) {
         changedBy = r.operatorName;
+      }
+
+      // Fallback for Quick Movement batches where recordedBy was not previously saved
+      if (changedBy === '—' || changedBy === 'unknown') {
+        if (isQuickMoveRecord || (isQuickMoveBatch && r.stage !== 'production')) {
+          const otherRecWithUser = allBatchRecs.find(sr => sr.recordedBy && sr.recordedBy !== 'unknown' && sr.recordedBy !== '—');
+          if (otherRecWithUser) {
+            const u = DB.Users.find(otherRecWithUser.recordedBy) || allUsers.find(usr => usr.id === otherRecWithUser.recordedBy || usr.username === otherRecWithUser.recordedBy || usr.name === otherRecWithUser.recordedBy);
+            changedBy = u ? (u.name || u.username) : otherRecWithUser.recordedBy;
+          } else if (operatorName && operatorName !== '—') {
+            changedBy = operatorName;
+          } else {
+            const activeSession = (typeof Auth !== 'undefined' && Auth.getSession) ? Auth.getSession() : null;
+            const fallback = activeSession ? (activeSession.name || activeSession.username) : 'Admin';
+            changedBy = fallback;
+          }
+        } else if (operatorName && operatorName !== '—') {
+          changedBy = operatorName;
+        }
+      }
+
+      let changedByDisplay = changedBy;
+      if (isQuickMoveRecord || (isQuickMoveBatch && r.stage !== 'production')) {
+        changedByDisplay = `
+          <div style="font-weight:600; color:var(--text-main);">${changedBy}</div>
+          <div style="font-size:10px; font-weight:700; color:#d97706; display:flex; align-items:center; gap:2px; margin-top:1px;">
+            <span>⚡ Quick Move</span>
+          </div>
+        `;
       }
 
       let inspectorOrOpDisplay = '—';
@@ -1928,9 +1973,9 @@ const App = (() => {
           <td class="${displayLoss > 0 ? 'text-danger font-semibold' : 'text-muted'}">${displayLoss > 0 ? formatNum(displayLoss) : '0'}</td>
           <td class="${repQty > 0 ? 'text-warning font-semibold' : 'text-muted'}">${repQty > 0 ? formatNum(repQty) : '—'}</td>
           <td style="white-space: nowrap;">${inspectorOrOpDisplay}</td>
-          <td class="font-medium" style="white-space: nowrap; color: var(--text-main);">${changedBy}</td>
+          <td class="font-medium" style="white-space: nowrap; color: var(--text-main);">${changedByDisplay}</td>
           <td style="white-space: nowrap;">${dateTimeDisplay}</td>
-          <td class="text-muted" style="max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${r.notes||''}">${r.notes || '—'}</td>
+          <td class="text-muted" style="max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${r.notes || r.remarks || ''}">${r.notes || r.remarks || (isQuickMoveRecord ? '⚡ Quick Movement' : '—')}</td>
         </tr>`;
     }).join('') || '<tr><td colspan="9" class="text-center text-muted">No stage history recorded</td></tr>';
 
@@ -1957,7 +2002,19 @@ const App = (() => {
                 ${lossRecs.map(l => {
                   const stageName = l.stage ? l.stage.toUpperCase() : '—';
                   const reason = l.reason || l.defectType || l.defectReason || 'Scrap / Loss';
-                  const recorder = l.inspectorName || l.operatorName || (l.recordedBy ? (DB.Users.find(l.recordedBy)?.name || l.recordedBy) : '—');
+                  const lUid = l.recordedBy || l.userId;
+                  let recorder = l.inspectorName || l.operatorName || '—';
+                  if (lUid && lUid !== 'unknown' && lUid !== '—' && lUid !== '-') {
+                    const u = DB.Users.find(lUid) || allUsers.find(usr => usr.id === lUid || usr.username === lUid || usr.name === lUid);
+                    recorder = u ? (u.name || u.username) : lUid;
+                  } else if (l.recordedByName || l.userName) {
+                    recorder = l.recordedByName || l.userName;
+                  } else if (recorder === '—') {
+                    const otherRecWithUser = allBatchRecs.find(sr => sr.recordedBy && sr.recordedBy !== 'unknown' && sr.recordedBy !== '—');
+                    const u = otherRecWithUser ? (DB.Users.find(otherRecWithUser.recordedBy) || allUsers.find(usr => usr.id === otherRecWithUser.recordedBy)) : null;
+                    const resolved = u ? (u.name || u.username) : (operatorName !== '—' ? operatorName : 'Admin');
+                    recorder = `${resolved} (⚡ Quick Move)`;
+                  }
                   const lDate = (l.date || l.createdAt || '—').slice(0, 16).replace('T', ' ');
                   return `
                     <tr>
@@ -1966,7 +2023,7 @@ const App = (() => {
                       <td>${reason}</td>
                       <td>${recorder}</td>
                       <td style="white-space:nowrap;">${lDate}</td>
-                      <td class="text-muted">${l.notes || '—'}</td>
+                      <td class="text-muted">${l.notes || l.remarks || '—'}</td>
                     </tr>
                   `;
                 }).join('')}

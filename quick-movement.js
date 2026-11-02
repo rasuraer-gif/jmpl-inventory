@@ -404,6 +404,8 @@ const QuickMovementModule = (() => {
     }
 
     const session = typeof Auth !== 'undefined' ? Auth.getSession() : null;
+    const currentUserId = session?.userId || session?.id || session?.username || 'admin';
+    const currentUserName = session?.name || session?.username || 'Admin';
     const dateStr = new Date().toISOString().slice(0, 10);
     const b = _activeBatch;
 
@@ -415,6 +417,8 @@ const QuickMovementModule = (() => {
     }
 
     try {
+      const qmNote = notes ? `${notes} (⚡ Quick Movement)` : `⚡ Quick Movement to ${STAGE_LABELS[_nextStage] || _nextStage}`;
+
       // Insert Stage Record
       await DB.StageRecords.insertAsync({
         batchId: b.id,
@@ -426,8 +430,12 @@ const QuickMovementModule = (() => {
         movedTo: _nextStage,
         movedFrom: b.currentStage,
         date: dateStr,
-        recordedBy: session?.userId || 'unknown',
-        notes: notes || `Quick Movement to ${STAGE_LABELS[_nextStage] || _nextStage}`
+        recordedBy: currentUserId,
+        recordedByName: currentUserName,
+        userId: currentUserId,
+        userName: currentUserName,
+        actionType: 'quick_movement',
+        notes: qmNote
       });
 
       // Update Batch current stage and handle Store completion
@@ -439,8 +447,14 @@ const QuickMovementModule = (() => {
           outputQty: 0,
           lossQty: 0,
           movedFrom: b.currentStage,
+          movedTo: 'store',
           date: dateStr,
-          recordedBy: session?.userId || 'unknown'
+          recordedBy: currentUserId,
+          recordedByName: currentUserName,
+          userId: currentUserId,
+          userName: currentUserName,
+          actionType: 'quick_movement',
+          notes: 'Received in Store via ⚡ Quick Movement'
         });
         await DB.Batches.updateAsync(b.id, {
           status: 'completed',
@@ -464,7 +478,11 @@ const QuickMovementModule = (() => {
           lossQty,
           date: dateStr,
           jmrefNo: b.jmrefNo,
-          partNo: b.partNo
+          partNo: b.partNo,
+          reason: notes || 'Quick Move scrap loss',
+          recordedBy: currentUserId,
+          recordedByName: currentUserName,
+          userId: currentUserId
         });
       }
 
