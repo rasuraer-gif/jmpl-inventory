@@ -49,6 +49,32 @@ const QuickMovementModule = (() => {
     const current = batch.currentStage;
     const part = DB.Master.find(batch.partId) || DB.Master.all().find(p => p.jmrefNo === batch.jmrefNo) || {};
     
+    // Check mould-wise quick movement config pipeline
+    const batchMouldNo = batch.mouldNo != null ? String(batch.mouldNo) : (part.moulds && part.moulds[0] ? String(part.moulds[0].mouldNo) : '1');
+    let mouldConfig = null;
+    if (part.quickMovementMouldConfigs) {
+      mouldConfig = part.quickMovementMouldConfigs[batchMouldNo];
+    }
+    if (!mouldConfig && part.moulds && part.moulds.length) {
+      const matchingMould = part.moulds.find(m => String(m.mouldNo) === batchMouldNo || Number(m.mouldNo) === Number(batchMouldNo));
+      if (matchingMould) mouldConfig = matchingMould.quickMovementConfig;
+    }
+    if (!mouldConfig) {
+      mouldConfig = part.quickMovementConfig;
+    }
+
+    if (mouldConfig && mouldConfig.stages && mouldConfig.stages.length) {
+      const enabledStages = mouldConfig.stages.filter(s => s.enabled !== false);
+      const curIdx = enabledStages.findIndex(s => s.key === current);
+      if (curIdx !== -1 && curIdx < enabledStages.length - 1) {
+        return enabledStages[curIdx + 1].key;
+      }
+      if (curIdx === enabledStages.length - 1) {
+        if (current === 'visual') return 'quality';
+        return 'store';
+      }
+    }
+
     // Check if mould process flow defines first process
     let firstProcess = '';
     if (batch.mouldNo && part.moulds) {
@@ -427,6 +453,7 @@ const QuickMovementModule = (() => {
         outputQty: outVal,
         lossQty: lossQty,
         vendorId: vendorId || b.vendorId || '',
+        inspectorName: b.currentStage === 'visual' ? currentUserName : undefined,
         movedTo: _nextStage,
         movedFrom: b.currentStage,
         date: dateStr,

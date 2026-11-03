@@ -943,7 +943,8 @@ const MasterModule = (() => {
     { key: 'deflashing', label: 'Flash Removal', icon: '🔧', enabled: true },
     { key: 'waiting-trimming', label: 'Waiting for Trimming', icon: '⏳', enabled: true },
     { key: 'trimming', label: 'Trimming (Subcontractor)', icon: '✂️', enabled: true },
-    { key: 'waiting-visual', label: 'Waiting for Visual Inspection', icon: '⏳', enabled: true }
+    { key: 'waiting-visual', label: 'Waiting for Visual Inspection', icon: '⏳', enabled: true },
+    { key: 'visual', label: 'Visual Inspection', icon: '👁️', enabled: true }
   ];
 
   function quickMoveConfigModal() {
@@ -1041,6 +1042,15 @@ const MasterModule = (() => {
 
       if (existingConfig && existingConfig.stages) {
         mouldConfigsCache[k] = JSON.parse(JSON.stringify(existingConfig));
+        if (!mouldConfigsCache[k].stages.some(s => s.key === 'visual')) {
+          const wvIdx = mouldConfigsCache[k].stages.findIndex(s => s.key === 'waiting-visual');
+          const visualStage = { key: 'visual', label: 'Visual Inspection', icon: '👁️', enabled: true };
+          if (wvIdx !== -1) {
+            mouldConfigsCache[k].stages.splice(wvIdx + 1, 0, visualStage);
+          } else {
+            mouldConfigsCache[k].stages.push(visualStage);
+          }
+        }
       } else {
         mouldConfigsCache[k] = {
           enabled: true,
@@ -1122,7 +1132,17 @@ const MasterModule = (() => {
     mouldNo = String(mouldNo);
     const config = mouldConfigsCache[mouldNo] || { enabled: true, stages: DEFAULT_QUICK_MOVE_STAGES };
     let rawStages = (config.stages && config.stages.length) ? config.stages : DEFAULT_QUICK_MOVE_STAGES;
-    let filteredStages = rawStages.filter(s => !['visual', 'quality', 'store'].includes(s.key));
+    let filteredStages = rawStages.filter(s => !['quality', 'store'].includes(s.key));
+
+    if (!filteredStages.some(s => s.key === 'visual')) {
+      const wvIdx = filteredStages.findIndex(s => s.key === 'waiting-visual');
+      const visualStage = { key: 'visual', label: 'Visual Inspection', icon: '👁️', enabled: true };
+      if (wvIdx !== -1) {
+        filteredStages.splice(wvIdx + 1, 0, visualStage);
+      } else {
+        filteredStages.push(visualStage);
+      }
+    }
 
     const toggle = document.getElementById('qm-config-enable-toggle');
     if (toggle) toggle.checked = !!config.enabled;
@@ -1326,7 +1346,7 @@ window.QuickMovementHandler = {
   isQuickMoveConfigured: function(batch) {
     if (!batch) return false;
     const stageKey = batch.currentStage || batch.stage;
-    if (['waiting-visual', 'visual', 'gauge', 'quality', 'store'].includes(stageKey)) return false;
+    if (['gauge', 'quality', 'store'].includes(stageKey)) return false;
 
     const part = DB.Master.find(batch.partId) || DB.Master.findByJmref(batch.jmrefNo);
     if (!part) return false;
@@ -1440,11 +1460,21 @@ window.QuickMovementHandler = {
       { key: 'deflashing', label: 'Flash Removal', icon: '🔧', enabled: true },
       { key: 'waiting-trimming', label: 'Waiting for Trimming', icon: '⏳', enabled: true },
       { key: 'trimming', label: 'Trimming (Subcontractor)', icon: '✂️', enabled: true },
-      { key: 'waiting-visual', label: 'Waiting for Visual Inspection', icon: '⏳', enabled: true }
+      { key: 'waiting-visual', label: 'Waiting for Visual Inspection', icon: '⏳', enabled: true },
+      { key: 'visual', label: 'Visual Inspection', icon: '👁️', enabled: true }
     ];
 
     let rawConfiguredStages = (mouldConfig && mouldConfig.stages && mouldConfig.stages.length) ? mouldConfig.stages : DEFAULT_STAGES;
-    const allConfiguredStages = rawConfiguredStages.filter(s => !['visual', 'quality', 'store'].includes(s.key));
+    const allConfiguredStages = rawConfiguredStages.filter(s => !['quality', 'store'].includes(s.key));
+    if (!allConfiguredStages.some(s => s.key === 'visual')) {
+      const wvIdx = allConfiguredStages.findIndex(s => s.key === 'waiting-visual');
+      const visualStage = { key: 'visual', label: 'Visual Inspection', icon: '👁️', enabled: true };
+      if (wvIdx !== -1) {
+        allConfiguredStages.splice(wvIdx + 1, 0, visualStage);
+      } else {
+        allConfiguredStages.push(visualStage);
+      }
+    }
     const currentStageKey = batch.currentStage || batch.stage || 'production';
     
     let currentIdx = allConfiguredStages.findIndex(s => s.key === currentStageKey);
@@ -1471,6 +1501,10 @@ window.QuickMovementHandler = {
         nextStage = allConfiguredStages[i];
         break;
       }
+    }
+
+    if (!nextStage && currentStageKey === 'visual') {
+      nextStage = { key: 'quality', label: 'Quality Final', icon: '🔍', enabled: true };
     }
 
     if (!nextStage || currentStageKey === 'store') {
@@ -1672,6 +1706,7 @@ window.QuickMovementHandler = {
       lossQty: lossQty,
       lossPercent: lossPct,
       vendorId: vendorId || '',
+      inspectorName: fromStage === 'visual' ? currentUserName : undefined,
       recordedBy: currentUserId,
       recordedByName: currentUserName,
       userId: currentUserId,

@@ -644,8 +644,12 @@ const WaitingVisualModule = (() => {
   }
 
   function openProcess(batchId, inputQty) {
-    _wvInputQty = inputQty;
     const b = DB.Batches.find(batchId)||{};
+    if (b && window.QuickMovementHandler && QuickMovementHandler.isQuickMoveConfigured(b)) {
+      QuickMovementHandler.openScannerModal(batchId);
+      return;
+    }
+    _wvInputQty = inputQty;
     _activeBatch = b;
     document.getElementById('wv-process-batch-id').value = batchId;
     document.getElementById('wv-process-input-qty').value = inputQty;
