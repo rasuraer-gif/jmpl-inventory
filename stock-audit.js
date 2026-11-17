@@ -111,6 +111,70 @@ const StockAuditModule = (() => {
     }
   }
 
+  // ── Production Date Aging Configuration & Age Calculation ──
+  function getAuditProdAgeConfig() {
+    try {
+      if (typeof AdminModule !== 'undefined' && typeof AdminModule.getAuditProdAgeConfig === 'function') {
+        return AdminModule.getAuditProdAgeConfig();
+      }
+      const raw = localStorage.getItem('jmpl_audit_prod_age_config');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        return {
+          enabled: parsed.enabled !== false,
+          thresholdDays: (parsed.thresholdDays && !isNaN(parsed.thresholdDays) && Number(parsed.thresholdDays) > 0) ? Number(parsed.thresholdDays) : 30,
+          mode: parsed.mode === 'always' ? 'always' : 'exceed_only',
+          soundAlert: parsed.soundAlert !== false
+        };
+      }
+    } catch (e) {
+      console.warn('Failed to load audit prod age config', e);
+    }
+    return {
+      enabled: true,
+      thresholdDays: 30,
+      mode: 'exceed_only',
+      soundAlert: true
+    };
+  }
+
+  function getBatchProductionAge(batch, customThreshold) {
+    const config = getAuditProdAgeConfig();
+    const thresholdDays = customThreshold != null ? Number(customThreshold) : config.thresholdDays;
+    if (!batch) {
+      return { ageDays: 0, prodDateStr: '', formattedDate: '—', isOverThreshold: false, thresholdDays };
+    }
+
+    const rawDate = batch.productionDate || batch.createdAt || '';
+    const dateStr = String(rawDate).slice(0, 10);
+    if (!dateStr || isNaN(new Date(dateStr).getTime())) {
+      return { ageDays: 0, prodDateStr: '', formattedDate: 'Not specified', isOverThreshold: false, thresholdDays };
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const pDate = new Date(dateStr);
+    pDate.setHours(0, 0, 0, 0);
+    const diffTime = today.getTime() - pDate.getTime();
+    const ageDays = Math.max(0, Math.floor(diffTime / (1000 * 60 * 60 * 24)));
+    const isOverThreshold = ageDays >= Number(thresholdDays);
+
+    let formattedDate = dateStr;
+    try {
+      if (typeof formatDate === 'function') {
+        formattedDate = formatDate(dateStr);
+      }
+    } catch (e) {}
+
+    return {
+      ageDays,
+      prodDateStr: dateStr,
+      formattedDate,
+      isOverThreshold,
+      thresholdDays
+    };
+  }
+
   // ── Get Active or Selected Session (User-Based Persistence) ─
   function getActiveSession() {
     const sessions = DB.AuditSessions.all();
@@ -791,10 +855,30 @@ const StockAuditModule = (() => {
       statusText = 'Stage Mismatch';
     }
 
+    const ageConfig = getAuditProdAgeConfig();
+    let ageDays = r.productionAgeDays;
+    let isAging = r.ageAlert;
+    if (ageDays == null && r.batchId) {
+      const b = DB.Batches.find(r.batchId);
+      if (b) {
+        const info = getBatchProductionAge(b, ageConfig.thresholdDays);
+        ageDays = info.ageDays;
+        isAging = info.isOverThreshold;
+      }
+    }
+
+    const ageLabel = (ageConfig.enabled && ageDays != null) ? (
+      isAging ? `<span class="badge badge-amber font-bold" style="font-size:10px; margin-left:6px;" title="Aging alert: ${ageDays} days old">⏳ ${ageDays}d old</span>`
+              : `<span class="badge badge-gray" style="font-size:10px; margin-left:6px;" title="${ageDays} days old">📅 ${ageDays}d old</span>`
+    ) : '';
+
     return `
       <div class="audit-scan-row animate-in" style="display:flex; justify-content:space-between; align-items:center; padding:10px 14px; background:var(--card-bg); border:1px solid var(--border); border-radius:8px; font-size:13px;">
         <div>
-          <div class="font-semibold text-blue">${r.batchNo}</div>
+          <div class="font-semibold text-blue flex items-center">
+            ${r.batchNo}
+            ${ageLabel}
+          </div>
           <div class="text-xs text-muted">JMREF ${r.jmrefNo || '—'} | ${STAGE_LABELS[r.scannedStage] || r.scannedStage || '—'} ${r.rackLocation ? `(${r.rackLocation})` : ''}</div>
         </div>
         <div style="text-align:right;">
@@ -896,6 +980,9 @@ const StockAuditModule = (() => {
 
     const b = lastScannedBatch.batch;
     const rec = lastScannedBatch.record;
+    const ageConfig = getAuditProdAgeConfig();
+    const ageInfo = lastScannedBatch.ageInfo || getBatchProductionAge(b, ageConfig.thresholdDays);
+
     let statusBadge = '<span class="badge badge-green">Exact Match</span>';
     if (rec.verificationStatus === 'verified_variance') {
       statusBadge = `<span class="badge badge-amber font-bold">${rec.varianceQty >= 0 ? '+' : ''}${rec.varianceQty} pcs Variance</span>`;
@@ -903,14 +990,32 @@ const StockAuditModule = (() => {
       statusBadge = '<span class="badge badge-purple font-bold">Stage Mismatch</span>';
     }
 
+    const ageBadge = (ageConfig.enabled && ageInfo.prodDateStr) ? `
+      <span class="badge ${ageInfo.isOverThreshold ? 'badge-amber font-bold' : 'badge-gray'}" style="font-size:11px;" title="Production Date: ${ageInfo.formattedDate}">
+        ${ageInfo.isOverThreshold ? '⏳ ' : '📅 '}${ageInfo.ageDays} days old
+      </span>
+    ` : '';
+
     return `
       <div style="padding:14px 16px; background:rgba(37,99,235,0.06); border-radius:8px; border:1px solid var(--accent-blue);">
         <div class="flex items-center justify-between mb-2">
           <span class="text-xs font-bold text-blue">✅ LAST VERIFIED BATCH</span>
-          ${statusBadge}
+          <div class="flex items-center gap-1.5">
+            ${ageBadge}
+            ${statusBadge}
+          </div>
         </div>
         <div class="font-bold" style="font-size:15px; color:var(--primary);">${b.batchNo}</div>
-        <div class="text-xs text-muted mt-1">Part No: <strong>${b.partNo || '—'}</strong> | JMREF: <strong>${b.jmrefNo || '—'}</strong></div>
+        <div class="text-xs text-muted mt-1">
+          Part No: <strong>${b.partNo || '—'}</strong> | JMREF: <strong>${b.jmrefNo || '—'}</strong>
+          ${ageInfo.prodDateStr ? ` | Prod Date: <strong>${ageInfo.formattedDate}</strong> (${ageInfo.ageDays}d old)` : ''}
+        </div>
+        ${(ageConfig.enabled && ageInfo.isOverThreshold) ? `
+          <div style="margin-top:8px; padding:6px 10px; background:rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.3); border-radius:6px; font-size:11.5px; color:#b45309; font-weight:600; display:flex; align-items:center; gap:6px;">
+            <span>⏳</span>
+            <span>Batch is <strong>${ageInfo.ageDays} days old</strong> from production date (${ageInfo.formattedDate}) &mdash; Alert Threshold: ${ageInfo.thresholdDays} days</span>
+          </div>
+        ` : ''}
         <div class="flex items-center justify-between mt-2 pt-2" style="border-top:1px dashed var(--border); font-size:12.5px;">
           <span>Expected: <strong>${formatNum(rec.expectedQty)}</strong> pcs (${STAGE_LABELS[rec.expectedStage] || rec.expectedStage})</span>
           <span>Counted: <strong class="text-success">${formatNum(rec.countedQty)}</strong> pcs (${STAGE_LABELS[rec.scannedStage] || rec.scannedStage})</span>
@@ -922,6 +1027,7 @@ const StockAuditModule = (() => {
   // ── Tab 2: Verified Batches Table ──────────────────────────
   function renderVerifiedTab(session) {
     let records = DB.AuditRecords.bySession(session.id);
+    const ageConfig = getAuditProdAgeConfig();
 
     if (verifiedSearch) {
       const q = verifiedSearch.toLowerCase();
@@ -933,7 +1039,18 @@ const StockAuditModule = (() => {
       );
     }
 
-    if (verifiedStatusFilter) {
+    if (verifiedStatusFilter === 'aging') {
+      records = records.filter(r => {
+        if (r.ageAlert) return true;
+        if (r.productionAgeDays != null && r.productionAgeDays >= ageConfig.thresholdDays) return true;
+        const b = DB.Batches.find(r.batchId);
+        if (b) {
+          const info = getBatchProductionAge(b, ageConfig.thresholdDays);
+          return info.isOverThreshold;
+        }
+        return false;
+      });
+    } else if (verifiedStatusFilter) {
       records = records.filter(r => r.verificationStatus === verifiedStatusFilter);
     }
 
@@ -974,11 +1091,12 @@ const StockAuditModule = (() => {
           <div class="flex items-center gap-2" style="flex-wrap:wrap; flex:1;">
             <input type="text" id="audit-verified-search" class="form-control form-control-sm" style="max-width:280px;" placeholder="Search Batch / JMREF / Part / Rack..." value="${verifiedSearch}" oninput="StockAuditModule.filterVerifiedSearch(this.value)">
             
-            <select class="form-control form-control-sm" style="max-width:200px;" onchange="StockAuditModule.filterVerifiedStatus(this.value)">
+            <select class="form-control form-control-sm" style="max-width:230px;" onchange="StockAuditModule.filterVerifiedStatus(this.value)">
               <option value="">All Verification Statuses</option>
               <option value="verified_match" ${verifiedStatusFilter === 'verified_match' ? 'selected' : ''}>Exact Match (0 Variance)</option>
               <option value="verified_variance" ${verifiedStatusFilter === 'verified_variance' ? 'selected' : ''}>Quantity Variance</option>
               <option value="stage_mismatch" ${verifiedStatusFilter === 'stage_mismatch' ? 'selected' : ''}>Stage Mismatch</option>
+              <option value="aging" ${verifiedStatusFilter === 'aging' ? 'selected' : ''}>⏳ Aging Batches (&ge; ${ageConfig.thresholdDays} days)</option>
             </select>
           </div>
 
@@ -1010,6 +1128,7 @@ const StockAuditModule = (() => {
                 <th>Batch No</th>
                 <th>JMREF</th>
                 <th>Part No</th>
+                <th>Prod Date &amp; Age</th>
                 <th>System Stage</th>
                 <th>Physical Stage</th>
                 <th>Expected Qty</th>
@@ -1024,7 +1143,7 @@ const StockAuditModule = (() => {
             </thead>
             <tbody>
               ${pageItems.length === 0 ? `
-                <tr><td colspan="14" style="text-align:center; padding:24px; color:var(--text-muted);">No verified records found matching the filter.</td></tr>
+                <tr><td colspan="15" style="text-align:center; padding:24px; color:var(--text-muted);">No verified records found matching the filter.</td></tr>
               ` : pageItems.map((r, i) => {
                 let badgeCls = 'badge-green';
                 let statusLabel = 'Exact Match';
@@ -1043,12 +1162,36 @@ const StockAuditModule = (() => {
 
                 const diff = Number(r.varianceQty || 0);
 
+                let b = DB.Batches.find(r.batchId);
+                let pDateStr = r.productionDate || (b ? (b.productionDate || b.createdAt || '') : '');
+                let pAge = r.productionAgeDays;
+                let isAging = r.ageAlert;
+                if (pAge == null && b) {
+                  const info = getBatchProductionAge(b, ageConfig.thresholdDays);
+                  pDateStr = info.prodDateStr;
+                  pAge = info.ageDays;
+                  isAging = info.isOverThreshold;
+                }
+
+                let formattedProdDate = pDateStr ? formatDate(pDateStr) : '—';
+                let ageBadgeHtml = (pAge != null && pDateStr) ? `
+                  <div style="margin-top:2px;">
+                    <span class="badge ${isAging ? 'badge-amber font-bold' : 'badge-gray'}" style="font-size:10.5px;">
+                      ${isAging ? '⏳ ' : '📅 '}${pAge} days old
+                    </span>
+                  </div>
+                ` : '';
+
                 return `
                   <tr>
                     <td>${startIdx + i + 1}</td>
                     <td class="font-semibold text-blue">${r.batchNo}</td>
                     <td><span class="badge badge-teal">${r.jmrefNo || '—'}</span></td>
                     <td>${r.partNo || '—'}</td>
+                    <td>
+                      <div class="text-xs font-semibold">${formattedProdDate}</div>
+                      ${ageBadgeHtml}
+                    </td>
                     <td>${STAGE_LABELS[r.expectedStage] || r.expectedStage || '—'}</td>
                     <td class="${r.expectedStage !== r.scannedStage ? 'font-bold text-purple' : ''}">${STAGE_LABELS[r.scannedStage] || r.scannedStage || '—'}</td>
                     <td>${formatNum(r.expectedQty)}</td>
@@ -1464,6 +1607,9 @@ const StockAuditModule = (() => {
           </div>
 
           <div class="flex items-center gap-2">
+            <button class="btn btn-warning btn-sm" onclick="StockAuditModule.syncMissingBatchesStatus()" title="Evaluate post-audit transactions and sync batch status (Missing vs Active)">
+              ⚡ Sync Missing Batches Status
+            </button>
             <button class="btn btn-teal btn-sm" onclick="StockAuditModule.exportCrossSessionMissingExcel('${session.id}')" title="Export missing and cross-session validation for this session">
               📊 Export Session Report (Excel)
             </button>
@@ -1482,6 +1628,7 @@ const StockAuditModule = (() => {
                 <th>Batch No &amp; IB</th>
                 <th>JMREF / Part No</th>
                 <th>Registered Stage</th>
+                <th>Batch Status</th>
                 <th>Book Expected Qty</th>
                 <th>Cross-Session Audit Status</th>
                 <th>Validated Details (Floor Findings)</th>
@@ -1491,11 +1638,15 @@ const StockAuditModule = (() => {
             </thead>
             <tbody>
               ${pageItems.length === 0 ? `
-                <tr><td colspan="9" style="text-align:center; padding:28px; color:var(--text-success); font-weight:600;">
+                <tr><td colspan="10" style="text-align:center; padding:28px; color:var(--text-success); font-weight:600;">
                   🎉 No missing batches matching the selected filters.
                 </td></tr>
               ` : pageItems.map((item, i) => {
                 const b = item.batch;
+                const liveBatch = (typeof DB !== 'undefined' && DB.Batches) ? (DB.Batches.find(b.id) || DB.Batches.find(b.batchNo) || b) : b;
+                const batchStatus = liveBatch.status || b.status;
+                const isMissingStatus = (batchStatus === 'missing');
+
                 return `
                   <tr>
                     <td>${startIdx + i + 1}</td>
@@ -1511,6 +1662,15 @@ const StockAuditModule = (() => {
                     </td>
                     <td>
                       <span class="stage-chip ${b.currentStage}">${(STAGE_LABELS[b.currentStage] || b.currentStage || '—').toUpperCase()}</span>
+                    </td>
+                    <td>
+                      ${isMissingStatus ? `
+                        <span class="badge badge-red font-bold" style="font-size:11px; padding:3px 8px;">⚠️ Missing</span>
+                        <div class="text-xs text-danger mt-0.5 font-semibold">Audit Discrepancy</div>
+                      ` : `
+                        <span class="badge badge-green font-bold" style="font-size:11px; padding:3px 8px;">✓ Active</span>
+                        ${liveBatch.missingResolvedAt ? `<div class="text-xs text-success mt-0.5 font-semibold">Post-Audit Active</div>` : ''}
+                      `}
                     </td>
                     <td class="font-bold text-danger">${formatNum(item.expQty)} pcs</td>
                     <td>
@@ -1560,7 +1720,7 @@ const StockAuditModule = (() => {
             ${filteredItems.length > 0 ? `
               <tfoot>
                 <tr class="font-bold text-danger" style="background:rgba(239,68,68,0.05);">
-                  <td colspan="4" style="text-align:right;">FILTERED DEFICIT TOTALS:</td>
+                  <td colspan="5" style="text-align:right;">FILTERED DEFICIT TOTALS:</td>
                   <td>${formatNum(filteredItems.reduce((s, x) => s + x.expQty, 0))} pcs</td>
                   <td colspan="2"></td>
                   <td>₹${formatNum(Math.round(filteredItems.reduce((s, x) => s + x.deficitValue, 0)))}</td>
@@ -2377,9 +2537,25 @@ const StockAuditModule = (() => {
       pinnedAuditingStage = floorStageLock;
     }
     const defaultScannedStage = (pinnedAuditingStage && pinnedAuditingStage !== 'auto') ? pinnedAuditingStage : (matchedBatch.currentStage || 'store');
+
+    // ── Missing Batch Floor Scan Reactivation ──
+    if (matchedBatch.status === 'missing') {
+      const reactivatedStatus = (defaultScannedStage === 'store' || matchedBatch.currentStage === 'store') ? 'completed' : 'active';
+      DB.Batches.update(matchedBatch.id, {
+        status: reactivatedStatus,
+        isArchived: false,
+        missingResolvedAt: new Date().toISOString()
+      });
+      matchedBatch = DB.Batches.find(matchedBatch.id) || matchedBatch;
+      showToast(`⚡ Missing Batch ${matchedBatch.batchNo} located & reactivated to ${reactivatedStatus === 'completed' ? 'Completed (Store)' : 'Active'} on floor scan!`, 'success', 5000);
+    }
     const expectedStage = matchedBatch.currentStage || 'store';
     const expectedQty = getBatchExpectedQty(matchedBatch);
     const rackLoc = (document.getElementById('audit-pinned-rack-input')?.value || pinnedRackLocation || matchedBatch.rackLocation || '').trim();
+
+    // ── Check Production Date & Age based on Admin Config ──
+    const ageConfig = getAuditProdAgeConfig();
+    const ageInfo = getBatchProductionAge(matchedBatch, ageConfig.thresholdDays);
 
     // ⚡ RAPID SCAN MODE: Auto-Verify without popup modal
     if (rapidScanMode) {
@@ -2401,7 +2577,10 @@ const StockAuditModule = (() => {
           verificationStatus,
           rackLocation: rackLoc,
           scannedBy: auditorName,
-          scannedAt: new Date().toISOString()
+          scannedAt: new Date().toISOString(),
+          productionDate: ageInfo.prodDateStr,
+          productionAgeDays: ageInfo.ageDays,
+          ageAlert: ageInfo.isOverThreshold
         };
         DB.AuditRecords.update(existingRec.id, recordObj);
       } else {
@@ -2419,7 +2598,10 @@ const StockAuditModule = (() => {
           verificationStatus,
           rackLocation: rackLoc,
           scannedBy: auditorName,
-          scannedAt: new Date().toISOString()
+          scannedAt: new Date().toISOString(),
+          productionDate: ageInfo.prodDateStr,
+          productionAgeDays: ageInfo.ageDays,
+          ageAlert: ageInfo.isOverThreshold
         };
         DB.AuditRecords.insert(recordObj);
       }
@@ -2427,17 +2609,38 @@ const StockAuditModule = (() => {
       // Update metrics cache incrementally in O(1) (<0.05ms)
       applyScanToSessionMetrics(session, recordObj, existingRec);
 
-      if (isExactStage) {
-        playAudioTone('success');
-        showToast(`⚡ Rapid Verified: ${matchedBatch.batchNo} (Exact Match — ${formatNum(expectedQty)} pcs in ${STAGE_LABELS[defaultScannedStage] || defaultScannedStage})`, 'success');
+      // Notification & Audio Tone based on Admin Configuration
+      if (ageConfig.enabled && ageInfo.isOverThreshold) {
+        if (ageConfig.soundAlert) playAudioTone('warning');
+        showToast(`⏳ Age Alert: Batch ${matchedBatch.batchNo} is ${ageInfo.ageDays} days old from production date (${ageInfo.formattedDate}) [Threshold: ${ageInfo.thresholdDays}d]`, 'warning', 6000);
+        if (isExactStage) {
+          setTimeout(() => {
+            showToast(`⚡ Rapid Verified: ${matchedBatch.batchNo} (Exact Match — ${formatNum(expectedQty)} pcs in ${STAGE_LABELS[defaultScannedStage] || defaultScannedStage})`, 'success', 3000);
+          }, 350);
+        } else {
+          setTimeout(() => {
+            showToast(`⚡ Rapid Recorded: ${matchedBatch.batchNo} (Stage Mismatch: in ${STAGE_LABELS[defaultScannedStage] || defaultScannedStage})`, 'warning', 3000);
+          }, 350);
+        }
       } else {
-        playAudioTone('warning');
-        showToast(`⚡ Rapid Recorded: ${matchedBatch.batchNo} (Stage Mismatch: found in ${STAGE_LABELS[defaultScannedStage] || defaultScannedStage}, registered in ${STAGE_LABELS[expectedStage] || expectedStage})`, 'warning');
+        if (isExactStage) {
+          playAudioTone('success');
+          showToast(`⚡ Rapid Verified: ${matchedBatch.batchNo} (Exact Match — ${formatNum(expectedQty)} pcs in ${STAGE_LABELS[defaultScannedStage] || defaultScannedStage})`, 'success');
+        } else {
+          playAudioTone('warning');
+          showToast(`⚡ Rapid Recorded: ${matchedBatch.batchNo} (Stage Mismatch: found in ${STAGE_LABELS[defaultScannedStage] || defaultScannedStage}, registered in ${STAGE_LABELS[expectedStage] || expectedStage})`, 'warning');
+        }
+        if (ageConfig.enabled && ageConfig.mode === 'always' && ageInfo.prodDateStr) {
+          setTimeout(() => {
+            showToast(`📅 Batch ${matchedBatch.batchNo} Prod Date: ${ageInfo.formattedDate} (${ageInfo.ageDays} days old)`, 'info', 3500);
+          }, 350);
+        }
       }
 
       lastScannedBatch = {
         batch: matchedBatch,
-        record: recordObj
+        record: recordObj,
+        ageInfo: ageInfo
       };
 
       // Instant sub-millisecond targeted DOM update (no delay, no page flickering)
@@ -2468,6 +2671,9 @@ const StockAuditModule = (() => {
     const expectedQty = getBatchExpectedQty(batch);
     const expectedStage = batch.currentStage || 'store';
     const scannedStage = forcedScannedStage || expectedStage;
+
+    const ageConfig = getAuditProdAgeConfig();
+    const ageInfo = getBatchProductionAge(batch, ageConfig.thresholdDays);
 
     // Check if already verified in this session
     const existingRec = DB.AuditRecords.bySession(session.id).find(r => r.batchId === batch.id);
@@ -2517,12 +2723,37 @@ const StockAuditModule = (() => {
       banner.innerHTML = `
         <div class="flex items-center justify-between mb-1">
           <span class="font-bold text-blue" style="font-size:16px;">${batch.batchNo}</span>
-          <span class="badge badge-teal">JMREF ${batch.jmrefNo || '—'}</span>
+          <div class="flex items-center gap-1.5">
+            <span class="badge badge-teal">JMREF ${batch.jmrefNo || '—'}</span>
+            ${(ageConfig.enabled && ageInfo.prodDateStr) ? `
+              <span class="badge ${ageInfo.isOverThreshold ? 'badge-amber font-bold' : 'badge-gray'}" title="Produced on ${ageInfo.formattedDate}">
+                ${ageInfo.isOverThreshold ? '⏳ ' : '📅 '}${ageInfo.ageDays} days old
+              </span>
+            ` : ''}
+          </div>
         </div>
-        <div class="text-xs text-muted">Part No: <strong>${batch.partNo || '—'}</strong> | Registered Stage: <strong>${STAGE_LABELS[expectedStage] || expectedStage}</strong></div>
+        <div class="text-xs text-muted">
+          Part No: <strong>${batch.partNo || '—'}</strong> | Registered Stage: <strong>${STAGE_LABELS[expectedStage] || expectedStage}</strong>
+          ${ageInfo.prodDateStr ? ` | Prod Date: <strong>${ageInfo.formattedDate}</strong> (${ageInfo.ageDays}d old)` : ''}
+        </div>
         <div class="mt-2 text-xs" style="color:var(--text-main);">Book Expected Quantity: <strong class="text-blue" style="font-size:14px;">${formatNum(expectedQty)}</strong> pcs</div>
+        ${(ageConfig.enabled && ageInfo.isOverThreshold) ? `
+          <div class="alert alert-warning" style="margin-top:8px; padding:8px 12px; font-size:12px; font-weight:600; display:flex; align-items:center; gap:8px; border-radius:6px; background:rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.3); color:#b45309;">
+            <span style="font-size:16px;">⏳</span>
+            <span><strong>Production Aging Alert:</strong> This batch is <strong>${ageInfo.ageDays} days old</strong> from production date (${ageInfo.formattedDate}), exceeding the ${ageInfo.thresholdDays}-day audit alert threshold!</span>
+          </div>
+        ` : ''}
         ${existingRec ? `<div class="text-xs text-amber font-bold mt-1">⚠️ Previously verified at ${formatDate(existingRec.scannedAt)} (Count: ${formatNum(existingRec.countedQty)}) — Updating record</div>` : ''}
       `;
+    }
+
+    if (ageConfig.enabled) {
+      if (ageInfo.isOverThreshold) {
+        if (ageConfig.soundAlert) playAudioTone('warning');
+        showToast(`⏳ Age Alert: Batch ${batch.batchNo} is ${ageInfo.ageDays} days old from production date (${ageInfo.formattedDate}) [Threshold: ${ageInfo.thresholdDays}d]`, 'warning', 5000);
+      } else if (ageConfig.mode === 'always' && ageInfo.prodDateStr) {
+        showToast(`📅 Batch ${batch.batchNo} Production Date: ${ageInfo.formattedDate} (${ageInfo.ageDays} days old)`, 'info', 3500);
+      }
     }
 
     checkStageMismatch();
@@ -2595,6 +2826,19 @@ const StockAuditModule = (() => {
       verificationStatus = 'verified_variance';
     }
 
+    const batch = DB.Batches.find(batchId);
+    if (batch && batch.status === 'missing') {
+      const reactivatedStatus = (scannedStage === 'store' || batch.currentStage === 'store') ? 'completed' : 'active';
+      DB.Batches.update(batch.id, {
+        status: reactivatedStatus,
+        isArchived: false,
+        missingResolvedAt: new Date().toISOString()
+      });
+      showToast(`⚡ Missing Batch ${batch.batchNo} located & reactivated to ${reactivatedStatus === 'completed' ? 'Completed (Store)' : 'Active'}!`, 'info', 4000);
+    }
+    const ageConfig = getAuditProdAgeConfig();
+    const ageInfo = getBatchProductionAge(batch, ageConfig.thresholdDays);
+
     // Check existing record
     const existingRec = DB.AuditRecords.bySession(session.id).find(r => r.batchId === batchId);
     let recordObj = null;
@@ -2611,6 +2855,9 @@ const StockAuditModule = (() => {
         rackLocation,
         scannedBy: auditorName,
         scannedAt: new Date().toISOString(),
+        productionDate: ageInfo.prodDateStr,
+        productionAgeDays: ageInfo.ageDays,
+        ageAlert: ageInfo.isOverThreshold,
         notes
       };
       DB.AuditRecords.update(existingRec.id, recordObj);
@@ -2630,6 +2877,9 @@ const StockAuditModule = (() => {
         rackLocation,
         scannedBy: auditorName,
         scannedAt: new Date().toISOString(),
+        productionDate: ageInfo.prodDateStr,
+        productionAgeDays: ageInfo.ageDays,
+        ageAlert: ageInfo.isOverThreshold,
         notes
       };
       DB.AuditRecords.insert(recordObj);
@@ -2648,8 +2898,9 @@ const StockAuditModule = (() => {
     }
 
     lastScannedBatch = {
-      batch: DB.Batches.find(batchId) || { batchNo, jmrefNo, partNo },
-      record: recordObj
+      batch: batch || { batchNo, jmrefNo, partNo },
+      record: recordObj,
+      ageInfo: ageInfo
     };
 
     closeModal('modal-audit-verify');
@@ -3000,6 +3251,134 @@ const StockAuditModule = (() => {
     if (modal) modal.classList.add('hidden');
   }
 
+  // ── Sync Missing Batches Status (Audit Discrepancies vs Post-Audit Transactions) ──
+  async function syncMissingBatchesStatus() {
+    if (typeof showToast === 'function') {
+      showToast('Analyzing stock audit discrepancy batches...', 'info', 2000);
+    }
+
+    if (typeof DB !== 'undefined' && DB.AuditRecords && typeof DB.AuditRecords.fetchAll === 'function') {
+      try { await DB.AuditRecords.fetchAll(); } catch (e) {}
+    }
+    if (typeof DB !== 'undefined' && DB.Batches && typeof DB.Batches.fetchMissingBatchesFromCloud === 'function') {
+      try { await DB.Batches.fetchMissingBatchesFromCloud(); } catch (e) {}
+    }
+
+    const allSessions = DB.AuditSessions.all();
+    const allRecords = DB.AuditRecords.all();
+    const stageRecs = DB.StageRecords.all();
+    const lossRecs = DB.LossTracker.all();
+    const rejRecs = DB.RejectionTracker.all();
+    const recheckRecs = DB.RecheckTracker ? DB.RecheckTracker.all() : [];
+    const salesRecs = DB.Sales ? DB.Sales.all() : [];
+
+    const missingBatchMap = new Map();
+    allSessions.forEach(sess => {
+      const sMetrics = getSessionMetrics(sess);
+      const mList = (sess.status === 'completed' && sess.snapshotMissingList) ? sess.snapshotMissingList : (sMetrics.missingList || []);
+      mList.forEach(b => {
+        const id = b.id;
+        if (!id) return;
+        const cutoff = sess.completedAt || sess.startedAt || b.createdAt || '';
+        if (!missingBatchMap.has(id)) {
+          missingBatchMap.set(id, { batch: b, latestCutoff: cutoff });
+        } else {
+          const entry = missingBatchMap.get(id);
+          if (cutoff > entry.latestCutoff) {
+            entry.latestCutoff = cutoff;
+          }
+        }
+      });
+    });
+
+    const verifiedBatchIds = new Set(allRecords.map(r => r.batchId).filter(Boolean));
+    const verifiedBatchNos = new Set(allRecords.map(r => (r.batchNo || '').trim().toLowerCase()));
+
+    let markedMissingCount = 0;
+    let keptActiveCount = 0;
+    let reactivatedCount = 0;
+
+    for (const [batchId, { batch: rawB, latestCutoff }] of missingBatchMap.entries()) {
+      const currentBatch = DB.Batches.find(batchId) || rawB;
+      const cleanNo = (currentBatch.batchNo || '').trim().toLowerCase();
+
+      // If verified on floor in any audit session
+      if (verifiedBatchIds.has(batchId) || verifiedBatchNos.has(cleanNo)) {
+        if (currentBatch.status === 'missing') {
+          const targetStatus = (currentBatch.currentStage === 'store') ? 'completed' : 'active';
+          if (typeof DB.Batches.updateAsync === 'function') {
+            await DB.Batches.updateAsync(batchId, { status: targetStatus, isArchived: false, missingResolvedAt: new Date().toISOString() });
+          } else {
+            DB.Batches.update(batchId, { status: targetStatus, isArchived: false, missingResolvedAt: new Date().toISOString() });
+          }
+          reactivatedCount++;
+        }
+        continue;
+      }
+
+      // Check transactions after cutoff
+      const cutoffDate = latestCutoff ? latestCutoff.slice(0, 10) : '';
+      const hasPostStage = stageRecs.some(r => r.batchId === batchId && (
+        (r.createdAt && latestCutoff && r.createdAt > latestCutoff) ||
+        (r.date && cutoffDate && r.date > cutoffDate)
+      ));
+      const hasPostLoss = lossRecs.some(r => r.batchId === batchId && (
+        (r.createdAt && latestCutoff && r.createdAt > latestCutoff) ||
+        (r.date && cutoffDate && r.date > cutoffDate)
+      ));
+      const hasPostRej = rejRecs.some(r => r.batchId === batchId && (
+        (r.createdAt && latestCutoff && r.createdAt > latestCutoff) ||
+        (r.date && cutoffDate && r.date > cutoffDate)
+      ));
+      const hasPostRecheck = recheckRecs.some(r => r.batchId === batchId && (
+        (r.createdAt && latestCutoff && r.createdAt > latestCutoff) ||
+        (r.date && cutoffDate && r.date > cutoffDate)
+      ));
+      const hasPostSales = salesRecs.some(r => r.batchId === batchId && (
+        (r.createdAt && latestCutoff && r.createdAt > latestCutoff) ||
+        (r.date && cutoffDate && r.date > cutoffDate)
+      ));
+
+      const hasPostTx = hasPostStage || hasPostLoss || hasPostRej || hasPostRecheck || hasPostSales;
+
+      if (hasPostTx) {
+        if (currentBatch.status === 'missing') {
+          const targetStatus = (currentBatch.currentStage === 'store') ? 'completed' : 'active';
+          if (typeof DB.Batches.updateAsync === 'function') {
+            await DB.Batches.updateAsync(batchId, { status: targetStatus, isArchived: false, missingResolvedAt: new Date().toISOString() });
+          } else {
+            DB.Batches.update(batchId, { status: targetStatus, isArchived: false, missingResolvedAt: new Date().toISOString() });
+          }
+          reactivatedCount++;
+        } else {
+          keptActiveCount++;
+        }
+      } else {
+        if (currentBatch.status !== 'missing') {
+          const payload = {
+            status: 'missing',
+            isArchived: true,
+            missingMarkedAt: new Date().toISOString(),
+            missingNotes: 'Stock Audit Discrepancy (Cutoff: ' + (latestCutoff || 'Session') + ')'
+          };
+          if (typeof DB.Batches.updateAsync === 'function') {
+            await DB.Batches.updateAsync(batchId, payload);
+          } else {
+            DB.Batches.update(batchId, payload);
+          }
+          markedMissingCount++;
+        } else {
+          markedMissingCount++;
+        }
+      }
+    }
+
+    if (typeof showToast === 'function') {
+      showToast(`⚡ Stock Audit Discrepancies Synced: ${markedMissingCount} Missing, ${keptActiveCount + reactivatedCount} Active (${reactivatedCount} reactivated).`, 'success', 5000);
+    }
+    render();
+  }
+
   // ── Multi-Sheet Excel Export Engine ────────────────────────
   function exportCrossSessionMissingExcel(sessionId) {
     if (typeof XLSX === 'undefined') {
@@ -3196,10 +3575,12 @@ const StockAuditModule = (() => {
 
     // 3. Actual Missing Batches Sheet (Only Truly Missing)
     const actualMissingHeaders = isConsolidated 
-      ? ['#', 'Batch No', 'Internal Batch No', 'JMREF No', 'Part No', 'Registered Stage', 'Expected Qty', 'Unscanned in Session(s)', 'Unit Price (INR)', 'Deficit Value (INR)', 'Batch Created Date', 'Cross-Session Status']
-      : ['#', 'Batch No', 'Internal Batch No', 'JMREF No', 'Part No', 'Registered Stage', 'Expected Qty', 'Unit Price (INR)', 'Deficit Value (INR)', 'Batch Created Date', 'Cross-Session Status'];
+      ? ['#', 'Batch No', 'Internal Batch No', 'JMREF No', 'Part No', 'Registered Stage', 'Batch Status', 'Expected Qty', 'Unscanned in Session(s)', 'Unit Price (INR)', 'Deficit Value (INR)', 'Batch Created Date', 'Cross-Session Status']
+      : ['#', 'Batch No', 'Internal Batch No', 'JMREF No', 'Part No', 'Registered Stage', 'Batch Status', 'Expected Qty', 'Unit Price (INR)', 'Deficit Value (INR)', 'Batch Created Date', 'Cross-Session Status'];
     
     const actualMissingRows = enriched.filter(x => x.isActualMissing).map((x, i) => {
+      const liveB = (typeof DB !== 'undefined' && DB.Batches) ? (DB.Batches.find(x.batch.id) || DB.Batches.find(x.batch.batchNo) || x.batch) : x.batch;
+      const bStatus = liveB.status || x.batch.status;
       const row = [
         i + 1,
         x.batch.batchNo || '',
@@ -3207,6 +3588,7 @@ const StockAuditModule = (() => {
         x.batch.jmrefNo || '',
         x.batch.partNo || '',
         STAGE_LABELS[x.batch.currentStage] || x.batch.currentStage || '',
+        bStatus === 'missing' ? 'Missing (Audit Discrepancy)' : 'Active',
         x.expQty
       ];
       if (isConsolidated) {
@@ -3225,10 +3607,12 @@ const StockAuditModule = (() => {
 
     // 4. Validated in Other Sessions Sheet
     const valOtherHeaders = isConsolidated
-      ? ['#', 'Batch No', 'Internal Batch No', 'JMREF No', 'Part No', 'Registered Stage', 'Expected Qty', 'Unscanned in Session(s)', 'Validated Session Title', 'Scanned Stage', 'Stage Location Shift?', 'Counted Qty', 'Variance Qty', 'Auditor Name', 'Scanned Date', 'Rack Location', 'Notes']
-      : ['#', 'Batch No', 'Internal Batch No', 'JMREF No', 'Part No', 'Registered Stage', 'Expected Qty', 'Validated Session Title', 'Scanned Stage', 'Stage Location Shift?', 'Counted Qty', 'Variance Qty', 'Auditor Name', 'Scanned Date', 'Rack Location', 'Notes'];
+      ? ['#', 'Batch No', 'Internal Batch No', 'JMREF No', 'Part No', 'Registered Stage', 'Batch Status', 'Expected Qty', 'Unscanned in Session(s)', 'Validated Session Title', 'Scanned Stage', 'Stage Location Shift?', 'Counted Qty', 'Variance Qty', 'Auditor Name', 'Scanned Date', 'Rack Location', 'Notes']
+      : ['#', 'Batch No', 'Internal Batch No', 'JMREF No', 'Part No', 'Registered Stage', 'Batch Status', 'Expected Qty', 'Validated Session Title', 'Scanned Stage', 'Stage Location Shift?', 'Counted Qty', 'Variance Qty', 'Auditor Name', 'Scanned Date', 'Rack Location', 'Notes'];
     
     const valOtherRows = enriched.filter(x => x.isValidatedElsewhere).map((x, i) => {
+      const liveB = (typeof DB !== 'undefined' && DB.Batches) ? (DB.Batches.find(x.batch.id) || DB.Batches.find(x.batch.batchNo) || x.batch) : x.batch;
+      const bStatus = liveB.status || x.batch.status;
       const row = [
         i + 1,
         x.batch.batchNo || '',
@@ -3236,6 +3620,7 @@ const StockAuditModule = (() => {
         x.batch.jmrefNo || '',
         x.batch.partNo || '',
         STAGE_LABELS[x.batch.currentStage] || x.batch.currentStage || '',
+        bStatus === 'missing' ? 'Missing (Audit Discrepancy)' : 'Active',
         x.expQty
       ];
       if (isConsolidated) {
@@ -3349,23 +3734,39 @@ const StockAuditModule = (() => {
     XLSX.utils.book_append_sheet(wb, wsSummary, 'Audit Summary');
 
     // 2. Verified Batches Sheet
-    const verifiedHeaders = ['#', 'Batch No', 'JMREF No', 'Part No', 'Expected Stage', 'Scanned Stage', 'Expected Qty', 'Counted Qty', 'Variance Qty', 'Status', 'Rack Location', 'Auditor', 'Timestamp', 'Notes'];
-    const verifiedRows = records.map((r, i) => [
-      i + 1,
-      r.batchNo || '',
-      r.jmrefNo || '',
-      r.partNo || '',
-      STAGE_LABELS[r.expectedStage] || r.expectedStage || '',
-      STAGE_LABELS[r.scannedStage] || r.scannedStage || '',
-      r.expectedQty || 0,
-      r.countedQty || 0,
-      r.varianceQty || 0,
-      r.verificationStatus === 'verified_match' ? 'Exact Match' : (r.verificationStatus === 'verified_variance' ? 'Qty Variance' : 'Stage Mismatch'),
-      r.rackLocation || '',
-      r.scannedBy || '',
-      r.scannedAt || '',
-      r.notes || ''
-    ]);
+    const ageConfig = getAuditProdAgeConfig();
+    const verifiedHeaders = ['#', 'Batch No', 'JMREF No', 'Part No', 'Production Date', 'Age (Days)', 'Aging Alert (> Threshold)', 'Expected Stage', 'Scanned Stage', 'Expected Qty', 'Counted Qty', 'Variance Qty', 'Status', 'Rack Location', 'Auditor', 'Timestamp', 'Notes'];
+    const verifiedRows = records.map((r, i) => {
+      let b = DB.Batches.find(r.batchId);
+      let pDate = r.productionDate || (b ? (b.productionDate || b.createdAt || '') : '');
+      let pAge = r.productionAgeDays;
+      let isAging = r.ageAlert;
+      if (pAge == null && b) {
+        const info = getBatchProductionAge(b, ageConfig.thresholdDays);
+        pDate = info.prodDateStr;
+        pAge = info.ageDays;
+        isAging = info.isOverThreshold;
+      }
+      return [
+        i + 1,
+        r.batchNo || '',
+        r.jmrefNo || '',
+        r.partNo || '',
+        pDate ? String(pDate).slice(0, 10) : '—',
+        pAge != null ? pAge : '—',
+        isAging ? 'YES (OVER THRESHOLD)' : 'NO',
+        STAGE_LABELS[r.expectedStage] || r.expectedStage || '',
+        STAGE_LABELS[r.scannedStage] || r.scannedStage || '',
+        r.expectedQty || 0,
+        r.countedQty || 0,
+        r.varianceQty || 0,
+        r.verificationStatus === 'verified_match' ? 'Exact Match' : (r.verificationStatus === 'verified_variance' ? 'Qty Variance' : 'Stage Mismatch'),
+        r.rackLocation || '',
+        r.scannedBy || '',
+        r.scannedAt || '',
+        r.notes || ''
+      ];
+    });
     const wsVerified = XLSX.utils.aoa_to_sheet([verifiedHeaders, ...verifiedRows]);
     XLSX.utils.book_append_sheet(wb, wsVerified, 'Verified Batches');
 
@@ -3436,6 +3837,7 @@ const StockAuditModule = (() => {
     toggleRealignmentRow,
     toggleAllRealignmentRows,
     closeModal,
+    syncMissingBatchesStatus,
     exportAuditExcel,
     exportCrossSessionMissingExcel,
     toggleRapidScan,
@@ -3445,7 +3847,9 @@ const StockAuditModule = (() => {
     onAuditStageChange,
     setSessionHistoryFilter,
     changePageVerified: (page) => { verifiedCurrentPage = page; render(); },
-    changePageMissing: (page) => { missingCurrentPage = page; render(); }
+    changePageMissing: (page) => { missingCurrentPage = page; render(); },
+    getAuditProdAgeConfig,
+    getBatchProductionAge
   };
 })();
 

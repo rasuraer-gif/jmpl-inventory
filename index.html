@@ -16,15 +16,17 @@
   <link rel="dns-prefetch" href="https://www.gstatic.com">
   <link rel="preconnect" href="https://firestore.googleapis.com" crossorigin>
 
-  <!-- Google Fonts loaded parallel with stylesheets -->
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap">
+  <!-- Google Fonts loaded non-blocking with zero render delay -->
+  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" media="print" onload="this.media='all'">
+  <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"></noscript>
 
   <link rel="preload" as="image" href="./logo.png">
   <link rel="stylesheet" href="index.css">
 
-  <!-- Firebase SDK Compat (Asynchronous deferred) -->
-  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js" defer></script>
-  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js" defer></script>
+  <!-- Firebase SDK Compat (Local Zero-Latency Offline Bundles) -->
+  <script src="firebase-app-compat.js" defer></script>
+  <script src="firebase-firestore-compat.js" defer></script>
 
   <!-- Core -->
   <script src="db.js" defer></script>
@@ -59,6 +61,10 @@
   <script src="stock-audit.js" defer></script>
   <script src="delivery-challan.js" defer></script>
   <script src="quick-movement.js" defer></script>
+  <script src="visual-loss-reprocess.js" defer></script>
+  <script src="raw-material.js" defer></script>
+  <script src="suppliers.js" defer></script>
+  <script src="rm-master.js" defer></script>
   
   <!-- App bootstrap (must be last) -->
   <script src="app.js" defer></script>

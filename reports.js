@@ -790,7 +790,7 @@ const ReportsModule = (() => {
       }
       const normTarget = String(p.jmrefNo || '').trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
       return batches.filter(b => {
-        if (b.status !== 'completed' || b.isArchived) return false;
+        if (b.status !== 'completed' || b.status === 'missing' || b.isArchived) return false;
         if (b.batchNo && (b.batchNo.includes('-REC-') || b.batchNo.includes('REC'))) return false;
         if (p.id && b.partId === p.id) return true;
         if (b.jmrefNo) {
@@ -1019,7 +1019,7 @@ const ReportsModule = (() => {
     // Include batches without separate production records (e.g. subcontractor batches)
     allBatches.forEach(b => {
       if (b.isArchived || seenBatchIds.has(b.id)) return;
-      if (b.isReprocess || b.isStockUpload || (b.batchNo && (b.batchNo.includes('-REP') || b.batchNo.includes('-REC-')))) return;
+      if (b.isReprocess || b.isStockUpload || (b.batchNo && (b.batchNo.includes('-REP') || b.batchNo.includes('-LREP') || b.batchNo.includes('-REC-')))) return;
 
       const prodDate = (b.productionDate || b.createdAt || '').slice(0, 10);
       let qty = Number(b.initialQty || 0);
@@ -1176,11 +1176,11 @@ const ReportsModule = (() => {
     
     // Find all batches currently in waiting-visual OR that historically have a stage record for it.
     const targetBatchIds = new Set(
-      batches.filter(b => b.currentStage === 'waiting-visual').map(b => b.id)
+      batches.filter(b => b.currentStage === 'waiting-visual' && b.status !== 'missing' && !b.isArchived).map(b => b.id)
     );
     stageRecords.filter(r => r.stage === 'waiting-visual').forEach(r => targetBatchIds.add(r.batchId));
     
-    let filtered = Array.from(targetBatchIds).map(id => DB.Batches.find(id)).filter(Boolean);
+    let filtered = Array.from(targetBatchIds).map(id => DB.Batches.find(id)).filter(b => b && b.status !== 'missing' && !b.isArchived);
     
     if (jmref) {
       const q = jmref.toLowerCase();
@@ -2109,7 +2109,7 @@ const ReportsModule = (() => {
 
   // ── Render Report 12: Aging WIP Report (> 1 Week) ─────────
   function renderAging(filters) {
-    const batches = DB.Batches.all().filter(b => b.status === 'active');
+    const batches = DB.Batches.all().filter(b => b.status === 'active' && b.status !== 'missing' && !b.isArchived);
     const stageRecs = DB.StageRecords.all();
     const stageIndex = indexStageRecordsByBatch(stageRecs);
     const master = DB.Master.all();
@@ -2250,7 +2250,7 @@ const ReportsModule = (() => {
     const headers = ['#', 'Batch No', 'JMREF No', 'Part No', 'Current Stage', 'Current Qty', 'Date Received', 'Days Pending'];
 
     allBatches.forEach(b => {
-      if (b.status === 'rejected') return;
+      if (b.status === 'rejected' || b.status === 'missing' || b.isArchived) return;
       if (b.status === 'completed' && b.currentStage !== 'store') return;
 
       const details = getBatchStageDetails(b, stageIndex, today);
@@ -2739,7 +2739,7 @@ const ReportsModule = (() => {
 
   // ── 4. WIP Valuation Report ────────────────────────────────
   function renderWipValuation(filters) {
-    const batches = DB.Batches.all().filter(b => b.status === 'active');
+    const batches = DB.Batches.all().filter(b => b.status === 'active' && b.status !== 'missing' && !b.isArchived);
     const master = DB.Master.all();
     const stageRecords = DB.StageRecords.all();
 
@@ -3455,6 +3455,88 @@ const ReportsModule = (() => {
         </select>
       </div>`;
 
+    // RM Master List & Category List
+    const rmList = (typeof DB !== 'undefined' && DB.RawMaterials && DB.RawMaterials.all) ? DB.RawMaterials.all() : [];
+    const rmItemOptions = rmList.map(r => `<option value="${r.code}">${r.code} — ${r.name || r.code}</option>`).join('');
+
+    // Suppliers list
+    const allVendorsList = (typeof DB !== 'undefined' && DB.Vendors && DB.Vendors.all) ? DB.Vendors.all() : [];
+    const grnSuppliers = Array.from(new Set(((typeof DB !== 'undefined' && DB.GrnRecords && DB.GrnRecords.all) ? DB.GrnRecords.all() : []).map(g => g.supplierName || g.supplier).filter(Boolean)));
+    const mergedSuppliers = Array.from(new Set([...allVendorsList.map(v => v.name), ...grnSuppliers])).filter(Boolean).sort();
+    const supplierOpts = mergedSuppliers.map(s => `<option value="${s}">${s}</option>`).join('');
+
+    const rmSearchFilter = `
+      <div class="form-group mb-0">
+        <label class="form-label">Search RM / FG</label>
+        <input type="text" class="form-control" id="rpt-rm-code" placeholder="Filter RM Code, Name, or JMREF...">
+      </div>`;
+
+    const rmItemSelectFilter = `
+      <div class="form-group mb-0">
+        <label class="form-label">RM Material Item</label>
+        <select class="form-control" id="rpt-rm-code">
+          <option value="">All Raw Materials</option>
+          ${rmItemOptions}
+        </select>
+      </div>`;
+
+    const rmCategoryFilter = `
+      <div class="form-group mb-0">
+        <label class="form-label">RM Category</label>
+        <select class="form-control" id="rpt-rm-category">
+          <option value="">All Categories</option>
+          <option value="Rubber Compound">Rubber Compound</option>
+          <option value="Chemicals & Additives">Chemicals & Additives</option>
+          <option value="Metal Inserts">Metal Inserts</option>
+          <option value="Packaging Materials">Packaging Materials</option>
+          <option value="Consumables">Consumables</option>
+          <option value="Finished Goods Purchased">Finished Goods Purchased</option>
+          <option value="Other">Other</option>
+        </select>
+      </div>`;
+
+    const rmStockStatusFilter = `
+      <div class="form-group mb-0">
+        <label class="form-label">Stock Status</label>
+        <select class="form-control" id="rpt-rm-stock-status">
+          <option value="">All Stock Statuses</option>
+          <option value="low">⚠️ Low Stock / Reorder Alert (&le; Reorder Level)</option>
+          <option value="out">🔴 Out of Stock (Zero Warehouse Stock)</option>
+          <option value="warehouse">📦 In Warehouse Stock (&gt; 0)</option>
+          <option value="under_process">🔄 Under Process at Subcontractors (&gt; 0)</option>
+        </select>
+      </div>`;
+
+    const rmDcStatusFilter = `
+      <div class="form-group mb-0">
+        <label class="form-label">DC Balance Status</label>
+        <select class="form-control" id="rpt-dc-status">
+          <option value="">All Delivery Challans</option>
+          <option value="open">🔄 Open Balance Only (&gt; 0 Holding)</option>
+          <option value="closed">✅ Fully Consumed (0 Remaining)</option>
+        </select>
+      </div>`;
+
+    const supplierFilter = `
+      <div class="form-group mb-0">
+        <label class="form-label">Supplier / Vendor</label>
+        <select class="form-control" id="rpt-supplier">
+          <option value="">All Suppliers</option>
+          ${supplierOpts}
+        </select>
+      </div>`;
+
+    const rmTxTypeFilter = `
+      <div class="form-group mb-0">
+        <label class="form-label">Transaction Type</label>
+        <select class="form-control" id="rpt-tx-type">
+          <option value="">All Movements</option>
+          <option value="inward">📥 GRN Inward (Receipt)</option>
+          <option value="outward">🚚 DC Dispatch to Subcontractor</option>
+          <option value="consumed">🔥 Production Batch Consumption</option>
+        </select>
+      </div>`;
+
     const buildPendingStageOptions = () => {
       const activeBatches = DB.Batches.all();
       const vendors = DB.Vendors.all();
@@ -3468,6 +3550,7 @@ const ReportsModule = (() => {
         'trimming': 'trimming'
       };
       activeBatches.forEach(b => {
+        if (b.status === 'missing' || b.isArchived) return;
         const isStore = b.currentStage === 'store' && b.status === 'completed';
         const isActive = b.status === 'active';
         if ((isActive || isStore) && b.vendorId && VENDOR_ELIGIBLE_STAGES.includes(b.currentStage)) {
@@ -3742,7 +3825,12 @@ const ReportsModule = (() => {
       'stock-audit': [auditSessionTitleFilter, dateRange, jmrefFilter].join(''),
       'audit-missing-batches': [auditSessionTitleFilter, pendingStageFilter, auditMissingStatusFilter, jmrefFilter].join(''),
       'cryo-deflash-trim': [jmrefFilter, '<div class="form-group mb-0"><label class="form-label">Flow / Status</label><select class="form-control" id="rpt-cft-wip"><option value="">All 3-Stage JMREFs</option><option value="wip">Has Active WIP on Floor</option><option value="completed">Completed Batches Only</option></select></div>', dateRange].join(''),
-      'process-leakage': [jmrefFilter, plDeviationFilter, plMouldFilter, plReprocessFilter, plScopeBadge, dateRange].join('')
+      'process-leakage': [jmrefFilter, plDeviationFilter, plMouldFilter, plReprocessFilter, plScopeBadge, dateRange].join(''),
+      'rm-inventory': [rmSearchFilter, rmCategoryFilter, rmStockStatusFilter].join(''),
+      'rm-sub-balance': [subcontractorFilter, rmSearchFilter, rmDcStatusFilter, dateRange].join(''),
+      'rm-consumption': [jmrefFilter, rmSearchFilter, prodTypeFilter, subcontractorFilter, dateRange].join(''),
+      'rm-inward-register': [supplierFilter, rmSearchFilter, rmCategoryFilter, dateRange].join(''),
+      'rm-stock-ledger': [rmItemSelectFilter, rmTxTypeFilter, dateRange].join('')
     };
     return filterMap[report] || '';
   }
@@ -4684,6 +4772,7 @@ const ReportsModule = (() => {
       'Batch No',
       'JMREF No',
       'Part No',
+      'Batch Status',
       'Expected Stage',
       'Expected Pcs',
       'Unscanned in Session(s)',
@@ -4698,6 +4787,7 @@ const ReportsModule = (() => {
       'Batch No',
       'JMREF No',
       'Part No',
+      'Batch Status',
       'Expected Stage',
       'Expected Pcs',
       'Cross-Session Audit Status',
@@ -4718,11 +4808,15 @@ const ReportsModule = (() => {
         statusText = item.hasStageMismatch ? 'Stage Shift (Found Elsewhere)' : 'Validated in Other Session';
       }
 
+      const liveB = (typeof DB !== 'undefined' && DB.Batches) ? (DB.Batches.find(b.id) || DB.Batches.find(b.batchNo) || b) : b;
+      const bStatus = liveB.status || b.status;
+
       const row = [
         idx + 1,
         b.batchNo || '-',
         b.jmrefNo || '-',
         b.partNo || '-',
+        bStatus === 'missing' ? 'Missing' : 'Active (Post-Audit Tx)',
         STAGE_LABELS[b.currentStage] || b.currentStage || '-',
         formatNum(item.expQty)
       ];
@@ -4872,6 +4966,7 @@ const ReportsModule = (() => {
                 <th>Batch No</th>
                 <th>JMREF No</th>
                 <th>Part No</th>
+                <th>Batch Status</th>
                 <th>Expected Stage</th>
                 <th>Expected Pcs</th>
                 ${isAllSessions ? '<th>Unscanned In Session(s)</th>' : ''}
@@ -4885,7 +4980,7 @@ const ReportsModule = (() => {
             </thead>
             <tbody>
               ${enrichedItems.length === 0 ? `
-                <tr><td colspan="${isAllSessions ? 13 : 12}" class="text-center text-muted py-4">No missing batches match the current filter criteria.</td></tr>
+                <tr><td colspan="${isAllSessions ? 14 : 13}" class="text-center text-muted py-4">No missing batches match the current filter criteria.</td></tr>
               ` : enrichedItems.map((item, idx) => {
                 const b = item.batch;
                 const rec = item.latestRec;
@@ -4910,6 +5005,17 @@ const ReportsModule = (() => {
                     </td>
                     <td><span class="badge badge-teal">${safeEscape(b.jmrefNo || '—')}</span></td>
                     <td class="font-semibold text-xs">${safeEscape(b.partNo || '—')}</td>
+                    <td>
+                      ${(() => {
+                        const liveB = (typeof DB !== 'undefined' && DB.Batches) ? (DB.Batches.find(b.id) || DB.Batches.find(b.batchNo) || b) : b;
+                        const bStatus = liveB.status || b.status;
+                        if (bStatus === 'missing') {
+                          return '<span class="badge badge-danger font-bold" style="background:#fee2e2; color:#b91c1c; border:1px solid #fca5a5;">⚠️ Missing</span>';
+                        } else {
+                          return `<span class="badge badge-green font-bold" style="background:#d1fae5; color:#065f46; border:1px solid #a7f3d0;">✓ Active</span>${liveB.missingResolvedAt ? '<div class="text-xs text-success mt-0.5" style="font-size:10px;">Post-Audit Active</div>' : ''}`;
+                        }
+                      })()}
+                    </td>
                     <td><span class="stage-chip ${b.currentStage}">${STAGE_LABELS[b.currentStage] || b.currentStage}</span></td>
                     <td class="font-bold">${formatNum(item.expQty)}</td>
                     ${isAllSessions ? `
@@ -5486,7 +5592,7 @@ const ReportsModule = (() => {
       if (!b) return false;
       if (b.isReprocess === true || b.isReprocess === 'true') return true;
       if (b.batchType === 'reprocess') return true;
-      if (b.batchNo && (b.batchNo.includes('-REP') || b.batchNo.includes('-REC-') || /[-_]REP\d*$/i.test(b.batchNo))) return true;
+      if (b.batchNo && (b.batchNo.includes('-REP') || b.batchNo.includes('-LREP') || b.batchNo.includes('-REC-') || /[-_](REP|LREP)\d*$/i.test(b.batchNo))) return true;
       if (b.reprocessDestination) return true;
       if (b.notes && /reprocess/i.test(b.notes)) return true;
       return false;
@@ -6628,6 +6734,3006 @@ const ReportsModule = (() => {
   }
 
 
+  // ============================================================
+  // RM REPORTS IMPLEMENTATIONS
+  // ============================================================
+
+  const _rmUomCache = new Map();
+  function getRmUom(itemCode) {
+    if (!itemCode) return 'kg';
+    const clean = String(itemCode).trim().toUpperCase();
+    if (_rmUomCache.has(clean)) return _rmUomCache.get(clean);
+    let uom = '';
+    if (typeof DB !== 'undefined' && DB.RawMaterials) {
+      const rm = DB.RawMaterials.byCode ? DB.RawMaterials.byCode(clean) : DB.RawMaterials.all().find(r => (r.code || r.itemCode || '').trim().toUpperCase() === clean);
+      if (rm && (rm.uom || rm.unit)) uom = rm.uom || rm.unit;
+    }
+    if (!uom && typeof DB !== 'undefined' && DB.GrnRecords) {
+      const grns = DB.GrnRecords.all ? DB.GrnRecords.all() : [];
+      for (let i = 0; i < grns.length; i++) {
+        const it = (grns[i].items || []).find(item => (item.itemCode || '').trim().toUpperCase() === clean);
+        if (it && it.uom) { uom = it.uom; break; }
+      }
+    }
+    if (!uom && typeof DB !== 'undefined' && DB.DeliveryChallans) {
+      const dcs = DB.DeliveryChallans.all ? DB.DeliveryChallans.all() : [];
+      for (let i = 0; i < dcs.length; i++) {
+        const it = (dcs[i].rmItems || []).find(item => (item.itemCode || '').trim().toUpperCase() === clean);
+        if (it && it.uom) { uom = it.uom; break; }
+      }
+    }
+    uom = uom || 'kg';
+    _rmUomCache.set(clean, uom);
+    return uom;
+  }
+
+  // ── 1. RM Inventory & 3-State Stock Balance Report ───────────
+  function renderRmInventory(filters) {
+    const { rmCode, rmCategory, rmStockStatus } = filters;
+    const allRms = (typeof DB !== 'undefined' && DB.RawMaterials && DB.RawMaterials.all) ? DB.RawMaterials.all() : [];
+    const allGrns = (typeof DB !== 'undefined' && DB.GrnRecords && DB.GrnRecords.all) ? DB.GrnRecords.all() : [];
+    const allDcs = (typeof DB !== 'undefined' && DB.DeliveryChallans && DB.DeliveryChallans.all) ? DB.DeliveryChallans.all() : [];
+    const allBatches = (typeof DB !== 'undefined' && DB.Batches && DB.Batches.all) ? DB.Batches.all() : [];
+
+    // 1. Build index of admin-created RM Master catalog entries
+    const validRmCodes = new Set();
+    const jmrefToRmCode = new Map();
+    const itemsMap = new Map();
+
+    allRms.forEach(rm => {
+      const code = (rm.code || rm.itemCode || '').trim().toUpperCase();
+      if (code) {
+        validRmCodes.add(code);
+        if (rm.linkedJmref) {
+          jmrefToRmCode.set(rm.linkedJmref.trim().toUpperCase(), code);
+        }
+        itemsMap.set(code, {
+          code,
+          name: rm.name || rm.description || '—',
+          category: rm.category || 'Rubber Compound',
+          uom: rm.uom || rm.unit || getRmUom(code),
+          linkedJmref: rm.linkedJmref || '—',
+          unitPrice: parseFloat(rm.unitPrice || rm.rate || rm.price) || 0,
+          reorderLevel: parseFloat(rm.reorderLevel) || 0,
+          spec: rm.spec || rm.specification || '—'
+        });
+      }
+    });
+
+    // 2. Compile live stock aggregates strictly for admin-created RM Codes
+    const stockMap = new Map();
+
+    allGrns.forEach(grn => {
+      (grn.items || []).forEach(it => {
+        const code = (it.itemCode || '').trim().toUpperCase();
+        if (!code || !validRmCodes.has(code)) return;
+        let e = stockMap.get(code);
+        if (!e) {
+          e = { inward: 0, dispatched: 0, consumed: 0, uom: it.uom || getRmUom(code), lastRate: parseFloat(it.unitRate || it.rate) || 0, name: it.name || it.description || '' };
+          stockMap.set(code, e);
+        }
+        e.inward += (parseFloat(it.receivedQty) || 0);
+        if (it.unitRate || it.rate) e.lastRate = parseFloat(it.unitRate || it.rate);
+      });
+    });
+
+    allDcs.forEach(dc => {
+      (dc.rmItems || []).forEach(it => {
+        const code = (it.itemCode || '').trim().toUpperCase();
+        if (!code || !validRmCodes.has(code)) return;
+        let e = stockMap.get(code);
+        if (!e) {
+          e = { inward: 0, dispatched: 0, consumed: 0, uom: it.uom || getRmUom(code), lastRate: parseFloat(it.rate) || 0, name: it.name || '' };
+          stockMap.set(code, e);
+        }
+        e.dispatched += (parseFloat(it.qty) || 0);
+        if (it.rate && !e.lastRate) e.lastRate = parseFloat(it.rate);
+      });
+    });
+
+    const allMasters = (typeof DB !== 'undefined' && DB.Master && DB.Master.all) ? DB.Master.all() : [];
+    const masterMap = new Map();
+    allMasters.forEach(m => {
+      if (m.jmrefNo) masterMap.set((m.jmrefNo || '').trim().toUpperCase(), m);
+      if (m.partNo) masterMap.set((m.partNo || '').trim().toUpperCase(), m);
+    });
+
+    allBatches.forEach(b => {
+      if (!b || !b.batchNo || b.status === 'missing' || (b.isArchived && b.status !== 'rejected')) return;
+      let code = (b.sourceRmCode || '').trim().toUpperCase();
+      const bJm = (b.jmrefNo || '').trim().toUpperCase();
+      const bPart = (b.partNo || '').trim().toUpperCase();
+      const masterItem = masterMap.get(bJm) || masterMap.get(bPart);
+
+      // Match strictly to an admin-created RM
+      if (!code || !validRmCodes.has(code)) {
+        if (bJm && jmrefToRmCode.has(bJm)) {
+          code = jmrefToRmCode.get(bJm);
+        } else if (bPart && jmrefToRmCode.has(bPart)) {
+          code = jmrefToRmCode.get(bPart);
+        } else if (masterItem && masterItem.compoundCode && validRmCodes.has(masterItem.compoundCode.trim().toUpperCase())) {
+          code = masterItem.compoundCode.trim().toUpperCase();
+        } else {
+          return; // Ignore batches not linked to any admin-created RM
+        }
+      }
+
+      const batchQty = parseFloat(b.initialQty || b.qty) || 0;
+      const stdGrams = parseFloat(masterItem ? (masterItem.blankWeight || masterItem.stdShotWeightGrams) : 0) || 0;
+      const consumedKg = (parseFloat(b.rmConsumedQty) > 0) ? parseFloat(b.rmConsumedQty) : (stdGrams > 0 ? (batchQty * stdGrams / 1000) : 0);
+
+      if (consumedKg > 0) {
+        let e = stockMap.get(code);
+        if (!e) {
+          e = { inward: 0, dispatched: 0, consumed: 0, uom: getRmUom(code), lastRate: 0, name: masterItem ? `${masterItem.description || code} Compound` : '' };
+          stockMap.set(code, e);
+        }
+        e.consumed += consumedKg;
+      }
+    });
+
+    // 3. Items list is strictly the admin-created RM Master entries
+    let items = Array.from(itemsMap.values());
+
+    // 3. Apply filters
+    if (rmCode) {
+      const q = rmCode.trim().toLowerCase();
+      items = items.filter(it => 
+        it.code.toLowerCase().includes(q) || 
+        it.name.toLowerCase().includes(q) || 
+        (it.linkedJmref && it.linkedJmref.toLowerCase().includes(q))
+      );
+    }
+
+    if (rmCategory) {
+      items = items.filter(it => it.category === rmCategory);
+    }
+
+    // 4. Calculate stock, valuations and statuses
+    let totalWarehouseVal = 0;
+    let totalUnderProcessVal = 0;
+    let totalWarehouseQty = 0;
+    let totalUnderProcessQty = 0;
+    let totalConsumedQty = 0;
+    let totalInwardQty = 0;
+    let totalDispatchedQty = 0;
+    let lowStockCount = 0;
+    let outOfStockCount = 0;
+
+    const rowsData = [];
+
+    items.forEach(it => {
+      const stk = stockMap.get(it.code) || { inward: 0, dispatched: 0, consumed: 0 };
+      const inward = stk.inward || 0;
+      const dispatched = stk.dispatched || 0;
+      const consumed = stk.consumed || 0;
+      const warehouseBal = Math.max(0, inward - dispatched);
+      const underProcess = Math.max(0, dispatched - consumed);
+      const rate = it.unitPrice || stk.lastRate || 0;
+      const warehouseVal = warehouseBal * rate;
+      const underProcessVal = underProcess * rate;
+      const totalAvailable = warehouseBal + underProcess;
+
+      let statusKey = 'ok';
+      let statusBadge = '<span class="badge badge-green font-bold">✅ Adequate</span>';
+      if (warehouseBal <= 0) {
+        statusKey = 'out';
+        statusBadge = '<span class="badge badge-red font-bold">🔴 Out of Stock</span>';
+        outOfStockCount++;
+      } else if (it.reorderLevel > 0 && warehouseBal <= it.reorderLevel) {
+        statusKey = 'low';
+        statusBadge = '<span class="badge badge-amber font-bold">⚠️ Reorder Alert</span>';
+        lowStockCount++;
+      } else if (underProcess > 0) {
+        statusKey = 'processing';
+        statusBadge = '<span class="badge badge-blue font-bold">🔄 In Process</span>';
+      }
+
+      if (rmStockStatus) {
+        if (rmStockStatus === 'low' && statusKey !== 'low') return;
+        if (rmStockStatus === 'out' && statusKey !== 'out') return;
+        if (rmStockStatus === 'warehouse' && warehouseBal <= 0) return;
+        if (rmStockStatus === 'under_process' && underProcess <= 0) return;
+      }
+
+      totalInwardQty += inward;
+      totalDispatchedQty += dispatched;
+      totalWarehouseQty += warehouseBal;
+      totalUnderProcessQty += underProcess;
+      totalConsumedQty += consumed;
+      totalWarehouseVal += warehouseVal;
+      totalUnderProcessVal += underProcessVal;
+
+      const itCodeUpper = it.code.trim().toUpperCase();
+      const itLinkedJmref = (it.linkedJmref || '').trim().toUpperCase();
+      const rmBatches = allBatches.filter(b => {
+        if (!b || !b.batchNo) return false;
+        if (b.status === 'missing' || (b.isArchived && b.status !== 'rejected')) return false;
+        const bRm = (b.sourceRmCode || '').trim().toUpperCase();
+        if (bRm && bRm === itCodeUpper) return true;
+        const bJm = (b.jmrefNo || '').trim().toUpperCase();
+        if (itLinkedJmref && itLinkedJmref !== '—' && bJm === itLinkedJmref) return true;
+        const masterItem = masterMap.get(bJm) || masterMap.get((b.partNo || '').trim().toUpperCase());
+        if (masterItem) {
+          const comp = (masterItem.compoundCode || masterItem.compound || '').trim().toUpperCase();
+          if (comp && comp === itCodeUpper) return true;
+        }
+        return false;
+      });
+      const wipBatchesCount = rmBatches.filter(b => b.status === 'active' && b.currentStage !== 'store').length;
+      const rmBatchesCount = rmBatches.length;
+
+      // Check Delivery Challans for Subcontractor holding
+      const dcItems = [];
+      allDcs.forEach(dc => {
+        const vendorName = dc.vendorName || dc.vendorId || 'Subcontractor';
+        (dc.rmItems || []).forEach(itSub => {
+          const itCode = (itSub.itemCode || '').trim().toUpperCase();
+          if (itCode === itCodeUpper) {
+            dcItems.push({
+              dcNo: dc.dcNo,
+              vendorName,
+              qty: parseFloat(itSub.qty) || 0
+            });
+          }
+        });
+      });
+      const distinctSubs = new Set(dcItems.map(d => d.vendorName));
+      const subconCount = distinctSubs.size;
+
+      rowsData.push({
+        item: it,
+        inward,
+        dispatched,
+        warehouseBal,
+        warehouseVal,
+        underProcess,
+        underProcessVal,
+        consumed,
+        totalAvailable,
+        rate,
+        rmBatchesCount,
+        wipBatchesCount,
+        subconCount,
+        statusBadge,
+        statusText: statusKey === 'out' ? 'Out of Stock' : (statusKey === 'low' ? 'Reorder Alert' : (statusKey === 'processing' ? 'In Process' : 'Adequate'))
+      });
+    });
+
+    if (!rowsData.length) {
+      return emptyState('No Raw Materials found matching the selected filters.');
+    }
+
+    // Sort by warehouse stock desc
+    rowsData.sort((a,b) => b.warehouseBal - a.warehouseBal);
+
+    const headers = [
+      'RM Code', 'Material Name', 'Category', 'UOM', 'Linked JMREF',
+      'Total Inward', 'Dispatched to Sub', 'Warehouse Stock',
+      'Under Process', 'Consumed in Batches', 'Total Stock',
+      'Reorder Level', 'Stock Status'
+    ];
+
+    const dataRows = rowsData.map(r => [
+      r.item.code,
+      r.item.name,
+      r.item.category,
+      r.item.uom,
+      r.item.linkedJmref || '—',
+      r.inward > 0 ? `${r.inward.toFixed(2)} ${r.item.uom}` : '0.00 ' + r.item.uom,
+      r.dispatched > 0 ? `${r.dispatched.toFixed(2)} ${r.item.uom}` : '0.00 ' + r.item.uom,
+      `${r.warehouseBal.toFixed(2)} ${r.item.uom}`,
+      `${r.underProcess.toFixed(2)} ${r.item.uom}`,
+      `${r.consumed.toFixed(2)} ${r.item.uom}`,
+      `${r.totalAvailable.toFixed(2)} ${r.item.uom}`,
+      r.item.reorderLevel > 0 ? `${r.item.reorderLevel} ${r.item.uom}` : '—',
+      r.statusText
+    ]);
+
+    // Append total row for export
+    dataRows.push([
+      'TOTAL',
+      `${rowsData.length} SKUs`,
+      '',
+      '',
+      '',
+      totalInwardQty.toFixed(2),
+      totalDispatchedQty.toFixed(2),
+      totalWarehouseQty.toFixed(2),
+      totalUnderProcessQty.toFixed(2),
+      totalConsumedQty.toFixed(2),
+      (totalWarehouseQty + totalUnderProcessQty).toFixed(2),
+      '',
+      ''
+    ]);
+
+    const tbodyRows = rowsData.map(r => `
+      <tr>
+        <td class="font-semibold text-blue font-mono" style="white-space:nowrap;">
+          <span class="badge badge-teal" style="cursor:pointer;" title="View in RM Master" onclick="App.navigate('rm-master')">${r.item.code}</span>
+        </td>
+        <td>
+          <div class="font-semibold" style="font-size:12.5px;">${r.item.name}</div>
+          ${r.item.spec && r.item.spec !== '—' ? `<div class="text-xs text-muted font-mono">${r.item.spec}</div>` : ''}
+        </td>
+        <td><span class="badge badge-gray text-xs">${r.item.category}</span></td>
+        <td class="text-center font-mono text-xs font-bold text-teal">${r.item.uom}</td>
+        <td>
+          ${r.item.linkedJmref && r.item.linkedJmref !== '—' ? `<span class="badge badge-purple" style="font-size:11px;">🎯 ${r.item.linkedJmref}</span>` : '<span class="text-muted">—</span>'}
+        </td>
+        <td class="text-right font-mono text-muted">${r.inward > 0 ? formatNum(r.inward, 2) + ' <span class="text-xs text-muted">' + r.item.uom + '</span>' : '—'}</td>
+        <td class="text-right font-mono text-muted">${r.dispatched > 0 ? formatNum(r.dispatched, 2) + ' <span class="text-xs text-muted">' + r.item.uom + '</span>' : '—'}</td>
+        <td class="text-right font-mono font-bold text-success" style="font-size:13px;">${formatNum(r.warehouseBal, 2)} <span class="text-xs">${r.item.uom}</span></td>
+        <td class="text-right font-mono" style="font-size:13px;">
+          <div class="font-bold text-amber" style="cursor:pointer; text-decoration:underline;" 
+            onclick="ReportsModule.openSubconRmBalanceModal('${r.item.code}', '${r.item.name.replace(/'/g, "\\'")}', '${r.item.uom}')" 
+            title="Click to view Subcontractor / Supplier Balance Breakdown by DC">
+            ${r.underProcess > 0 ? formatNum(r.underProcess, 2) + ' <span class="text-xs">' + r.item.uom + '</span>' : '0.00 <span class="text-xs">' + r.item.uom + '</span>'} ↗
+          </div>
+          <div style="display:flex; gap:3px; justify-content:flex-end; flex-wrap:wrap; margin-top:3px;">
+            ${r.subconCount > 0 ? `
+              <button type="button" class="btn btn-xs badge badge-amber" style="cursor:pointer; border:none; padding:2px 6px; font-size:10px;"
+                onclick="ReportsModule.openSubconRmBalanceModal('${r.item.code}', '${r.item.name.replace(/'/g, "\\'")}', '${r.item.uom}')"
+                title="View Subcontractor / Supplier DC Breakdown for ${r.item.code}">
+                🏢 ${r.subconCount} Subcon${r.subconCount > 1 ? 's' : ''} (DC Breakdown)
+              </button>
+            ` : ''}
+            ${r.wipBatchesCount > 0 ? `
+              <button type="button" class="btn btn-xs badge badge-purple" style="cursor:pointer; border:none; padding:2px 6px; font-size:10px;" 
+                onclick="ReportsModule.openRmBatchesModal('${r.item.code}', '', '', 'wip')" title="Click to view ${r.wipBatchesCount} batches in WIP inventory">
+                ⚡ ${r.wipBatchesCount} in WIP
+              </button>
+            ` : ''}
+          </div>
+        </td>
+        <td class="text-right font-mono">
+          <div class="font-bold text-blue">${r.consumed > 0 ? formatNum(r.consumed, 2) + ' <span class="text-xs">' + r.item.uom + '</span>' : '0.00 <span class="text-xs">' + r.item.uom + '</span>'}</div>
+          ${r.rmBatchesCount > 0 ? `
+            <button type="button" class="btn btn-xs badge badge-blue mt-1" style="cursor:pointer; display:inline-flex; align-items:center; gap:3px; padding:2px 6px; font-size:10.5px; border:none;" 
+              onclick="ReportsModule.openRmBatchesModal('${r.item.code}', '', '', 'all')" title="Click to view all ${r.rmBatchesCount} batches created & WIP mapping">
+              🏭 ${r.rmBatchesCount} Batches
+            </button>
+          ` : ''}
+        </td>
+        <td class="text-right font-mono font-bold">${formatNum(r.totalAvailable, 2)} <span class="text-xs text-muted">${r.item.uom}</span></td>
+        <td class="text-center font-mono text-xs ${r.item.reorderLevel > 0 && r.warehouseBal <= r.item.reorderLevel ? 'font-bold text-danger' : 'text-muted'}">${r.item.reorderLevel > 0 ? formatNum(r.item.reorderLevel) + ' ' + r.item.uom : '—'}</td>
+        <td class="text-center">${r.statusBadge}</td>
+      </tr>
+    `).join('');
+
+    const html = `
+      <!-- RM Inventory KPI Cards -->
+      <div class="stats-grid mb-6" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px;">
+        <div class="stat-card blue">
+          <div class="stat-label">Total RM Materials</div>
+          <div class="stat-value blue">${formatNum(rowsData.length)}</div>
+          <div class="text-xs text-muted mt-1">Cataloged SKUs</div>
+        </div>
+        <div class="stat-card green">
+          <div class="stat-label">Warehouse Stock (Physical)</div>
+          <div class="stat-value green" style="font-size:18px;">${formatNum(totalWarehouseQty, 1)}</div>
+          <div class="text-xs text-success font-semibold mt-1">In Plant Warehouse</div>
+        </div>
+        <div class="stat-card amber">
+          <div class="stat-label">Under Process (Subcontractor)</div>
+          <div class="stat-value amber" style="font-size:18px;">${formatNum(totalUnderProcessQty, 1)}</div>
+          <div class="text-xs font-semibold mt-1" style="color:var(--accent-amber);">Dispatched for Moulding</div>
+        </div>
+        <div class="stat-card teal">
+          <div class="stat-label">Total Active Stock</div>
+          <div class="stat-value teal" style="font-size:18px;">${formatNum(totalWarehouseQty + totalUnderProcessQty, 1)}</div>
+          <div class="text-xs text-muted mt-1">Warehouse + Under Process</div>
+        </div>
+        <div class="stat-card ${lowStockCount + outOfStockCount > 0 ? 'red' : 'green'}">
+          <div class="stat-label">Stock Alerts</div>
+          <div class="stat-value ${lowStockCount + outOfStockCount > 0 ? 'red' : 'green'}">${formatNum(lowStockCount + outOfStockCount)}</div>
+          <div class="text-xs text-muted mt-1">${outOfStockCount} Out of Stock / ${lowStockCount} Low</div>
+        </div>
+      </div>
+
+      <!-- Quick Action Navigation Banner -->
+      <div class="flex items-center justify-between p-3 mb-4 rounded-lg bg-card border border-subtle" style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px;">
+        <div class="flex items-center gap-2">
+          <span style="font-size:18px;">💡</span>
+          <span class="text-xs text-muted"><strong>3-State Tracking:</strong> Quantities are measured in each material's configured RM Master UOM (e.g. kg, pcs, bags, drums, ltr). Click batch counts to view WIP mapping.</span>
+        </div>
+        <div class="flex gap-2">
+          <button class="btn btn-secondary btn-xs" onclick="App.navigate('report_rm_sub_balance')">🏢 View Subcontractor Balances</button>
+          <button class="btn btn-secondary btn-xs" onclick="App.navigate('report_rm_consumption')">🔥 View Batch Consumption</button>
+        </div>
+      </div>
+
+      <!-- RM Stock Table -->
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>RM Code</th>
+              <th>Material Name & Spec</th>
+              <th>Category</th>
+              <th class="text-center">UOM</th>
+              <th>Linked FG</th>
+              <th class="text-right">Total Inward</th>
+              <th class="text-right">Dispatched</th>
+              <th class="text-right">Warehouse Stock</th>
+              <th class="text-right">Under Process</th>
+              <th class="text-right">Consumed in Batches</th>
+              <th class="text-right">Total Stock</th>
+              <th class="text-center">Reorder</th>
+              <th class="text-center">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${tbodyRows}
+            <tr class="total-row font-bold" style="background:var(--bg-card); border-top:2px solid var(--border-color);">
+              <td colspan="5">TOTAL (${rowsData.length} SKUs)</td>
+              <td class="text-right">${formatNum(totalInwardQty, 2)}</td>
+              <td class="text-right">${formatNum(totalDispatchedQty, 2)}</td>
+              <td class="text-right text-success" style="font-size:13px;">${formatNum(totalWarehouseQty, 2)}</td>
+              <td class="text-right text-amber" style="font-size:13px;">${formatNum(totalUnderProcessQty, 2)}</td>
+              <td class="text-right text-blue">${formatNum(totalConsumedQty, 2)}</td>
+              <td class="text-right font-bold">${formatNum(totalWarehouseQty + totalUnderProcessQty, 2)}</td>
+              <td colspan="2"></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>`;
+
+    return { headers, dataRows, html };
+  }
+
+  // ── Helper: Robust Batch Raw Material Consumption Calculation ──
+  function getBatchRmConsumedQty(batch, rmItem, masterItem, dcItem) {
+    if (!batch) return 0;
+    const explicit = parseFloat(batch.rmConsumedQty);
+    if (explicit > 0) return explicit;
+
+    const batchQty = parseFloat(batch.initialQty || batch.qty) || 0;
+    const uom = String(rmItem?.uom || rmItem?.unit || dcItem?.uom || 'kg').trim().toLowerCase();
+
+    // If UOM is pieces/nos or category is insert, 1 part requires 1 piece/insert
+    if (uom === 'pcs' || uom === 'nos' || uom === 'piece' || uom === 'pieces' || uom === 'plate' || uom === 'plates' || (rmItem?.category || '').toLowerCase().includes('insert')) {
+      return batchQty;
+    }
+
+    // For compound (kg), calculate from standard grams per piece
+    const stdGrams = parseFloat(rmItem?.stdGramsPerPiece || rmItem?.stdShotWeightGrams || masterItem?.blankWeight || masterItem?.stdShotWeightGrams) || 0;
+    if (stdGrams > 0) {
+      return (batchQty * stdGrams) / 1000;
+    }
+
+    return batchQty > 0 ? batchQty : 0;
+  }
+
+  // ── 2. Subcontractor RM Balance & Holding Report ─────────────
+  function renderRmSubBalance(filters) {
+    const { subcontractorId, rmCode, dcStatus, from, to } = filters;
+    const allDcs = (typeof DB !== 'undefined' && DB.DeliveryChallans && DB.DeliveryChallans.all) ? DB.DeliveryChallans.all() : [];
+    const allBatches = (typeof DB !== 'undefined' && DB.Batches && DB.Batches.all) ? DB.Batches.all() : [];
+    const allRms = (typeof DB !== 'undefined' && DB.RawMaterials && DB.RawMaterials.all) ? DB.RawMaterials.all() : [];
+    const allMasters = (typeof DB !== 'undefined' && DB.Master && DB.Master.all) ? DB.Master.all() : [];
+    const allRejections = (typeof DB !== 'undefined' && DB.RejectionTracker && DB.RejectionTracker.all) ? DB.RejectionTracker.all() : [];
+
+    const masterMap = new Map();
+    allMasters.forEach(m => {
+      if (m.jmrefNo) masterMap.set(m.jmrefNo.trim().toUpperCase(), m);
+      if (m.partNo) masterMap.set(m.partNo.trim().toUpperCase(), m);
+    });
+
+    const rejectionByBatchId = new Map();
+    const rejectionByBatchNo = new Map();
+    allRejections.forEach(r => {
+      const q = parseFloat(r.qty) || 0;
+      if (r.batchId) rejectionByBatchId.set(r.batchId, (rejectionByBatchId.get(r.batchId) || 0) + q);
+      if (r.batchNo) {
+        const bNo = String(r.batchNo).trim().toUpperCase();
+        rejectionByBatchNo.set(bNo, (rejectionByBatchNo.get(bNo) || 0) + q);
+      }
+    });
+
+    const rmPriceMap = new Map();
+    const rmUomMap = new Map();
+    const rmMap = new Map();
+    allRms.forEach(r => {
+      const code = (r.code || r.itemCode || '').trim().toUpperCase();
+      if (code) {
+        rmMap.set(code, r);
+        rmPriceMap.set(code, parseFloat(r.unitPrice || r.rate) || 0);
+        rmUomMap.set(code, r.uom || r.unit || 'kg');
+      }
+    });
+
+    // 1. Calculate consumption per DC & RM code
+    const dcConsumedMap = {};
+    const dcBatchesMap = new Map();
+    allBatches.forEach(b => {
+      if (b.sourceRmDcNo) {
+        const dcKey = b.sourceRmDcNo.trim().toUpperCase();
+        let list = dcBatchesMap.get(dcKey);
+        if (!list) { list = []; dcBatchesMap.set(dcKey, list); }
+        list.push(b);
+
+        const bRm = (b.sourceRmCode || '').trim().toUpperCase();
+        const rmItem = rmMap.get(bRm);
+        const masterItem = masterMap.get((b.jmrefNo || '').trim().toUpperCase()) || masterMap.get((b.partNo || '').trim().toUpperCase());
+        const consumed = getBatchRmConsumedQty(b, rmItem, masterItem, null);
+
+        if (bRm && consumed > 0) {
+          const key = `${dcKey}|${bRm}`;
+          dcConsumedMap[key] = (dcConsumedMap[key] || 0) + consumed;
+        }
+      }
+    });
+
+    // 2. Filter RM Delivery Challans (strictly raw-material processing)
+    let dcs = allDcs.filter(dc => dc.type === 'rm-processing' || (dc.rmItems && dc.rmItems.length > 0));
+
+    if (from || to) {
+      dcs = filterByDateRange(dcs, 'date', from, to);
+    }
+
+    if (subcontractorId) {
+      const targetSub = String(subcontractorId).trim().toLowerCase();
+      dcs = dcs.filter(dc => {
+        const vId = (dc.vendorId || '').toLowerCase();
+        const vName = (dc.vendorName || '').toLowerCase();
+        return vId === targetSub || vName === targetSub || vName.includes(targetSub);
+      });
+    }
+
+    // 3. Flatten line items & accumulate subcontractor summaries
+    const lineItems = [];
+    const subSummaryMap = new Map();
+    const today = new Date();
+
+    dcs.forEach(dc => {
+      const subName = dc.vendorName || dc.vendorId || 'Unknown Subcontractor';
+      const dcKey = (dc.dcNo || '').trim().toUpperCase();
+      (dc.rmItems || []).forEach(it => {
+        const code = (it.itemCode || '').trim().toUpperCase();
+        if (!code) return;
+
+        if (rmCode) {
+          const q = rmCode.trim().toLowerCase();
+          if (!code.toLowerCase().includes(q) && !(it.name || '').toLowerCase().includes(q)) return;
+        }
+
+        const rmItem = rmMap.get(code);
+        const uom = it.uom || rmUomMap.get(code) || getRmUom(code);
+        const sentQty = parseFloat(it.qty) || 0;
+        const key = `${dcKey}|${code}`;
+        const consumedQty = dcConsumedMap[key] || 0;
+        const balanceQty = Math.max(0, sentQty - consumedQty);
+        const rate = parseFloat(it.rate) || rmPriceMap.get(code) || 0;
+        const holdingVal = balanceQty * rate;
+
+        let ageDays = 0;
+        if (dc.date) {
+          const dcD = new Date(dc.date);
+          if (!isNaN(dcD.getTime())) {
+            ageDays = Math.max(0, Math.floor((today - dcD) / 86400000));
+          }
+        }
+
+        let statusText = 'Undrawn Holding';
+        let statusBadge = '<span class="badge badge-blue">🔵 Holding</span>';
+        if (balanceQty <= 0.001) {
+          statusText = 'Fully Consumed';
+          statusBadge = '<span class="badge badge-green">✅ Reconciled</span>';
+        } else if (consumedQty > 0) {
+          statusText = 'Partially Consumed';
+          statusBadge = '<span class="badge badge-amber">🔄 Partial</span>';
+        }
+
+        if (dcStatus === 'open' && balanceQty <= 0.001) return;
+        if (dcStatus === 'closed' && balanceQty > 0.001) return;
+
+        const allDcBatches = dcBatchesMap.get(dcKey) || [];
+        const dcBatches = allDcBatches.filter(b => !code || (b.sourceRmCode || '').trim().toUpperCase() === code);
+        const dcWipCount = dcBatches.filter(b => b.status === 'active' && b.currentStage !== 'store').length;
+        let dcRejectedPcs = 0;
+        dcBatches.forEach(b => {
+          const rej = rejectionByBatchId.get(b.id) || rejectionByBatchNo.get((b.batchNo || '').trim().toUpperCase()) || (b.status === 'rejected' ? (parseFloat(b.initialQty || b.qty) || 0) : 0);
+          dcRejectedPcs += rej;
+        });
+
+        lineItems.push({
+          subName,
+          dcNo: dc.dcNo,
+          dcDate: dc.date || (dc.createdAt ? dc.createdAt.slice(0, 10) : '—'),
+          vehicleNo: dc.vehicleNo || '—',
+          itemCode: code,
+          itemName: it.name || code,
+          uom,
+          sentQty,
+          consumedQty,
+          balanceQty,
+          rate,
+          holdingVal,
+          ageDays,
+          dcBatchesCount: dcBatches.length,
+          dcWipCount,
+          rejectedPcs: dcRejectedPcs,
+          statusText,
+          statusBadge
+        });
+
+        // Subcontractor group summary
+        let sum = subSummaryMap.get(subName);
+        if (!sum) {
+          sum = { subName, allDcs: new Set(), activeDcs: new Set(), uoms: new Set(), totalSent: 0, totalConsumed: 0, totalBalance: 0, totalValue: 0 };
+          subSummaryMap.set(subName, sum);
+        }
+        sum.allDcs.add(dcKey);
+        if (balanceQty > 0.001) sum.activeDcs.add(dc.dcNo);
+        sum.uoms.add(uom);
+        sum.totalSent += sentQty;
+        sum.totalConsumed += consumedQty;
+        sum.totalBalance += balanceQty;
+        sum.totalValue += holdingVal;
+      });
+    });
+
+    if (!lineItems.length) {
+      return emptyState('No Subcontractor RM Delivery Challans found for the selected filters.');
+    }
+
+    // Sort by Subcontractor and Date desc
+    lineItems.sort((a,b) => (b.dcDate).localeCompare(a.dcDate));
+
+    // KPI Aggregations
+    let totalSentAll = 0;
+    let totalConsumedAll = 0;
+    let totalBalanceAll = 0;
+    let totalHoldingValueAll = 0;
+    let activeSubcontractorsCount = 0;
+
+    subSummaryMap.forEach(s => {
+      totalSentAll += s.totalSent;
+      totalConsumedAll += s.totalConsumed;
+      totalBalanceAll += s.totalBalance;
+      totalHoldingValueAll += s.totalValue;
+      if (s.totalBalance > 0.001) activeSubcontractorsCount++;
+    });
+
+    const headers = [
+      'Subcontractor', 'DC No', 'DC Date', 'Vehicle No', 'RM Code', 'Material Name',
+      'Dispatched Qty', 'Consumed Qty', 'Balance at Subcontractor', 'UOM', 'Rate (₹)',
+      'Holding Value (₹)', 'Age (Days)', 'Status'
+    ];
+
+    const dataRows = lineItems.map(r => [
+      r.subName,
+      r.dcNo,
+      r.dcDate,
+      r.vehicleNo,
+      r.itemCode,
+      r.itemName,
+      `${r.sentQty.toFixed(2)} ${r.uom}`,
+      `${r.consumedQty.toFixed(2)} ${r.uom}`,
+      `${r.balanceQty.toFixed(2)} ${r.uom}`,
+      r.uom,
+      r.rate > 0 ? r.rate.toFixed(2) : '—',
+      r.holdingVal > 0 ? r.holdingVal.toFixed(2) : '0.00',
+      r.ageDays,
+      r.statusText
+    ]);
+
+    // Total row
+    dataRows.push([
+      'TOTAL',
+      `${lineItems.length} Challan Items`,
+      '',
+      '',
+      '',
+      '',
+      totalSentAll.toFixed(2),
+      totalConsumedAll.toFixed(2),
+      totalBalanceAll.toFixed(2),
+      '',
+      '',
+      totalHoldingValueAll.toFixed(2),
+      '',
+      ''
+    ]);
+
+    // Summary Table HTML
+    const subSummariesArray = Array.from(subSummaryMap.values()).sort((a,b) => b.totalBalance - a.totalBalance);
+    const summaryTbody = subSummariesArray.map(s => {
+      const uomDisplay = s.uoms.size === 1 ? Array.from(s.uoms)[0] : '';
+      
+      // Accurately map batches dispatched against this subcontractor's RM DCs
+      const subBatches = allBatches.filter(b => {
+        if (!b.sourceRmDcNo) return false;
+        const bDc = b.sourceRmDcNo.trim().toUpperCase();
+        return s.allDcs.has(bDc);
+      });
+      const subWipCount = subBatches.filter(b => b.status === 'active' && b.currentStage !== 'store').length;
+      let subRejCount = 0;
+      subBatches.forEach(b => {
+        const rej = rejectionByBatchId.get(b.id) || rejectionByBatchNo.get((b.batchNo || '').trim().toUpperCase()) || (b.status === 'rejected' ? (parseFloat(b.initialQty || b.qty) || 0) : 0);
+        subRejCount += rej;
+      });
+
+      return `
+      <tr>
+        <td class="font-bold text-blue">${s.subName}</td>
+        <td class="text-center"><span class="badge ${s.activeDcs.size > 0 ? 'badge-amber' : 'badge-green'} font-mono">${s.activeDcs.size} Open DCs</span></td>
+        <td class="text-right font-mono">${formatNum(s.totalSent, 2)} ${uomDisplay}</td>
+        <td class="text-right font-mono">
+          <div class="font-bold text-blue">${formatNum(s.totalConsumed, 2)} ${uomDisplay}</div>
+          ${subBatches.length > 0 ? `
+            <button type="button" class="btn btn-xs badge badge-blue mt-1" style="cursor:pointer; display:inline-flex; align-items:center; gap:3px; padding:2px 6px; font-size:10.5px; border:none;"
+              onclick="ReportsModule.openRmBatchesModal('', '${s.subName.replace(/'/g, "\\'")}', '', 'all')" title="View ${subBatches.length} Batches & WIP Mapping">
+              📦 ${subBatches.length} Batches ${subWipCount > 0 ? `(${subWipCount} WIP)` : ''} ${subRejCount > 0 ? `(❌ ${subRejCount} rej)` : ''}
+            </button>
+          ` : ''}
+        </td>
+        <td class="text-right font-mono font-bold ${s.totalBalance > 0.001 ? 'text-amber' : 'text-success'}" style="font-size:13px;">${formatNum(s.totalBalance, 2)} ${uomDisplay}</td>
+        <td class="text-right font-mono text-teal font-semibold">₹${Number(s.totalValue).toLocaleString('en-IN', {maximumFractionDigits:2})}</td>
+        <td class="text-center">
+          ${s.totalBalance > 0.001 ? '<span class="badge badge-amber font-bold">⚠️ Material Held</span>' : '<span class="badge badge-green font-bold">✅ Fully Settled</span>'}
+        </td>
+      </tr>
+      `;
+    }).join('');
+
+    // Detailed Line-Items Table HTML
+    const detailTbody = lineItems.map(r => `
+      <tr>
+        <td class="font-semibold text-blue" style="white-space:nowrap;">${r.subName}</td>
+        <td class="font-mono font-bold text-teal" style="white-space:nowrap;">${r.dcNo}</td>
+        <td class="text-xs" style="white-space:nowrap;">${r.dcDate}</td>
+        <td class="text-xs text-muted font-mono">${r.vehicleNo}</td>
+        <td class="font-mono font-semibold" style="white-space:nowrap;">${r.itemCode}</td>
+        <td style="font-size:12.5px;">${r.itemName}</td>
+        <td class="text-right font-mono">${formatNum(r.sentQty, 2)} <span class="text-xs text-muted">${r.uom}</span></td>
+        <td class="text-right font-mono">
+          <div class="font-bold text-blue">${formatNum(r.consumedQty, 2)} <span class="text-xs">${r.uom}</span></div>
+          ${r.dcBatchesCount > 0 ? `
+            <button type="button" class="btn btn-xs badge badge-teal mt-1" style="cursor:pointer; display:inline-flex; align-items:center; gap:3px; padding:2px 6px; font-size:10.5px; border:none;"
+              onclick="ReportsModule.openRmBatchesModal('${r.itemCode}', '${r.subName.replace(/'/g, "\\'")}', '${r.dcNo}', 'all')" title="View ${r.dcBatchesCount} Batches created against DC ${r.dcNo}">
+              🏭 ${r.dcBatchesCount} Batches ${r.dcWipCount > 0 ? `(${r.dcWipCount} WIP)` : ''} ${r.rejectedPcs > 0 ? `(❌ ${r.rejectedPcs} rej)` : ''}
+            </button>
+          ` : ''}
+        </td>
+        <td class="text-right font-mono font-bold ${r.balanceQty > 0.001 ? 'text-amber' : 'text-success'}" style="font-size:13px;">${formatNum(r.balanceQty, 2)} <span class="text-xs">${r.uom}</span></td>
+        <td class="text-center font-mono text-xs font-semibold text-teal">${r.uom}</td>
+        <td class="text-right font-mono text-muted">${r.rate > 0 ? '₹' + r.rate.toFixed(2) : '—'}</td>
+        <td class="text-right font-mono text-teal">₹${Number(r.holdingVal).toLocaleString('en-IN', {maximumFractionDigits:2})}</td>
+        <td class="text-center font-mono text-xs ${r.ageDays > 30 ? 'font-bold text-danger' : 'text-muted'}">${r.ageDays}d</td>
+        <td class="text-center">${r.statusBadge}</td>
+      </tr>
+    `).join('');
+
+    const html = `
+      <!-- KPI Summary Cards -->
+      <div class="stats-grid mb-6" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px;">
+        <div class="stat-card blue">
+          <div class="stat-label">Subcontractors Holding RM</div>
+          <div class="stat-value blue">${formatNum(activeSubcontractorsCount)}</div>
+          <div class="text-xs text-muted mt-1">Out of ${subSummaryMap.size} Processors</div>
+        </div>
+        <div class="stat-card purple">
+          <div class="stat-label">Total RM Dispatched</div>
+          <div class="stat-value purple" style="font-size:18px;">${formatNum(totalSentAll, 1)}</div>
+          <div class="text-xs text-muted mt-1">Across all RM DCs</div>
+        </div>
+        <div class="stat-card teal" style="cursor:pointer;" onclick="ReportsModule.openRmBatchesModal('', '${subcontractorId ? String(subcontractorId).replace(/'/g, "\\'") : ''}', '', 'all')" title="Click to view all Subcontractor Batches & WIP Mapping">
+          <div class="stat-label">Total Consumed in Batches ↗</div>
+          <div class="stat-value teal" style="font-size:18px;">${formatNum(totalConsumedAll, 1)}</div>
+          <div class="text-xs text-success font-semibold mt-1">Click to view WIP Mapping</div>
+        </div>
+        <div class="stat-card amber">
+          <div class="stat-label">Net Subcontractor Balance</div>
+          <div class="stat-value amber" style="font-size:18px;">${formatNum(totalBalanceAll, 1)}</div>
+          <div class="text-xs font-semibold mt-1" style="color:var(--accent-amber);">Valuation: ₹${Number(totalHoldingValueAll).toLocaleString('en-IN', {maximumFractionDigits:0})}</div>
+        </div>
+      </div>
+
+      <!-- Subcontractor Holding Summary Table -->
+      <div class="card mb-6" style="border: 1px solid var(--border-color); background: var(--bg-card); border-radius: 8px;">
+        <div class="card-header flex items-center justify-between" style="padding: 12px 16px; border-bottom: 1px solid var(--border-color);">
+          <h4 class="font-bold text-sm" style="color:var(--accent-teal);">🏢 Subcontractor Material Accountability Summary</h4>
+          <span class="text-xs text-muted font-mono">Consolidated RM Holdings</span>
+        </div>
+        <div class="table-wrap" style="padding: 0;">
+          <table class="data-table" style="margin: 0;">
+            <thead>
+              <tr>
+                <th>Subcontractor Name</th>
+                <th class="text-center">Open DCs</th>
+                <th class="text-right">Total Sent</th>
+                <th class="text-right">Total Consumed</th>
+                <th class="text-right">Current Balance</th>
+                <th class="text-right">Holding Value (₹)</th>
+                <th class="text-center">Accountability Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${summaryTbody}
+              <tr class="total-row font-bold" style="background:var(--bg-card); border-top:2px solid var(--border-color);">
+                <td>TOTAL</td>
+                <td class="text-center font-mono">${Array.from(subSummaryMap.values()).reduce((sum, s) => sum + s.activeDcs.size, 0)} Open DCs</td>
+                <td class="text-right font-mono">${formatNum(totalSentAll, 2)}</td>
+                <td class="text-right font-mono">${formatNum(totalConsumedAll, 2)}</td>
+                <td class="text-right font-mono text-amber" style="font-size:13px;">${formatNum(totalBalanceAll, 2)}</td>
+                <td class="text-right font-mono text-teal">₹${Number(totalHoldingValueAll).toLocaleString('en-IN', {maximumFractionDigits:2})}</td>
+                <td></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Detailed Line-Items Breakdown -->
+      <div class="card" style="border: 1px solid var(--border-color); background: var(--bg-card); border-radius: 8px;">
+        <div class="card-header flex items-center justify-between" style="padding: 12px 16px; border-bottom: 1px solid var(--border-color);">
+          <h4 class="font-bold text-sm" style="color:var(--accent-blue);">📋 Delivery Challans Line-Item Balance Detail</h4>
+          <span class="text-xs text-muted font-mono">${lineItems.length} Challan Items</span>
+        </div>
+        <div class="table-wrap" style="padding: 0;">
+          <table class="data-table" style="margin: 0;">
+            <thead>
+              <tr>
+                <th>Subcontractor</th>
+                <th>DC No</th>
+                <th>DC Date</th>
+                <th>Vehicle No</th>
+                <th>RM Code</th>
+                <th>Material Name</th>
+                <th class="text-right">Dispatched</th>
+                <th class="text-right">Consumed</th>
+                <th class="text-right">Balance at Sub</th>
+                <th class="text-center">UOM</th>
+                <th class="text-right">Rate (₹)</th>
+                <th class="text-right">Holding Val (₹)</th>
+                <th class="text-center">Age</th>
+                <th class="text-center">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${detailTbody}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+
+    return { headers, dataRows, html };
+  }
+
+  
+
+  // ── 3. RM Consumption & Batch Traceability Report ───────────
+  function renderRmConsumption(filters) {
+    const { from, to, jmref, rmCode, prodType, subcontractorId } = filters;
+    const allBatches = (typeof DB !== 'undefined' && DB.Batches && DB.Batches.all) ? DB.Batches.all() : [];
+    const allRms = (typeof DB !== 'undefined' && DB.RawMaterials && DB.RawMaterials.all) ? DB.RawMaterials.all() : [];
+    const allMasters = (typeof DB !== 'undefined' && DB.Master && DB.Master.all) ? DB.Master.all() : [];
+    const allDcs = (typeof DB !== 'undefined' && DB.DeliveryChallans && DB.DeliveryChallans.all) ? DB.DeliveryChallans.all() : [];
+    const allVendors = (typeof DB !== 'undefined' && DB.Vendors && DB.Vendors.all) ? DB.Vendors.all() : [];
+    const allSubs = (typeof DB !== 'undefined' && DB.Subcontractors && DB.Subcontractors.all) ? DB.Subcontractors.all() : [];
+    const allRejections = (typeof DB !== 'undefined' && DB.RejectionTracker && DB.RejectionTracker.all) ? DB.RejectionTracker.all() : [];
+
+    // 1. Build fast lookup maps and strictly index admin-created RM Masters
+    const masterByJmref = new Map();
+    const masterByPart = new Map();
+    allMasters.forEach(m => {
+      const jm = (m.jmrefNo || '').trim().toUpperCase();
+      const pt = (m.partNo || '').trim().toUpperCase();
+      if (jm) masterByJmref.set(jm, m);
+      if (pt) masterByPart.set(pt, m);
+    });
+
+    const rmMap = new Map();
+    const validRmCodes = new Set();
+    const rmLstByLinkedJmref = new Map();
+    allRms.forEach(r => {
+      const c = (r.code || r.itemCode || '').trim().toUpperCase();
+      if (c) {
+        rmMap.set(c, r);
+        validRmCodes.add(c);
+      }
+      if (r.linkedJmref) {
+        rmLstByLinkedJmref.set(r.linkedJmref.trim().toUpperCase(), r);
+      }
+    });
+
+    if (validRmCodes.size === 0) {
+      return emptyState('No Raw Material Masters created. Please define Raw Material Masters in the RM Master module first.');
+    }
+
+    // RM Delivery Challans lookup
+    const rmDcMap = new Map();
+    allDcs.forEach(dc => {
+      if (dc.dcNo && (dc.type === 'rm-processing' || (dc.rmItems && dc.rmItems.length > 0))) {
+        rmDcMap.set(dc.dcNo.trim().toUpperCase(), dc);
+      }
+    });
+
+    // Rejection mapping: index rejections by batchId and batchNo
+    const rejectionByBatchId = new Map();
+    const rejectionByBatchNo = new Map();
+    allRejections.forEach(r => {
+      const q = parseFloat(r.qty) || 0;
+      if (r.batchId) rejectionByBatchId.set(r.batchId, (rejectionByBatchId.get(r.batchId) || 0) + q);
+      if (r.batchNo) {
+        const bNo = String(r.batchNo).trim().toUpperCase();
+        rejectionByBatchNo.set(bNo, (rejectionByBatchNo.get(bNo) || 0) + q);
+      }
+    });
+
+    // Vendor and Subcontractor name lookup
+    const vendorMap = new Map();
+    allVendors.forEach(v => { if (v.id) vendorMap.set(v.id, v.name || v.id); });
+    allSubs.forEach(s => { if (s.id) vendorMap.set(s.id, s.name || s.id); });
+
+    // 2. Filter candidate batches:
+    // Exclude missing batches, legacy REC batches, and invalid/zero qty records.
+    // Strictly require batch to be related to RM trace (created via RM DC, explicit RM Code, or recorded RM consumption)
+    let candidateBatches = allBatches.filter(b => {
+      if (!b || !b.batchNo) return false;
+      const bNo = String(b.batchNo).trim();
+      if (bNo.includes('-REC-') || bNo.includes('REC')) return false;
+      if (b.status === 'missing') return false;
+      const qty = parseFloat(b.initialQty || b.qty) || 0;
+      if (qty <= 0) return false;
+
+      const hasRmTrace = Boolean((b.sourceRmDcNo && b.sourceRmDcNo.trim()) || (b.sourceRmCode && b.sourceRmCode.trim()) || (parseFloat(b.rmConsumedQty) > 0));
+      if (!hasRmTrace) return false;
+
+      return true;
+    });
+
+    if (from || to) {
+      candidateBatches = filterByDateRange(candidateBatches, 'productionDate', from, to);
+    }
+
+    if (jmref) {
+      const q = jmref.trim().toLowerCase();
+      candidateBatches = candidateBatches.filter(b => 
+        (b.jmrefNo && b.jmrefNo.toLowerCase().includes(q)) || 
+        (b.partNo && b.partNo.toLowerCase().includes(q)) ||
+        (b.batchNo && b.batchNo.toLowerCase().includes(q))
+      );
+    }
+
+    // 3. Enrich each batch with Raw Material compound, BOM consumption & Rejection details
+    // Strictly restrict to batches connected to admin-created RM Masters!
+    const rows = [];
+    let totalPieces = 0;
+    let totalRejectedPieces = 0;
+    let totalTheoretical = 0;
+    let totalActual = 0;
+    let totalMaterialCost = 0;
+
+    candidateBatches.forEach(b => {
+      const batchQty = parseFloat(b.initialQty || b.qty) || 0;
+      const cleanJm = (b.jmrefNo || '').trim().toUpperCase();
+      const cleanPart = (b.partNo || '').trim().toUpperCase();
+      const cleanBatchNo = (b.batchNo || '').trim().toUpperCase();
+      const masterItem = masterByJmref.get(cleanJm) || masterByPart.get(cleanPart) || {};
+
+      // Determine Raw Material code strictly matching created RM Masters
+      let resolvedRmCode = (b.sourceRmCode || '').trim().toUpperCase();
+      
+      // Look up from source RM DC if not directly specified
+      if ((!resolvedRmCode || !validRmCodes.has(resolvedRmCode)) && b.sourceRmDcNo) {
+        const dc = rmDcMap.get(b.sourceRmDcNo.trim().toUpperCase());
+        if (dc && dc.rmItems && dc.rmItems.length > 0) {
+          const matchItem = dc.rmItems.find(it => validRmCodes.has((it.itemCode || '').trim().toUpperCase()));
+          if (matchItem) resolvedRmCode = (matchItem.itemCode || '').trim().toUpperCase();
+        }
+      }
+
+      // Look up from linked RM Master by JMREF
+      if ((!resolvedRmCode || !validRmCodes.has(resolvedRmCode)) && cleanJm) {
+        const linkedRm = rmLstByLinkedJmref.get(cleanJm);
+        if (linkedRm) resolvedRmCode = (linkedRm.code || linkedRm.itemCode || '').trim().toUpperCase();
+      }
+
+      // Look up from Master compoundCode ONLY IF that compound code was actually created as an RM Master
+      if ((!resolvedRmCode || !validRmCodes.has(resolvedRmCode)) && masterItem.compoundCode) {
+        const cCode = masterItem.compoundCode.trim().toUpperCase();
+        if (validRmCodes.has(cCode)) {
+          resolvedRmCode = cCode;
+        }
+      }
+
+      // CRITICAL: Strictly restrict report to admin-created RM Masters!
+      if (!resolvedRmCode || !validRmCodes.has(resolvedRmCode)) {
+        return; // SKIP batches that do not use an admin-created RM Master
+      }
+
+      // Look up RM catalog entry
+      const rmItem = rmMap.get(resolvedRmCode) || {};
+      const rmName = rmItem.name || rmItem.description || `${resolvedRmCode} Material`;
+      const uom = rmItem.uom || rmItem.unit || getRmUom(resolvedRmCode);
+
+      // Determine Actual & Theoretical Consumption
+      const actualQty = getBatchRmConsumedQty(b, rmItem, masterItem, null);
+      let theoreticalQty = 0;
+      const isPieces = (uom.toLowerCase() === 'pcs' || uom.toLowerCase() === 'nos' || (rmItem.category || '').toLowerCase().includes('insert'));
+      const stdGrams = parseFloat(rmItem.stdGramsPerPiece || rmItem.stdShotWeightGrams || masterItem.blankWeight || masterItem.stdShotWeightGrams) || 0;
+
+      if (isPieces) {
+        theoreticalQty = batchQty;
+      } else {
+        theoreticalQty = stdGrams > 0 ? (batchQty * stdGrams / 1000) : actualQty;
+      }
+
+      const varianceQty = actualQty - theoreticalQty;
+      const variancePct = theoreticalQty > 0 ? ((varianceQty / theoreticalQty) * 100) : 0;
+      const rate = parseFloat(rmItem.unitPrice || rmItem.rate) || 0;
+      const cost = actualQty * rate;
+
+      // Determine Rejected Pieces
+      let rejectedPcs = rejectionByBatchId.get(b.id) || rejectionByBatchNo.get(cleanBatchNo) || 0;
+      if (!rejectedPcs && (b.status === 'rejected' || b.currentStage === 'rejected')) {
+        rejectedPcs = batchQty;
+      }
+
+      // Determine DC and Subcontractor channel
+      const sourceDc = (b.sourceRmDcNo || '').trim().toUpperCase() || '—';
+      const linkedDc = b.sourceRmDcNo ? rmDcMap.get(b.sourceRmDcNo.trim().toUpperCase()) : null;
+      const isSub = (b.productionType === 'sub' || b.productionType === 'subcontractor' || (linkedDc && linkedDc.vendorName && !linkedDc.vendorName.toLowerCase().includes('in house')));
+      const channel = isSub ? 'Subcontractor' : 'In-House';
+      const subcontractor = b.subcontractor || (linkedDc ? linkedDc.vendorName : '') || vendorMap.get(b.vendorId) || vendorMap.get(b.subcontractorId) || (isSub ? 'Subcontractor' : 'In-House Unit');
+
+      // Filter by rmCode
+      if (rmCode) {
+        const q = rmCode.trim().toLowerCase();
+        const matchesRm = resolvedRmCode.toLowerCase().includes(q) ||
+                          rmName.toLowerCase().includes(q) ||
+                          (sourceDc && sourceDc.toLowerCase().includes(q));
+        if (!matchesRm) return;
+      }
+
+      // Filter by prodType
+      if (prodType) {
+        if (prodType === 'inhouse' || prodType === 'in-house') {
+          if (channel !== 'In-House') return;
+        } else if (prodType === 'sub' || prodType === 'subcontractor') {
+          if (channel !== 'Subcontractor') return;
+        }
+      }
+
+      // Filter by subcontractorId
+      if (subcontractorId) {
+        const targetSub = String(subcontractorId).trim().toLowerCase();
+        const matchesSub = subcontractor.toLowerCase().includes(targetSub) ||
+                           (b.vendorId && String(b.vendorId).toLowerCase() === targetSub) ||
+                           (b.subcontractorId && String(b.subcontractorId).toLowerCase() === targetSub);
+        if (!matchesSub) return;
+      }
+
+      totalPieces += batchQty;
+      totalRejectedPieces += rejectedPcs;
+      totalTheoretical += theoreticalQty;
+      totalActual += actualQty;
+      totalMaterialCost += cost;
+
+      rows.push({
+        date: b.productionDate || (b.createdAt ? b.createdAt.slice(0, 10) : '—'),
+        batchNo: b.batchNo,
+        jmrefNo: b.jmrefNo || masterItem.jmrefNo || '—',
+        partNo: b.partNo || masterItem.partNo || '—',
+        channel,
+        subcontractor,
+        sourceDc,
+        rmCode: resolvedRmCode,
+        rmName,
+        uom,
+        batchQty,
+        rejectedPcs,
+        status: b.status || 'active',
+        stdGrams,
+        theoreticalQty,
+        actualQty,
+        varianceQty,
+        variancePct,
+        rate,
+        cost
+      });
+    });
+
+    if (!rows.length) {
+      return emptyState('No production batches with Raw Material consumption found matching the selected filters.');
+    }
+
+    // Sort by date desc
+    rows.sort((a,b) => (b.date || '').localeCompare(a.date || ''));
+
+    const totalBatches = rows.length;
+
+    const headers = [
+      'Production Date', 'Batch No', 'JMREF No', 'Part No', 'Channel', 'Subcontractor / Unit',
+      'Source RM DC No', 'RM Code', 'Material Name', 'Batch Qty (pcs)', 'Rejected Pcs', 'Std BOM (g/pc)',
+      'Theoretical RM', 'Actual Consumed', 'Variance', 'Variance (%)', 'UOM', 'Rate (₹)',
+      'Total Material Cost (₹)'
+    ];
+
+    const dataRows = rows.map(r => [
+      r.date,
+      r.batchNo,
+      r.jmrefNo,
+      r.partNo,
+      r.channel,
+      r.subcontractor,
+      r.sourceDc,
+      r.rmCode,
+      r.rmName,
+      r.batchQty,
+      r.rejectedPcs > 0 ? `${r.rejectedPcs} pcs` : '0',
+      r.stdGrams > 0 ? r.stdGrams.toFixed(1) + ' g/pc' : '—',
+      r.theoreticalQty > 0 ? `${r.theoreticalQty.toFixed(2)} ${r.uom}` : '—',
+      `${r.actualQty.toFixed(2)} ${r.uom}`,
+      r.varianceQty !== 0 ? `${(r.varianceQty > 0 ? '+' : '') + r.varianceQty.toFixed(2)} ${r.uom}` : `0.00 ${r.uom}`,
+      r.variancePct !== 0 ? r.variancePct.toFixed(1) + '%' : '0.0%',
+      r.uom,
+      r.rate > 0 ? r.rate.toFixed(2) : '—',
+      r.cost > 0 ? r.cost.toFixed(2) : '0.00'
+    ]);
+
+    // Totals row for export
+    dataRows.push([
+      'TOTAL',
+      `${totalBatches} Batches`,
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      totalPieces,
+      totalRejectedPieces,
+      '',
+      totalTheoretical.toFixed(2),
+      totalActual.toFixed(2),
+      (totalActual - totalTheoretical).toFixed(2),
+      totalTheoretical > 0 ? (((totalActual - totalTheoretical) / totalTheoretical) * 100).toFixed(1) + '%' : '0.0%',
+      '',
+      '',
+      totalMaterialCost.toFixed(2)
+    ]);
+
+    const avgGramsPerPiece = totalPieces > 0 ? ((totalActual * 1000) / totalPieces).toFixed(1) : '0.0';
+
+    const tbodyRows = rows.map(r => `
+      <tr>
+        <td class="text-xs" style="white-space:nowrap;">${r.date}</td>
+        <td class="font-mono font-bold text-blue" style="white-space:nowrap;">
+          <span style="cursor:pointer; text-decoration:underline;" onclick="event.stopPropagation(); App.showBatchGenealogy('${r.batchNo}')" title="Click to view Batch Genealogy & Lifecycle Details">
+            ${r.batchNo}
+          </span>
+          ${r.status === 'rejected' ? '<span class="badge badge-red text-xs ml-1 font-bold" style="font-size:10px;">❌ Rejected</span>' : ''}
+        </td>
+        <td><span class="badge badge-teal" style="font-size:11.5px;">${r.jmrefNo}</span></td>
+        <td class="text-xs font-mono text-muted">${r.partNo}</td>
+        <td><span class="badge ${r.channel === 'Subcontractor' ? 'badge-purple' : 'badge-gray'} text-xs">${r.channel}</span></td>
+        <td class="text-xs font-semibold" style="white-space:nowrap;">${r.subcontractor}</td>
+        <td class="font-mono font-bold text-teal" style="white-space:nowrap;">
+          ${r.sourceDc && r.sourceDc !== '—' ? `
+            <button type="button" class="btn btn-xs badge badge-teal" style="cursor:pointer; border:none; padding:2px 6px; font-size:11px;" 
+              onclick="ReportsModule.openRmBatchesModal('${r.rmCode}', '${r.subcontractor.replace(/'/g, "\\'")}', '${r.sourceDc}', 'all')" title="View all batches created from DC ${r.sourceDc}">
+              🚚 ${r.sourceDc}
+            </button>
+          ` : '<span class="text-muted">—</span>'}
+        </td>
+        <td class="font-mono font-semibold" style="white-space:nowrap;">${r.rmCode}</td>
+        <td style="font-size:12px; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${r.rmName}">${r.rmName}</td>
+        <td class="text-right font-mono font-bold">${formatNum(r.batchQty)} pcs</td>
+        <td class="text-right font-mono ${r.rejectedPcs > 0 ? 'font-bold text-danger' : 'text-muted'}">
+          ${r.rejectedPcs > 0 ? `<span class="badge badge-red font-bold" style="font-size:11px;">❌ ${formatNum(r.rejectedPcs)} pcs</span>` : '<span class="text-muted">0</span>'}
+        </td>
+        <td class="text-right font-mono text-muted">${r.stdGrams > 0 ? r.stdGrams.toFixed(1) + ' g/pc' : '—'}</td>
+        <td class="text-right font-mono text-muted">${r.theoreticalQty > 0 ? formatNum(r.theoreticalQty, 2) + ' <span class="text-xs">' + r.uom + '</span>' : '—'}</td>
+        <td class="text-right font-mono font-bold text-blue" style="font-size:13px;">${formatNum(r.actualQty, 2)} <span class="text-xs">${r.uom}</span></td>
+        <td class="text-right font-mono ${r.varianceQty > 0.05 ? 'font-bold text-danger' : (r.varianceQty < -0.05 ? 'text-success' : 'text-muted')}">
+          ${r.varianceQty !== 0 ? (r.varianceQty > 0 ? '+' : '') + formatNum(r.varianceQty, 2) + ' <span class="text-xs">' + r.uom + '</span>' : '0.00 ' + r.uom}
+        </td>
+        <td class="text-right font-mono text-xs ${r.variancePct > 5 ? 'font-bold text-danger' : 'text-muted'}">
+          ${r.variancePct !== 0 ? (r.variancePct > 0 ? '+' : '') + r.variancePct.toFixed(1) + '%' : '0.0%'}
+        </td>
+        <td class="text-right font-mono text-teal">₹${Number(r.cost).toLocaleString('en-IN', {maximumFractionDigits:2})}</td>
+      </tr>
+    `).join('');
+
+    const html = `
+      <!-- RM Consumption KPI Cards -->
+      <div class="stats-grid mb-6" style="grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px;">
+        <div class="stat-card blue" style="cursor:pointer;" onclick="ReportsModule.openRmBatchesModal('${(rmCode || '').replace(/'/g, "\\'")}', '${(subcontractorId || '').replace(/'/g, "\\'")}', '', 'all')" title="Click to view Batches & WIP Inventory Mapping">
+          <div class="stat-label">Batches Traced ↗</div>
+          <div class="stat-value blue">${formatNum(totalBatches)}</div>
+          <div class="text-xs text-blue font-semibold mt-1">Click to view WIP Mapping</div>
+        </div>
+        <div class="stat-card green">
+          <div class="stat-label">Total Pieces Molded</div>
+          <div class="stat-value green">${formatNum(totalPieces)}</div>
+          <div class="text-xs text-success font-semibold mt-1">Finished Goods Output</div>
+        </div>
+        <div class="stat-card red">
+          <div class="stat-label">Rejected Pieces</div>
+          <div class="stat-value red">${formatNum(totalRejectedPieces)}</div>
+          <div class="text-xs text-danger font-semibold mt-1">${totalPieces > 0 ? ((totalRejectedPieces / totalPieces) * 100).toFixed(1) + '% Rejection Rate' : '0%'}</div>
+        </div>
+        <div class="stat-card teal">
+          <div class="stat-label">Total Material Consumed</div>
+          <div class="stat-value teal" style="font-size:18px;">${formatNum(totalActual, 1)}</div>
+          <div class="text-xs text-muted mt-1">Avg ${avgGramsPerPiece} g / piece</div>
+        </div>
+        <div class="stat-card ${totalActual > totalTheoretical && totalTheoretical > 0 ? 'amber' : 'green'}">
+          <div class="stat-label">Material Variance vs BOM</div>
+          <div class="stat-value ${totalActual > totalTheoretical && totalTheoretical > 0 ? 'amber' : 'green'}" style="font-size:18px;">
+            ${totalTheoretical > 0 ? (totalActual >= totalTheoretical ? '+' : '') + formatNum(totalActual - totalTheoretical, 1) : 'BOM Traced'}
+          </div>
+          <div class="text-xs font-semibold mt-1" style="color:var(--accent-amber);">
+            ${totalTheoretical > 0 ? (((totalActual - totalTheoretical) / totalTheoretical) * 100).toFixed(1) + '% Variance' : 'Actual Tracked'}
+          </div>
+        </div>
+        <div class="stat-card purple">
+          <div class="stat-label">Consumed Material Cost</div>
+          <div class="stat-value purple" style="font-size:18px;">₹${Number(totalMaterialCost).toLocaleString('en-IN', {maximumFractionDigits:0})}</div>
+          <div class="text-xs text-muted mt-1">Valuation at Master Rates</div>
+        </div>
+      </div>
+
+      <!-- RM Consumption Table -->
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Batch No</th>
+              <th>JMREF</th>
+              <th>Part No</th>
+              <th>Channel</th>
+              <th>Subcontractor / Unit</th>
+              <th>Source DC No</th>
+              <th>RM Code</th>
+              <th>Material Description</th>
+              <th class="text-right">Molded (pcs)</th>
+              <th class="text-right">Rejected Pcs</th>
+              <th class="text-right">BOM (g/pc)</th>
+              <th class="text-right">Theoretical</th>
+              <th class="text-right">Actual Consumed</th>
+              <th class="text-right">Variance</th>
+              <th class="text-right">Var (%)</th>
+              <th class="text-right">Cost (₹)</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${tbodyRows}
+            <tr class="total-row font-bold" style="background:var(--bg-card); border-top:2px solid var(--border-color);">
+              <td colspan="9">TOTAL (${totalBatches} Batches)</td>
+              <td class="text-right font-mono">${formatNum(totalPieces)} pcs</td>
+              <td class="text-right font-mono ${totalRejectedPieces > 0 ? 'text-danger' : 'text-muted'}">${formatNum(totalRejectedPieces)} pcs</td>
+              <td></td>
+              <td class="text-right font-mono">${formatNum(totalTheoretical, 2)}</td>
+              <td class="text-right font-mono text-blue" style="font-size:13px;">${formatNum(totalActual, 2)}</td>
+              <td class="text-right font-mono ${totalActual > totalTheoretical ? 'text-danger' : 'text-success'}">
+                ${(totalActual - totalTheoretical).toFixed(2)}
+              </td>
+              <td class="text-right font-mono">
+                ${totalTheoretical > 0 ? (((totalActual - totalTheoretical) / totalTheoretical) * 100).toFixed(1) + '%' : ''}
+              </td>
+              <td class="text-right font-mono text-teal">₹${Number(totalMaterialCost).toLocaleString('en-IN', {maximumFractionDigits:2})}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>`;
+
+    return { headers, dataRows, html };
+  }
+
+  
+
+  // ── 4. RM GRN Inward & Supplier Receipt Register ────────────
+  function renderRmInwardRegister(filters) {
+    const { from, to, supplierName, rmCode, rmCategory } = filters;
+    const allGrns = (typeof DB !== 'undefined' && DB.GrnRecords && DB.GrnRecords.all) ? DB.GrnRecords.all() : [];
+
+    let grns = allGrns;
+    if (from || to) {
+      grns = filterByDateRange(grns, 'grnDate', from, to);
+    }
+
+    if (supplierName) {
+      const target = supplierName.trim().toLowerCase();
+      grns = grns.filter(g => (g.supplierName || g.supplier || '').toLowerCase().includes(target));
+    }
+
+    const rows = [];
+    let totalReceivedQty = 0;
+    let totalAcceptedQty = 0;
+    let totalRejectedQty = 0;
+    let totalInwardAmount = 0;
+    const uniqueSuppliers = new Set();
+
+    grns.forEach(grn => {
+      const sName = grn.supplierName || grn.supplier || '—';
+      uniqueSuppliers.add(sName);
+      (grn.items || []).forEach(it => {
+        const code = (it.itemCode || '').trim().toUpperCase();
+        if (rmCode) {
+          const q = rmCode.trim().toLowerCase();
+          if (!code.toLowerCase().includes(q) && !(it.name || it.description || '').toLowerCase().includes(q)) return;
+        }
+        if (rmCategory && it.category !== rmCategory) return;
+
+        const uom = it.uom || getRmUom(code);
+        const recQty = parseFloat(it.receivedQty) || 0;
+        const accQty = parseFloat(it.acceptedQty) || recQty;
+        const rejQty = parseFloat(it.rejectedQty) || Math.max(0, recQty - accQty);
+        const rate = parseFloat(it.unitRate || it.rate) || 0;
+        const amt = parseFloat(it.amount) || (recQty * rate);
+
+        totalReceivedQty += recQty;
+        totalAcceptedQty += accQty;
+        totalRejectedQty += rejQty;
+        totalInwardAmount += amt;
+
+        rows.push({
+          date: grn.grnDate || grn.date || (grn.createdAt ? grn.createdAt.slice(0, 10) : '—'),
+          grnNo: grn.grnNo,
+          supplier: sName,
+          poNo: grn.poNo || '—',
+          invoiceNo: grn.invoiceNo || '—',
+          vehicleNo: grn.vehicleNo || '—',
+          rmCode: code,
+          rmName: it.name || it.description || '—',
+          category: it.category || 'Rubber Compound',
+          heatNo: it.heatNo || '—',
+          receivedQty: recQty,
+          acceptedQty: accQty,
+          rejectedQty: rejQty,
+          uom,
+          rate,
+          amount: amt,
+          receivedBy: grn.receivedBy || '—'
+        });
+      });
+    });
+
+    if (!rows.length) {
+      return emptyState('No Raw Material GRN Receipts found matching the selected filters.');
+    }
+
+    // Sort by Date desc
+    rows.sort((a,b) => (b.date).localeCompare(a.date));
+
+    const headers = [
+      'GRN Date', 'GRN No', 'Supplier Name', 'PO No', 'Invoice No', 'Vehicle No',
+      'RM Code', 'Material Name', 'Category', 'Heat / Lot No', 'Received Qty',
+      'Accepted Qty', 'Rejected Qty', 'UOM', 'Unit Rate (₹)', 'Total Amount (₹)', 'Received By'
+    ];
+
+    const dataRows = rows.map(r => [
+      r.date,
+      r.grnNo,
+      r.supplier,
+      r.poNo,
+      r.invoiceNo,
+      r.vehicleNo,
+      r.rmCode,
+      r.rmName,
+      r.category,
+      r.heatNo,
+      `${r.receivedQty.toFixed(2)} ${r.uom}`,
+      `${r.acceptedQty.toFixed(2)} ${r.uom}`,
+      `${r.rejectedQty.toFixed(2)} ${r.uom}`,
+      r.uom,
+      r.rate > 0 ? r.rate.toFixed(2) : '—',
+      r.amount > 0 ? r.amount.toFixed(2) : '0.00',
+      r.receivedBy
+    ]);
+
+    // Totals row for export
+    dataRows.push([
+      'TOTAL',
+      `${rows.length} Items`,
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      totalReceivedQty.toFixed(2),
+      totalAcceptedQty.toFixed(2),
+      totalRejectedQty.toFixed(2),
+      '',
+      '',
+      totalInwardAmount.toFixed(2),
+      ''
+    ]);
+
+    const tbodyRows = rows.map(r => `
+      <tr>
+        <td class="text-xs" style="white-space:nowrap;">${r.date}</td>
+        <td class="font-mono font-bold text-teal" style="white-space:nowrap;">
+          <span class="badge badge-teal" style="cursor:pointer;" title="View in Raw Material GRN" onclick="App.navigate('raw-material')">${r.grnNo}</span>
+        </td>
+        <td class="font-semibold text-blue" style="white-space:nowrap;">${r.supplier}</td>
+        <td class="text-xs font-mono text-muted">${r.poNo}</td>
+        <td class="text-xs font-mono">${r.invoiceNo}</td>
+        <td class="text-xs text-muted font-mono">${r.vehicleNo}</td>
+        <td class="font-mono font-semibold" style="white-space:nowrap;">${r.rmCode}</td>
+        <td style="font-size:12px;">${r.rmName}</td>
+        <td><span class="badge badge-gray text-xs">${r.category}</span></td>
+        <td class="font-mono text-xs">${r.heatNo !== '—' ? `<span class="badge badge-purple">${r.heatNo}</span>` : '—'}</td>
+        <td class="text-right font-mono font-bold" style="font-size:12.5px;">${formatNum(r.receivedQty, 2)} <span class="text-xs">${r.uom}</span></td>
+        <td class="text-right font-mono font-bold text-success">${formatNum(r.acceptedQty, 2)} <span class="text-xs">${r.uom}</span></td>
+        <td class="text-right font-mono ${r.rejectedQty > 0 ? 'font-bold text-danger' : 'text-muted'}">${r.rejectedQty > 0 ? formatNum(r.rejectedQty, 2) + ' <span class="text-xs">' + r.uom + '</span>' : '0.00 ' + r.uom}</td>
+        <td class="text-center font-mono text-xs font-semibold text-teal">${r.uom}</td>
+        <td class="text-right font-mono text-muted">${r.rate > 0 ? '₹' + r.rate.toFixed(2) : '—'}</td>
+        <td class="text-right font-mono text-teal font-semibold">₹${Number(r.amount).toLocaleString('en-IN', {maximumFractionDigits:2})}</td>
+        <td class="text-xs text-muted" style="white-space:nowrap;">${r.receivedBy}</td>
+      </tr>
+    `).join('');
+
+    const html = `
+      <!-- GRN Inward KPI Cards -->
+      <div class="stats-grid mb-6" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px;">
+        <div class="stat-card blue">
+          <div class="stat-label">Inward GRNs / Shipments</div>
+          <div class="stat-value blue">${formatNum(grns.length)}</div>
+          <div class="text-xs text-muted mt-1">${uniqueSuppliers.size} Suppliers</div>
+        </div>
+        <div class="stat-card green">
+          <div class="stat-label">Total Material Received</div>
+          <div class="stat-value green" style="font-size:18px;">${formatNum(totalReceivedQty, 1)}</div>
+          <div class="text-xs text-success font-semibold mt-1">Accepted: ${formatNum(totalAcceptedQty, 1)}</div>
+        </div>
+        <div class="stat-card ${totalRejectedQty > 0 ? 'red' : 'green'}">
+          <div class="stat-label">Quality Rejections</div>
+          <div class="stat-value ${totalRejectedQty > 0 ? 'red' : 'green'}" style="font-size:18px;">${formatNum(totalRejectedQty, 1)}</div>
+          <div class="text-xs text-muted mt-1">${totalReceivedQty > 0 ? ((totalRejectedQty / totalReceivedQty) * 100).toFixed(1) : 0}% Rejection Rate</div>
+        </div>
+        <div class="stat-card teal">
+          <div class="stat-label">Total Inward Purchase Value</div>
+          <div class="stat-value teal" style="font-size:18px;">₹${Number(totalInwardAmount).toLocaleString('en-IN', {maximumFractionDigits:0})}</div>
+          <div class="text-xs text-muted mt-1">Invoiced Expenditure</div>
+        </div>
+      </div>
+
+      <!-- Inward Register Table -->
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>GRN No</th>
+              <th>Supplier Name</th>
+              <th>PO No</th>
+              <th>Invoice No</th>
+              <th>Vehicle No</th>
+              <th>RM Code</th>
+              <th>Material Description</th>
+              <th>Category</th>
+              <th>Heat / Lot No</th>
+              <th class="text-right">Received</th>
+              <th class="text-right">Accepted</th>
+              <th class="text-right">Rejected</th>
+              <th class="text-center">UOM</th>
+              <th class="text-right">Rate (₹)</th>
+              <th class="text-right">Amount (₹)</th>
+              <th>Received By</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${tbodyRows}
+            <tr class="total-row font-bold" style="background:var(--bg-card); border-top:2px solid var(--border-color);">
+              <td colspan="10">TOTAL (${rows.length} Line Items)</td>
+              <td class="text-right font-mono" style="font-size:13px;">${formatNum(totalReceivedQty, 2)}</td>
+              <td class="text-right font-mono text-success" style="font-size:13px;">${formatNum(totalAcceptedQty, 2)}</td>
+              <td class="text-right font-mono ${totalRejectedQty > 0 ? 'text-danger' : ''}">${formatNum(totalRejectedQty, 2)}</td>
+              <td></td>
+              <td></td>
+              <td class="text-right font-mono text-teal">₹${Number(totalInwardAmount).toLocaleString('en-IN', {maximumFractionDigits:2})}</td>
+              <td></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>`;
+
+    return { headers, dataRows, html };
+  }
+
+  
+
+  // ── 5. RM Stock Ledger & Movement Audit Trail (Layman-Friendly Design) ──
+  function renderRmStockLedger(filters) {
+    const { rmCode, from, to, txType } = filters;
+    const allRms = (typeof DB !== 'undefined' && DB.RawMaterials && DB.RawMaterials.all) ? DB.RawMaterials.all() : [];
+    const allGrns = (typeof DB !== 'undefined' && DB.GrnRecords && DB.GrnRecords.all) ? DB.GrnRecords.all() : [];
+    const allDcs = (typeof DB !== 'undefined' && DB.DeliveryChallans && DB.DeliveryChallans.all) ? DB.DeliveryChallans.all() : [];
+    const allBatches = (typeof DB !== 'undefined' && DB.Batches && DB.Batches.all) ? DB.Batches.all() : [];
+    const allMasters = (typeof DB !== 'undefined' && DB.Master && DB.Master.all) ? DB.Master.all() : [];
+    const allSubs = (typeof DB !== 'undefined' && DB.Subcontractors && DB.Subcontractors.all) ? DB.Subcontractors.all() : [];
+    const allVendors = (typeof DB !== 'undefined' && DB.Vendors && DB.Vendors.all) ? DB.Vendors.all() : [];
+
+    const selectedCode = (rmCode || '').trim().toUpperCase();
+
+    // Map Master items
+    const masterMap = new Map();
+    allMasters.forEach(m => {
+      if (m.jmrefNo) masterMap.set(m.jmrefNo.trim().toUpperCase(), m);
+      if (m.partNo) masterMap.set(m.partNo.trim().toUpperCase(), m);
+    });
+
+    // Map Raw Materials
+    const rmMap = new Map();
+    const validRmCodes = new Set();
+    allRms.forEach(r => {
+      const code = (r.code || r.itemCode || '').trim().toUpperCase();
+      if (code) {
+        rmMap.set(code, r);
+        validRmCodes.add(code);
+      }
+    });
+
+    // Map Subcontractor names
+    const subMap = new Map();
+    allSubs.forEach(s => { if (s.id) subMap.set(s.id, s.name || s.id); });
+    allVendors.forEach(v => { if (v.id) subMap.set(v.id, v.name || v.id); });
+
+    // Map RM Delivery Challans strictly
+    const rmDcMap = new Map();
+    allDcs.forEach(dc => {
+      if (dc.dcNo && (dc.type === 'rm-processing' || (dc.rmItems && dc.rmItems.length > 0))) {
+        rmDcMap.set(dc.dcNo.trim().toUpperCase(), dc);
+      }
+    });
+
+    // 1. Compile chronological transaction events
+    const events = [];
+
+    // A. Inwards from Supplier GRNs
+    allGrns.forEach(grn => {
+      (grn.items || []).forEach(it => {
+        const code = (it.itemCode || '').trim().toUpperCase();
+        if (!code || (validRmCodes.size > 0 && !validRmCodes.has(code))) return;
+        if (selectedCode && code !== selectedCode) return;
+
+        const rmItem = rmMap.get(code);
+        const uom = it.uom || rmItem?.uom || getRmUom(code);
+        const qty = parseFloat(it.receivedQty || it.acceptedQty) || 0;
+        if (qty <= 0) return;
+
+        const supplierName = grn.supplierName || grn.supplier || 'Supplier';
+        events.push({
+          date: grn.grnDate || grn.date || (grn.createdAt ? grn.createdAt.slice(0, 10) : '2026-01-01'),
+          timestamp: grn.createdAt || grn.grnDate || '2026-01-01T00:00:00',
+          type: 'inward',
+          typeLabel: '📥 Received from Supplier',
+          badgeClass: 'badge-green',
+          refNo: grn.grnNo,
+          refType: 'GRN',
+          party: supplierName,
+          rmCode: code,
+          rmName: it.name || it.description || rmItem?.name || code,
+          uom,
+          inwardQty: qty,
+          outwardQty: 0,
+          consumedQty: 0,
+          narrative: `Received ${formatNum(qty)} ${uom} from supplier ${supplierName} via ${grn.grnNo}${grn.invoiceNo ? ` (Invoice: ${grn.invoiceNo})` : ''}`,
+          notes: `Inv: ${grn.invoiceNo || '—'} | PO: ${grn.poNo || '—'}`
+        });
+      });
+    });
+
+    // B. Outwards to Subcontractors on RM Delivery Challans
+    allDcs.forEach(dc => {
+      if (dc.type !== 'rm-processing' && (!dc.rmItems || dc.rmItems.length === 0)) return;
+      (dc.rmItems || []).forEach(it => {
+        const code = (it.itemCode || '').trim().toUpperCase();
+        if (!code || (validRmCodes.size > 0 && !validRmCodes.has(code))) return;
+        if (selectedCode && code !== selectedCode) return;
+
+        const rmItem = rmMap.get(code);
+        const uom = it.uom || rmItem?.uom || getRmUom(code);
+        const qty = parseFloat(it.qty) || 0;
+        if (qty <= 0) return;
+
+        const subName = dc.vendorName || (dc.vendorId ? subMap.get(dc.vendorId) : '') || 'Subcontractor';
+        events.push({
+          date: dc.date || (dc.createdAt ? dc.createdAt.slice(0, 10) : '2026-01-01'),
+          timestamp: dc.createdAt || dc.date || '2026-01-01T00:00:00',
+          type: 'outward',
+          typeLabel: '🚚 Sent to Subcontractor',
+          badgeClass: 'badge-amber',
+          refNo: dc.dcNo,
+          refType: 'DC',
+          party: subName,
+          rmCode: code,
+          rmName: it.name || rmItem?.name || code,
+          uom,
+          inwardQty: 0,
+          outwardQty: qty,
+          consumedQty: 0,
+          narrative: `Dispatched ${formatNum(qty)} ${uom} to ${subName} via ${dc.dcNo}${dc.purpose ? ` for ${dc.purpose}` : ''}`,
+          notes: `Purpose: ${dc.purpose || 'RM Processing'} | Veh: ${dc.vehicleNo || '—'}`
+        });
+      });
+    });
+
+    // C. Moulding Consumptions in Batches
+    allBatches.forEach(b => {
+      if (!b || !b.batchNo) return;
+      const bNoUpper = (b.batchNo || '').trim().toUpperCase();
+      if (bNoUpper.includes('-REC-') || bNoUpper.includes('REC')) return false;
+
+      const bDcNo = (b.sourceRmDcNo || '').trim().toUpperCase();
+      const linkedDc = bDcNo ? rmDcMap.get(bDcNo) : null;
+      let code = (b.sourceRmCode || '').trim().toUpperCase();
+      if (!code && linkedDc && linkedDc.rmItems && linkedDc.rmItems[0]) {
+        code = (linkedDc.rmItems[0].itemCode || '').trim().toUpperCase();
+      }
+      if (!code || (validRmCodes.size > 0 && !validRmCodes.has(code))) return;
+      if (selectedCode && code !== selectedCode) return;
+
+      const rmItem = rmMap.get(code);
+      const masterItem = masterMap.get((b.jmrefNo || '').trim().toUpperCase()) || masterMap.get((b.partNo || '').trim().toUpperCase());
+      const uom = rmItem?.uom || (linkedDc && linkedDc.rmItems && linkedDc.rmItems[0] ? linkedDc.rmItems[0].uom : getRmUom(code));
+      const qty = getBatchRmConsumedQty(b, rmItem, masterItem, linkedDc?.rmItems?.[0]);
+      if (qty <= 0) return;
+
+      const subParty = b.subcontractor || (b.subcontractorId ? subMap.get(b.subcontractorId) : '') || (linkedDc ? linkedDc.vendorName : '') || (b.productionType === 'sub' ? 'Subcontractor' : 'In-House Moulding');
+
+      events.push({
+        date: b.productionDate || (b.createdAt ? b.createdAt.slice(0, 10) : '2026-01-01'),
+        timestamp: b.createdAt || b.productionDate || '2026-01-01T00:00:00',
+        type: 'consumed',
+        typeLabel: '🏭 Used in Production',
+        badgeClass: 'badge-blue',
+        refNo: b.batchNo,
+        refType: 'Batch',
+        party: subParty,
+        rmCode: code,
+        rmName: rmItem?.name || code,
+        uom,
+        inwardQty: 0,
+        outwardQty: 0,
+        consumedQty: qty,
+        sourceDc: bDcNo,
+        narrative: `Moulded ${formatNum(qty)} ${uom} into Batch ${b.batchNo} (${formatNum(b.initialQty || b.qty)} pcs)${bDcNo ? ` against DC ${bDcNo}` : ''}`,
+        notes: `JMREF: ${b.jmrefNo || '—'}${bDcNo ? ` | Source DC: ${bDcNo}` : ''}`
+      });
+    });
+
+    if (!events.length) {
+      return emptyState('No movement transactions found for the selected Raw Material.');
+    }
+
+    // Sort chronologically ascending
+    events.sort((a,b) => (a.date + a.timestamp).localeCompare(b.date + b.timestamp));
+
+    // Calculate Running Balances
+    let runningWarehouse = 0;
+    let runningUnderProcess = 0;
+
+    let openingWarehouse = 0;
+    let openingUnderProcess = 0;
+
+    const filteredEvents = [];
+    let periodInward = 0;
+    let periodOutward = 0;
+    let periodConsumed = 0;
+
+    events.forEach(ev => {
+      const isBeforeFrom = from && ev.date < from;
+      const isAfterTo = to && ev.date > to;
+
+      if (ev.type === 'inward') {
+        runningWarehouse += ev.inwardQty;
+      } else if (ev.type === 'outward') {
+        runningWarehouse = Math.max(0, runningWarehouse - ev.outwardQty);
+        runningUnderProcess += ev.outwardQty;
+      } else if (ev.type === 'consumed') {
+        if (runningUnderProcess >= ev.consumedQty) {
+          runningUnderProcess = Math.max(0, runningUnderProcess - ev.consumedQty);
+        } else {
+          runningWarehouse = Math.max(0, runningWarehouse - ev.consumedQty);
+        }
+      }
+
+      if (isBeforeFrom) {
+        openingWarehouse = runningWarehouse;
+        openingUnderProcess = runningUnderProcess;
+        return;
+      }
+
+      if (isAfterTo) return;
+
+      if (txType && ev.type !== txType) return;
+
+      periodInward += ev.inwardQty;
+      periodOutward += ev.outwardQty;
+      periodConsumed += ev.consumedQty;
+
+      filteredEvents.push({
+        ...ev,
+        warehouseBal: runningWarehouse,
+        underProcessBal: runningUnderProcess,
+        totalStock: runningWarehouse + runningUnderProcess
+      });
+    });
+
+    if (!filteredEvents.length) {
+      return emptyState('No transactions found within the selected date range.');
+    }
+
+    const primaryUom = filteredEvents[0]?.uom || 'kg';
+
+    const headers = [
+      'Date', 'What Happened (Movement)', 'Document Ref No', 'Party / Entity', 'RM Code',
+      'Material Name', 'Inward Received (+)', 'Dispatched to Sub (-)', 'Consumed in Moulding (-)',
+      'Balance in Factory', 'Balance with Subcontractor', 'Total Stock', 'UOM', 'Activity Narrative'
+    ];
+
+    const dataRows = filteredEvents.map(r => [
+      r.date,
+      r.typeLabel,
+      r.refNo,
+      r.party,
+      r.rmCode,
+      r.rmName,
+      r.inwardQty > 0 ? `${r.inwardQty.toFixed(2)} ${r.uom}` : '—',
+      r.outwardQty > 0 ? `${r.outwardQty.toFixed(2)} ${r.uom}` : '—',
+      r.consumedQty > 0 ? `${r.consumedQty.toFixed(2)} ${r.uom}` : '—',
+      `${r.warehouseBal.toFixed(2)} ${r.uom}`,
+      `${r.underProcessBal.toFixed(2)} ${r.uom}`,
+      `${r.totalStock.toFixed(2)} ${r.uom}`,
+      r.uom,
+      r.narrative
+    ]);
+
+    // Build Layman Table Body Rows
+    const tbodyRows = filteredEvents.map((r, idx) => {
+      let ledgerBatches = [];
+      if (r.type === 'outward' && r.refNo) {
+        ledgerBatches = allBatches.filter(b => (b.sourceRmDcNo || '').trim().toUpperCase() === (r.refNo || '').trim().toUpperCase() && (!r.rmCode || (b.sourceRmCode || '').trim().toUpperCase() === r.rmCode.trim().toUpperCase()));
+      } else if (r.type === 'consumed' && r.refNo) {
+        ledgerBatches = allBatches.filter(b => b.batchNo === r.refNo);
+      }
+
+      return `
+      <tr style="border-bottom: 1px solid var(--border-color);">
+        <td class="text-xs font-mono" style="white-space:nowrap; padding: 10px 12px;">${r.date}</td>
+        <td style="white-space:nowrap; padding: 10px 12px;">
+          <span class="badge ${r.badgeClass} font-bold text-xs" style="padding: 3px 8px; display:inline-flex; align-items:center; gap:4px;">
+            ${r.typeLabel}
+          </span>
+        </td>
+        <td class="font-mono font-bold text-teal" style="white-space:nowrap; padding: 10px 12px;">
+          ${r.refType === 'Batch' ? `
+            <span style="cursor:pointer; text-decoration:underline;" onclick="event.stopPropagation(); App.showBatchGenealogy('${r.refNo}')" title="Click to view Batch Genealogy">
+              ${r.refNo}
+            </span>
+          ` : r.refNo}
+          ${ledgerBatches.length > 0 && r.type === 'outward' ? `
+            <button type="button" class="btn btn-xs badge badge-purple" style="cursor:pointer; margin-left:4px; font-size:10px; padding:1px 5px; border:none; vertical-align:middle;"
+              onclick="ReportsModule.openRmBatchesModal('${r.rmCode}', '', '${r.refNo}', 'all')" title="View ${ledgerBatches.length} Batches created & WIP mapping">
+              📦 ${ledgerBatches.length} Batches
+            </button>
+          ` : ''}
+        </td>
+        <td class="font-semibold text-blue" style="white-space:nowrap; padding: 10px 12px;">${r.party}</td>
+        <td class="font-mono text-xs font-bold" style="white-space:nowrap; padding: 10px 12px;">${r.rmCode}</td>
+        <td class="text-right font-mono font-bold ${r.inwardQty > 0 ? 'text-success' : 'text-muted'}" style="padding: 10px 12px;">
+          ${r.inwardQty > 0 ? `+${formatNum(r.inwardQty, 2)} <span class="text-xs font-normal">${r.uom}</span>` : '—'}
+        </td>
+        <td class="text-right font-mono font-bold ${r.outwardQty > 0 ? 'text-amber' : 'text-muted'}" style="padding: 10px 12px;">
+          ${r.outwardQty > 0 ? `-${formatNum(r.outwardQty, 2)} <span class="text-xs font-normal">${r.uom}</span>` : '—'}
+        </td>
+        <td class="text-right font-mono font-bold ${r.consumedQty > 0 ? 'text-blue' : 'text-muted'}" style="padding: 10px 12px;">
+          ${r.consumedQty > 0 ? `-${formatNum(r.consumedQty, 2)} <span class="text-xs font-normal">${r.uom}</span>` : '—'}
+        </td>
+        <td class="text-right font-mono font-bold text-success" style="font-size:13px; padding: 10px 12px; background: rgba(16, 185, 129, 0.04);">
+          ${formatNum(r.warehouseBal, 2)} <span class="text-xs font-normal">${r.uom}</span>
+        </td>
+        <td class="text-right font-mono font-bold text-amber" style="font-size:13px; padding: 10px 12px; background: rgba(245, 158, 11, 0.04);">
+          ${formatNum(r.underProcessBal, 2)} <span class="text-xs font-normal">${r.uom}</span>
+        </td>
+        <td style="font-size:12px; color:var(--text-color); padding: 10px 12px; max-width:280px;" title="${escapeHtmlText(r.narrative)}">
+          ${escapeHtmlText(r.narrative)}
+        </td>
+      </tr>
+      `;
+    }).join('');
+
+    const html = `
+      <!-- Layman Stock Flow Formula Banner -->
+      <div class="card mb-6" style="background:var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 18px 20px;">
+        <div class="flex items-center justify-between mb-4" style="border-bottom: 1px solid var(--border-color); padding-bottom: 12px;">
+          <div>
+            <h4 class="font-bold text-sm" style="color:var(--accent-teal); margin:0; display:flex; align-items:center; gap:8px;">
+              <span>⚖️</span> <span>Raw Material Stock Balance Flow</span>
+            </h4>
+            <p class="text-xs text-muted" style="margin:2px 0 0 0;">Simple arithmetic showing how Factory Warehouse Stock and Subcontractor Holdings move step-by-step</p>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="badge badge-purple font-mono">${selectedCode ? `Item: ${selectedCode}` : 'All Raw Materials'}</span>
+            <span class="badge badge-blue font-mono">${filteredEvents.length} Movement Records</span>
+          </div>
+        </div>
+
+        <!-- 5-Step Visual Arithmetic Cards -->
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; align-items: stretch;">
+          <div style="background: rgba(147, 51, 234, 0.07); border: 1px solid rgba(147, 51, 234, 0.25); border-radius: 8px; padding: 12px 14px;">
+            <div class="text-xs text-muted font-bold uppercase" style="letter-spacing: 0.5px;">1. Opening Stock</div>
+            <div class="font-mono font-bold text-purple" style="font-size: 19px; margin: 5px 0;">${formatNum(openingWarehouse, 1)} <span class="text-xs font-normal">${primaryUom}</span></div>
+            <div class="text-xs text-muted">Stock at start of period</div>
+          </div>
+
+          <div style="background: rgba(16, 185, 129, 0.07); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: 8px; padding: 12px 14px;">
+            <div class="text-xs text-success font-bold uppercase" style="letter-spacing: 0.5px;">2. (+) Received</div>
+            <div class="font-mono font-bold text-success" style="font-size: 19px; margin: 5px 0;">+${formatNum(periodInward, 1)} <span class="text-xs font-normal">${primaryUom}</span></div>
+            <div class="text-xs text-success font-semibold">From Suppliers (GRN)</div>
+          </div>
+
+          <div style="background: rgba(245, 158, 11, 0.07); border: 1px solid rgba(245, 158, 11, 0.25); border-radius: 8px; padding: 12px 14px;">
+            <div class="text-xs text-amber font-bold uppercase" style="letter-spacing: 0.5px;">3. (-) Dispatched</div>
+            <div class="font-mono font-bold text-amber" style="font-size: 19px; margin: 5px 0;">-${formatNum(periodOutward, 1)} <span class="text-xs font-normal">${primaryUom}</span></div>
+            <div class="text-xs text-amber font-semibold">Sent to Subcontractors (DC)</div>
+          </div>
+
+          <div style="background: rgba(59, 130, 246, 0.07); border: 1px solid rgba(59, 130, 246, 0.25); border-radius: 8px; padding: 12px 14px;">
+            <div class="text-xs text-blue font-bold uppercase" style="letter-spacing: 0.5px;">4. (-) Used in Batches</div>
+            <div class="font-mono font-bold text-blue" style="font-size: 19px; margin: 5px 0;">-${formatNum(periodConsumed, 1)} <span class="text-xs font-normal">${primaryUom}</span></div>
+            <div class="text-xs text-blue font-semibold">Moulded in Production</div>
+          </div>
+
+          <div style="background: rgba(13, 148, 136, 0.12); border: 2px solid var(--accent-teal); border-radius: 8px; padding: 12px 14px;">
+            <div class="text-xs font-bold uppercase" style="color:var(--accent-teal); letter-spacing: 0.5px;">5. (=) Factory Balance</div>
+            <div class="font-mono font-bold text-teal" style="font-size: 21px; margin: 5px 0;">${formatNum(runningWarehouse, 1)} <span class="text-xs font-normal">${primaryUom}</span></div>
+            <div class="text-xs text-success font-semibold">Physical in Warehouse</div>
+          </div>
+        </div>
+
+        <!-- Bottom Summary Indicators -->
+        <div class="flex flex-wrap items-center justify-between gap-3 mt-4 pt-3" style="border-top: 1px dashed var(--border-color); font-size: 12.5px;">
+          <div class="flex items-center gap-2">
+            <span>🏢 <strong>Currently with Subcontractors:</strong></span>
+            <span class="badge badge-amber font-mono font-bold" style="font-size: 12.5px;">${formatNum(runningUnderProcess, 1)} ${primaryUom}</span>
+            <span class="text-xs text-muted">(Dispatched on Delivery Challans awaiting production conversion)</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span>🌐 <strong>Total Company Stock:</strong></span>
+            <span class="badge badge-teal font-mono font-bold" style="font-size: 13px;">${formatNum(runningWarehouse + runningUnderProcess, 1)} ${primaryUom}</span>
+            <span class="text-xs text-muted">(Factory Warehouse + Subcontractor floor)</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Chronological Movement Ledger Table -->
+      <div class="card" style="border: 1px solid var(--border-color); background: var(--bg-card); border-radius: 8px;">
+        <div class="card-header flex items-center justify-between" style="padding: 12px 16px; border-bottom: 1px solid var(--border-color);">
+          <h4 class="font-bold text-sm" style="color:var(--accent-blue);">📋 Chronological Stock Movement Ledger</h4>
+          <span class="text-xs text-muted font-mono">${filteredEvents.length} Transactions</span>
+        </div>
+        <div class="table-wrap" style="padding: 0;">
+          <table class="data-table" style="margin: 0;">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Activity / Movement</th>
+                <th>Reference No</th>
+                <th>Partner / Subcontractor / Supplier</th>
+                <th>RM Code</th>
+                <th class="text-right">Inward (+)</th>
+                <th class="text-right">Outward (-)</th>
+                <th class="text-right">Consumed (-)</th>
+                <th class="text-right" style="background: rgba(16, 185, 129, 0.04);">Factory Balance</th>
+                <th class="text-right" style="background: rgba(245, 158, 11, 0.04);">At Subcontractor</th>
+                <th>Activity Narrative</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${tbodyRows}
+              <tr class="total-row font-bold" style="background:var(--bg-card); border-top:2px solid var(--border-color);">
+                <td colspan="5">PERIOD TOTALS</td>
+                <td class="text-right font-mono text-success">+${formatNum(periodInward, 2)}</td>
+                <td class="text-right font-mono text-amber">-${formatNum(periodOutward, 2)}</td>
+                <td class="text-right font-mono text-blue">-${formatNum(periodConsumed, 2)}</td>
+                <td class="text-right font-mono text-success" style="font-size:13px;">${formatNum(runningWarehouse, 2)}</td>
+                <td class="text-right font-mono text-amber" style="font-size:13px;">${formatNum(runningUnderProcess, 2)}</td>
+                <td></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+
+    return { headers, dataRows, html };
+  }
+
+  // ── RM Dispatched DC Batches & WIP Mapping Modal Subsystem ────
+  let currentRmBatchesModalData = null;
+  let currentRmBatchesStageTab = 'all';
+  let currentRmBatchesModalSearch = '';
+
+  function openRmBatchesModal(rmCode = '', subName = '', dcNo = '', initialFilter = 'all') {
+    currentRmBatchesStageTab = initialFilter || 'all';
+    currentRmBatchesModalSearch = '';
+
+    const allBatches = (typeof DB !== 'undefined' && DB.Batches && DB.Batches.all) ? DB.Batches.all() : [];
+    const allDcs = (typeof DB !== 'undefined' && DB.DeliveryChallans && DB.DeliveryChallans.all) ? DB.DeliveryChallans.all() : [];
+    const allRms = (typeof DB !== 'undefined' && DB.RawMaterials && DB.RawMaterials.all) ? DB.RawMaterials.all() : [];
+    const master = (typeof DB !== 'undefined' && DB.Master && DB.Master.all) ? DB.Master.all() : [];
+    const allRejections = (typeof DB !== 'undefined' && DB.RejectionTracker && DB.RejectionTracker.all) ? DB.RejectionTracker.all() : [];
+    const allSubs = (typeof DB !== 'undefined' && DB.Subcontractors && DB.Subcontractors.all) ? DB.Subcontractors.all() : [];
+    const allVendors = (typeof DB !== 'undefined' && DB.Vendors && DB.Vendors.all) ? DB.Vendors.all() : [];
+
+    const cleanRm = (rmCode || '').trim().toUpperCase();
+    const cleanSub = (subName || '').trim().toLowerCase();
+    const cleanDc = (dcNo || '').trim().toUpperCase();
+
+    // Map subcontractor/vendor names
+    const subMap = new Map();
+    allSubs.forEach(s => { if (s.id) subMap.set(s.id, s.name || s.id); });
+    allVendors.forEach(v => { if (v.id) subMap.set(v.id, v.name || v.id); });
+
+    // Map rejections by batchId and batchNo
+    const rejectionByBatchId = new Map();
+    const rejectionByBatchNo = new Map();
+    allRejections.forEach(r => {
+      const q = parseFloat(r.qty) || 0;
+      if (r.batchId) rejectionByBatchId.set(r.batchId, (rejectionByBatchId.get(r.batchId) || 0) + q);
+      if (r.batchNo) {
+        const bNo = String(r.batchNo).trim().toUpperCase();
+        rejectionByBatchNo.set(bNo, (rejectionByBatchNo.get(bNo) || 0) + q);
+      }
+    });
+
+    // Map RM Delivery Challans ONLY (do not include finished good trimming DCs)
+    const dcMap = new Map();
+    allDcs.forEach(d => {
+      if (d.dcNo && (d.type === 'rm-processing' || (d.rmItems && d.rmItems.length > 0))) {
+        dcMap.set(d.dcNo.trim().toUpperCase(), d);
+      }
+    });
+
+    // Map RM UOMs and names
+    const rmMap = new Map();
+    const validRmCodes = new Set();
+    allRms.forEach(r => {
+      const c = (r.code || r.itemCode || '').trim().toUpperCase();
+      if (c) {
+        rmMap.set(c, r);
+        validRmCodes.add(c);
+      }
+    });
+
+    // Map Part descriptions
+    const partMap = new Map();
+    master.forEach(p => {
+      if (p.jmrefNo) partMap.set(p.jmrefNo.trim().toUpperCase(), p);
+      if (p.partNo) partMap.set(p.partNo.trim().toUpperCase(), p);
+    });
+
+    // Filter candidate batches
+    const matchedBatches = allBatches.filter(b => {
+      if (!b || !b.batchNo) return false;
+      const bNoUpper = (b.batchNo || '').trim().toUpperCase();
+      if (bNoUpper.includes('-REC-') || bNoUpper.includes('REC')) return false;
+      if (b.status === 'missing') return false;
+
+      // Strictly require batch to be related to RM trace (created via RM DC, explicit RM Code, or recorded RM consumption)
+      const bDcNo = (b.sourceRmDcNo || '').trim().toUpperCase();
+      const hasRmTrace = Boolean(bDcNo || (b.sourceRmCode && b.sourceRmCode.trim()) || (parseFloat(b.rmConsumedQty) > 0));
+      if (!hasRmTrace) return false;
+
+      const partObj = partMap.get((b.jmrefNo || '').toUpperCase()) || partMap.get((b.partNo || '').toUpperCase()) || {};
+      const linkedDc = bDcNo ? dcMap.get(bDcNo) : null;
+
+      // Determine resolved RM code strictly matching created RM masters
+      let bRm = (b.sourceRmCode || '').trim().toUpperCase();
+      if ((!bRm || !validRmCodes.has(bRm)) && linkedDc && linkedDc.rmItems && linkedDc.rmItems.length > 0) {
+        const m = linkedDc.rmItems.find(it => validRmCodes.has((it.itemCode || '').trim().toUpperCase()));
+        if (m) bRm = (m.itemCode || '').trim().toUpperCase();
+      }
+      if ((!bRm || !validRmCodes.has(bRm)) && partObj.compoundCode) {
+        const cCode = partObj.compoundCode.trim().toUpperCase();
+        if (validRmCodes.has(cCode)) bRm = cCode;
+      }
+
+      // Strictly restrict modal to batches linked to valid RM Masters or RM Delivery Challans
+      if (!validRmCodes.has(bRm) && !bDcNo) return false;
+
+      // DC Filter
+      if (cleanDc && bDcNo !== cleanDc) return false;
+
+      // RM Code Filter
+      if (cleanRm) {
+        let rmMatched = (bRm === cleanRm);
+        if (!rmMatched && linkedDc) {
+          rmMatched = (linkedDc.rmItems || []).some(it => (it.itemCode || '').trim().toUpperCase() === cleanRm);
+        }
+        if (!rmMatched) return false;
+      }
+
+      // Subcontractor Filter (strictly prevent empty string false matching)
+      if (cleanSub) {
+        const dcVendorName = (linkedDc ? (linkedDc.vendorName || '') : '').trim().toLowerCase();
+        const dcVendorId = (linkedDc ? (linkedDc.vendorId || '') : '').trim().toLowerCase();
+        const bSubName = (b.subcontractor || (b.subcontractorId ? subMap.get(b.subcontractorId) : '') || '').trim().toLowerCase();
+        const bSubId = String(b.subcontractorId || b.vendorId || '').trim().toLowerCase();
+
+        // If batch has a source RM DC, the DC vendor must match cleanSub
+        if (linkedDc) {
+          const matchDc = (dcVendorName && (dcVendorName.includes(cleanSub) || cleanSub.includes(dcVendorName))) ||
+                          (dcVendorId && (dcVendorId === cleanSub));
+          if (!matchDc) return false;
+        } else {
+          const matchSub = (bSubName && (bSubName.includes(cleanSub) || cleanSub.includes(bSubName))) ||
+                           (bSubId && (bSubId === cleanSub));
+          if (!matchSub) return false;
+        }
+      }
+
+      return true;
+    });
+
+    // Enrich batch items with full metadata
+    const enrichedBatches = matchedBatches.map(b => {
+      const bNoUpper = (b.batchNo || '').trim().toUpperCase();
+      const partObj = partMap.get((b.jmrefNo || '').toUpperCase()) || partMap.get((b.partNo || '').toUpperCase()) || {};
+      const bDcNo = (b.sourceRmDcNo || '').trim().toUpperCase();
+      const dcObj = bDcNo ? (dcMap.get(bDcNo) || {}) : {};
+
+      const bRm = (b.sourceRmCode || (dcObj.rmItems && dcObj.rmItems[0] ? dcObj.rmItems[0].itemCode : '') || partObj.compoundCode || '').trim().toUpperCase();
+      const rmItem = rmMap.get(bRm) || {};
+      const uom = rmItem.uom || rmItem.unit || (dcObj.rmItems && dcObj.rmItems[0] ? dcObj.rmItems[0].uom : getRmUom(bRm));
+
+      const batchQty = parseFloat(b.initialQty || b.qty) || 0;
+      const rmConsumedQty = getBatchRmConsumedQty(b, rmItem, partObj, dcObj.rmItems ? dcObj.rmItems[0] : null);
+
+      // Calculate Rejected Pieces
+      let rejectedPcs = rejectionByBatchId.get(b.id) || rejectionByBatchNo.get(bNoUpper) || 0;
+      if (!rejectedPcs && (b.status === 'rejected' || b.currentStage === 'rejected')) {
+        rejectedPcs = batchQty;
+      }
+
+      const currentStage = b.currentStage || 'production';
+      const isMissing = (b.status === 'missing');
+      const isCompleted = (b.status === 'completed' || currentStage === 'store');
+      const isWip = (!isCompleted && !isMissing && b.status === 'active');
+
+      return {
+        id: b.id,
+        batchNo: b.batchNo || '—',
+        internalBatchNo: b.internalBatchNo || '',
+        jmrefNo: b.jmrefNo || partObj.jmrefNo || '—',
+        partNo: b.partNo || partObj.partNo || '—',
+        description: b.description || partObj.description || '—',
+        productionDate: b.productionDate || (b.createdAt ? b.createdAt.slice(0, 10) : '—'),
+        sourceRmDcNo: bDcNo || '—',
+        dcDate: dcObj.date || (dcObj.createdAt ? dcObj.createdAt.slice(0, 10) : '—'),
+        sourceRmCode: bRm || '—',
+        rmName: rmItem.name || (partObj.description ? `${partObj.description} Material` : (bRm !== '—' ? `${bRm} Material` : '—')),
+        rmConsumedQty,
+        uom: uom,
+        qty: batchQty,
+        rejectedPcs,
+        subcontractor: b.subcontractor || (b.subcontractorId ? subMap.get(b.subcontractorId) : '') || dcObj.vendorName || (b.vendorId ? subMap.get(b.vendorId) : '') || (b.productionType === 'sub' ? 'Subcontractor' : 'In-House Unit'),
+        currentStage: currentStage,
+        stageLabel: STAGE_LABELS[currentStage] || currentStage,
+        status: b.status || 'active',
+        isWip: isWip,
+        isCompleted: isCompleted,
+        isMissing: isMissing,
+        notes: b.notes || ''
+      };
+    });
+
+    // Sort by production date desc, then batchNo desc
+    enrichedBatches.sort((a,b) => (b.productionDate).localeCompare(a.productionDate) || (b.batchNo).localeCompare(a.batchNo));
+
+    currentRmBatchesModalData = {
+      rmCode: cleanRm,
+      subName: subName,
+      dcNo: cleanDc,
+      batches: enrichedBatches
+    };
+
+    // Calculate aggregated metrics
+    const totalBatches = enrichedBatches.length;
+    const wipCount = enrichedBatches.filter(b => b.isWip && b.status !== 'rejected').length;
+    const completedCount = enrichedBatches.filter(b => b.isCompleted).length;
+    const totalQtyPcs = enrichedBatches.reduce((acc, b) => acc + b.qty, 0);
+    const totalRejectedPcs = enrichedBatches.reduce((acc, b) => acc + (b.rejectedPcs || 0), 0);
+    const totalConsumed = enrichedBatches.reduce((acc, b) => acc + b.rmConsumedQty, 0);
+    const primaryUom = enrichedBatches.length > 0 ? enrichedBatches[0].uom : 'kg';
+
+    // Remove existing modal if any
+    const existing = document.getElementById('rm-batches-wip-modal');
+    if (existing) existing.remove();
+
+    // Context label for header
+    let contextTitle = 'Dispatched DC Batches & WIP Inventory Mapping';
+    let contextSubtitleParts = [];
+    if (cleanDc) contextSubtitleParts.push(`Delivery Challan: <strong class="text-teal font-mono">${cleanDc}</strong>`);
+    if (subName) contextSubtitleParts.push(`Subcontractor: <strong class="text-blue">${escapeHtmlText(subName)}</strong>`);
+    if (cleanRm) contextSubtitleParts.push(`Raw Material: <strong class="text-purple font-mono">${cleanRm}</strong>`);
+    const contextSubtitle = contextSubtitleParts.length > 0 ? contextSubtitleParts.join(' &bull; ') : 'All Batches Produced from Subcontractor Material Dispatches mapped to Factory WIP Pipeline';
+
+    const modal = document.createElement('div');
+    modal.className = 'modal-overlay';
+    modal.id = 'rm-batches-wip-modal';
+    modal.style.zIndex = '2100';
+    modal.onclick = function(e) { if (e.target === modal) closeRmBatchesModal(); };
+
+    modal.innerHTML = `
+      <div class="modal modal-lg" style="max-width: 1220px; width: 95%; max-height: 92vh; border-radius: 16px; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.35);">
+        <!-- Modal Header -->
+        <div class="modal-header flex items-center justify-between" style="padding: 16px 20px; border-bottom: 1px solid var(--border-color); background: var(--bg-card); flex-shrink: 0;">
+          <div>
+            <h3 style="margin:0; font-size: 17px; font-weight: 700; display:flex; align-items:center; gap:8px;">
+              <span>🏭</span>
+              <span>${contextTitle}</span>
+              <span class="badge badge-blue font-mono" style="font-size:12px;">${totalBatches} Batches</span>
+            </h3>
+            <p class="text-xs text-muted mt-1" style="margin:0;">${contextSubtitle}</p>
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="ReportsModule.closeRmBatchesModal()" style="border-radius:50%; width:32px; height:32px; padding:0; display:flex; align-items:center; justify-content:center; font-size:16px;">✕</button>
+        </div>
+
+        <!-- Modal Body Container -->
+        <div style="padding: 16px 20px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 14px;">
+          <!-- KPI Summary Strip -->
+          <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin: 0;">
+            <div class="stat-card blue" style="padding: 12px 14px;">
+              <div class="stat-label">Batches Produced</div>
+              <div class="stat-value blue" style="font-size: 20px;">${formatNum(totalBatches)}</div>
+              <div class="text-xs text-muted mt-1">From Dispatched DCs</div>
+            </div>
+            <div class="stat-card purple" style="padding: 12px 14px;">
+              <div class="stat-label">Active in WIP Pipeline</div>
+              <div class="stat-value purple" style="font-size: 20px;">${formatNum(wipCount)}</div>
+              <div class="text-xs font-semibold mt-1" style="color:var(--accent-purple);">⚡ In Production & Finishing</div>
+            </div>
+            <div class="stat-card green" style="padding: 12px 14px;">
+              <div class="stat-label">Finished Goods / Store</div>
+              <div class="stat-value green" style="font-size: 20px;">${formatNum(completedCount)}</div>
+              <div class="text-xs text-success font-semibold mt-1">✅ Ready for Dispatch</div>
+            </div>
+            <div class="stat-card red" style="padding: 12px 14px;">
+              <div class="stat-label">Rejected Pieces</div>
+              <div class="stat-value red" style="font-size: 20px;">${formatNum(totalRejectedPcs)}</div>
+              <div class="text-xs text-danger font-semibold mt-1">${totalQtyPcs > 0 ? ((totalRejectedPcs / totalQtyPcs) * 100).toFixed(1) + '% Rejection Rate' : '0%'}</div>
+            </div>
+            <div class="stat-card teal" style="padding: 12px 14px;">
+              <div class="stat-label">Total Molded Parts</div>
+              <div class="stat-value teal" style="font-size: 20px;">${formatNum(totalQtyPcs)}</div>
+              <div class="text-xs text-muted mt-1">Output (pcs)</div>
+            </div>
+            <div class="stat-card amber" style="padding: 12px 14px;">
+              <div class="stat-label">RM Consumed</div>
+              <div class="stat-value amber" style="font-size: 20px;">${formatNum(totalConsumed, 2)} <span style="font-size:13px;">${primaryUom}</span></div>
+              <div class="text-xs font-semibold mt-1" style="color:var(--accent-amber);">Deducted from DC Balance</div>
+            </div>
+          </div>
+
+          <!-- Controls Bar: Filter Pills & Search -->
+          <div class="flex flex-wrap items-center justify-between gap-3 p-2 rounded-lg" style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px;">
+            <!-- Stage Tabs / Filter Pills -->
+            <div class="flex flex-wrap gap-1" id="rm-modal-stage-pills">
+              ${renderRmStageFilterPills(enrichedBatches, currentRmBatchesStageTab)}
+            </div>
+
+            <!-- Search & Actions -->
+            <div class="flex items-center gap-2">
+              <div class="relative" style="min-width: 240px;">
+                <input type="text" id="rm-batches-modal-search" class="form-input" placeholder="🔍 Search Batch, JMREF, DC, Sub..." 
+                  style="padding: 6px 12px; font-size: 12.5px; border-radius: 6px;"
+                  value="${escapeHtmlText(currentRmBatchesModalSearch)}"
+                  oninput="ReportsModule.filterRmBatchesModal(this.value)">
+              </div>
+              <button class="btn btn-secondary btn-sm" onclick="ReportsModule.exportRmBatchesModalCSV()" title="Export filtered batches to CSV" style="white-space:nowrap; display:flex; align-items:center; gap:5px;">
+                <span>📥</span> <span>Export CSV</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Batch WIP Mapping Table -->
+          <div class="table-wrap" style="border: 1px solid var(--border-color); border-radius: 8px; max-height: 480px; overflow-y: auto;">
+            <table class="data-table" style="margin: 0;">
+              <thead style="position: sticky; top: 0; background: var(--bg-card); z-index: 2;">
+                <tr>
+                  <th style="width: 40px;">#</th>
+                  <th>Batch No</th>
+                  <th>JMREF No & Part</th>
+                  <th>Prod Date</th>
+                  <th>Source RM DC</th>
+                  <th>Subcontractor / Unit</th>
+                  <th>Current WIP Stage</th>
+                  <th class="text-center">Inventory Status</th>
+                  <th class="text-right">Molded Qty</th>
+                  <th class="text-right">Rejected Pcs</th>
+                  <th class="text-right">RM Consumed</th>
+                  <th class="text-center" style="width: 70px;">Action</th>
+                </tr>
+              </thead>
+              <tbody id="rm-batches-modal-tbody">
+                ${renderRmBatchesModalRows(enrichedBatches, currentRmBatchesStageTab, currentRmBatchesModalSearch)}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Modal Footer -->
+        <div class="modal-footer flex items-center justify-between" style="padding: 12px 20px; border-top: 1px solid var(--border-color); background: var(--bg-card); flex-shrink: 0;">
+          <div class="text-xs text-muted" id="rm-batches-modal-count-display">
+            Showing ${getFilteredRmBatches(enrichedBatches, currentRmBatchesStageTab, currentRmBatchesModalSearch).length} of ${totalBatches} batches
+          </div>
+          <div class="flex gap-2">
+            <button class="btn btn-secondary btn-sm" onclick="ReportsModule.closeRmBatchesModal()">Close</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(modal);
+  }
+
+  function escapeHtmlText(str) {
+    return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function getWipStageBadge(stage, isCompleted, isMissing, status) {
+    if (status === 'rejected' || stage === 'rejected') {
+      return '<span class="badge badge-red font-bold">❌ Rejected</span>';
+    }
+    if (isMissing) {
+      return '<span class="badge badge-red font-bold">⚠️ Missing Batch</span>';
+    }
+    if (isCompleted || stage === 'store') {
+      return '<span class="badge badge-green font-bold">🏪 Store / FG</span>';
+    }
+    switch (stage) {
+      case 'production':
+        return '<span class="badge badge-blue font-bold">🏭 Production (Moulding)</span>';
+      case 'cryogenic':
+        return '<span class="badge badge-purple font-bold">❄️ Cryogenic Deflash</span>';
+      case 'deflashing':
+        return '<span class="badge badge-purple font-bold">🪚 Manual DE Flashing</span>';
+      case 'waiting-trimming':
+        return '<span class="badge badge-amber font-bold">⏳ Waiting Trimming</span>';
+      case 'trimming':
+        return '<span class="badge badge-teal font-bold">✂️ Trimming</span>';
+      case 'post-curing':
+        return '<span class="badge badge-amber font-bold">♨️ Post Curing</span>';
+      case 'waiting-visual':
+        return '<span class="badge badge-amber font-bold">⏳ Waiting Visual</span>';
+      case 'visual':
+        return '<span class="badge badge-blue font-bold">👁️ Visual Inspection</span>';
+      case 'gauge':
+        return '<span class="badge badge-blue font-bold">📏 Gauge Check</span>';
+      case 'quality':
+        return '<span class="badge badge-amber font-bold">⭐ Quality Final</span>';
+      default:
+        return `<span class="badge badge-gray font-bold">📍 ${STAGE_LABELS[stage] || stage || 'WIP'}</span>`;
+    }
+  }
+
+  function renderRmStageFilterPills(batches, activeTab) {
+    const tabs = [
+      { key: 'all', label: 'All Batches', count: batches.length },
+      { key: 'wip', label: '⚡ Active WIP', count: batches.filter(b => b.isWip && b.status !== 'rejected').length },
+      { key: 'production', label: '🏭 Production', count: batches.filter(b => b.currentStage === 'production' && !b.isCompleted && b.status !== 'rejected').length },
+      { key: 'cryo', label: '❄️ Cryo / Deflash', count: batches.filter(b => (b.currentStage === 'cryogenic' || b.currentStage === 'deflashing') && !b.isCompleted && b.status !== 'rejected').length },
+      { key: 'trimming', label: '✂️ Trimming', count: batches.filter(b => (b.currentStage === 'trimming' || b.currentStage === 'waiting-trimming') && !b.isCompleted && b.status !== 'rejected').length },
+      { key: 'visual', label: '👁️ Visual / Gauge', count: batches.filter(b => (b.currentStage === 'visual' || b.currentStage === 'waiting-visual' || b.currentStage === 'gauge') && !b.isCompleted && b.status !== 'rejected').length },
+      { key: 'quality', label: '⭐ QC Final', count: batches.filter(b => b.currentStage === 'quality' && !b.isCompleted && b.status !== 'rejected').length },
+      { key: 'rejected', label: '❌ Rejected', count: batches.filter(b => b.status === 'rejected' || b.currentStage === 'rejected' || b.rejectedPcs > 0).length },
+      { key: 'store', label: '🏪 Store / FG', count: batches.filter(b => b.isCompleted).length }
+    ];
+
+    return tabs.map(t => `
+      <button type="button" class="btn btn-xs ${activeTab === t.key ? 'btn-primary font-bold' : 'btn-secondary'}" 
+        style="border-radius: 6px; font-size: 11.5px; padding: 4px 8px; display: inline-flex; align-items: center; gap: 4px;"
+        onclick="ReportsModule.setRmBatchesStageTab('${t.key}')">
+        <span>${t.label}</span>
+        <span class="badge ${activeTab === t.key ? 'badge-blue' : 'badge-gray'}" style="font-size: 10px; padding: 1px 5px;">${t.count}</span>
+      </button>
+    `).join('');
+  }
+
+  function getFilteredRmBatches(batches, stageTab, searchVal) {
+    let filtered = batches;
+
+    // Stage Tab Filtering
+    if (stageTab === 'wip') {
+      filtered = filtered.filter(b => b.isWip && b.status !== 'rejected');
+    } else if (stageTab === 'production') {
+      filtered = filtered.filter(b => b.currentStage === 'production' && !b.isCompleted && b.status !== 'rejected');
+    } else if (stageTab === 'cryo') {
+      filtered = filtered.filter(b => (b.currentStage === 'cryogenic' || b.currentStage === 'deflashing') && !b.isCompleted && b.status !== 'rejected');
+    } else if (stageTab === 'trimming') {
+      filtered = filtered.filter(b => (b.currentStage === 'trimming' || b.currentStage === 'waiting-trimming') && !b.isCompleted && b.status !== 'rejected');
+    } else if (stageTab === 'visual') {
+      filtered = filtered.filter(b => (b.currentStage === 'visual' || b.currentStage === 'waiting-visual' || b.currentStage === 'gauge') && !b.isCompleted && b.status !== 'rejected');
+    } else if (stageTab === 'quality') {
+      filtered = filtered.filter(b => b.currentStage === 'quality' && !b.isCompleted && b.status !== 'rejected');
+    } else if (stageTab === 'rejected') {
+      filtered = filtered.filter(b => b.status === 'rejected' || b.currentStage === 'rejected' || b.rejectedPcs > 0);
+    } else if (stageTab === 'store') {
+      filtered = filtered.filter(b => b.isCompleted);
+    }
+
+    // Search Query Filtering
+    if (searchVal && searchVal.trim()) {
+      const q = searchVal.trim().toLowerCase();
+      filtered = filtered.filter(b => 
+        (b.batchNo && b.batchNo.toLowerCase().includes(q)) ||
+        (b.internalBatchNo && String(b.internalBatchNo).toLowerCase().includes(q)) ||
+        (b.jmrefNo && b.jmrefNo.toLowerCase().includes(q)) ||
+        (b.partNo && b.partNo.toLowerCase().includes(q)) ||
+        (b.sourceRmDcNo && b.sourceRmDcNo.toLowerCase().includes(q)) ||
+        (b.sourceRmCode && b.sourceRmCode.toLowerCase().includes(q)) ||
+        (b.subcontractor && b.subcontractor.toLowerCase().includes(q)) ||
+        (b.stageLabel && b.stageLabel.toLowerCase().includes(q)) ||
+        (b.description && b.description.toLowerCase().includes(q))
+      );
+    }
+
+    return filtered;
+  }
+
+  function renderRmBatchesModalRows(batches, stageTab, searchVal) {
+    const list = getFilteredRmBatches(batches, stageTab, searchVal);
+
+    if (!list.length) {
+      return `
+        <tr>
+          <td colspan="12" class="text-center p-6 text-muted">
+            <div style="font-size:24px; margin-bottom:6px;">🔍</div>
+            <div class="font-bold">No batches found matching the selected stage and search filters.</div>
+            <div class="text-xs text-muted mt-1">Try switching stage tabs or clearing the search text.</div>
+          </td>
+        </tr>
+      `;
+    }
+
+    return list.map((b, idx) => `
+      <tr>
+        <td class="text-xs text-muted font-mono" style="width: 40px;">${idx + 1}</td>
+        <td class="font-mono font-bold text-blue" style="white-space:nowrap;">
+          <span style="cursor:pointer; text-decoration:underline;" onclick="event.stopPropagation(); App.showBatchGenealogy('${b.batchNo}')" title="Click to open Batch Genealogy & Lifecycle Details">
+            ${b.batchNo}
+          </span>
+          ${b.internalBatchNo ? `<span class="badge badge-gray text-xs ml-1" style="font-size:10px;">#${b.internalBatchNo}</span>` : ''}
+          ${b.status === 'rejected' ? '<span class="badge badge-red text-xs ml-1 font-bold" style="font-size:10px;">❌ Rejected</span>' : ''}
+        </td>
+        <td>
+          <div class="font-semibold" style="font-size:12.5px;">
+            <span class="badge badge-teal" style="font-size:11px;">🎯 ${b.jmrefNo}</span>
+            <span class="font-mono text-xs text-muted ml-1">${b.partNo}</span>
+          </div>
+          ${b.description && b.description !== '—' ? `<div class="text-xs text-muted font-mono mt-0.5" style="max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtmlText(b.description)}">${b.description}</div>` : ''}
+        </td>
+        <td class="text-xs font-mono" style="white-space:nowrap;">${b.productionDate}</td>
+        <td class="font-mono font-bold text-teal" style="white-space:nowrap;">
+          <span class="badge badge-teal" style="font-size:11px;">🚚 ${b.sourceRmDcNo}</span>
+          ${b.sourceRmCode && b.sourceRmCode !== '—' ? `<div class="text-xs text-muted font-mono mt-0.5">${b.sourceRmCode}</div>` : ''}
+        </td>
+        <td class="font-semibold text-blue text-xs" style="white-space:nowrap;">${b.subcontractor}</td>
+        <td style="white-space:nowrap;">${getWipStageBadge(b.currentStage, b.isCompleted, b.isMissing, b.status)}</td>
+        <td class="text-center" style="white-space:nowrap;">
+          ${b.status === 'rejected' || b.currentStage === 'rejected' ? '<span class="badge badge-red font-bold">❌ Rejected</span>' : (b.isMissing ? '<span class="badge badge-red font-bold">⚠️ Missing</span>' : (b.isCompleted ? '<span class="badge badge-green font-bold">✅ Completed</span>' : '<span class="badge badge-purple font-bold">⚡ Active WIP</span>'))}
+        </td>
+        <td class="text-right font-mono font-bold" style="white-space:nowrap;">${formatNum(b.qty)} <span class="text-xs text-muted">pcs</span></td>
+        <td class="text-right font-mono ${b.rejectedPcs > 0 ? 'font-bold text-danger' : 'text-muted'}" style="white-space:nowrap;">
+          ${b.rejectedPcs > 0 ? `<span class="badge badge-red font-bold" style="font-size:11px;">❌ ${formatNum(b.rejectedPcs)} pcs</span>` : '<span class="text-muted">0</span>'}
+        </td>
+        <td class="text-right font-mono font-bold text-blue" style="font-size:13px; white-space:nowrap;">${formatNum(b.rmConsumedQty, 2)} <span class="text-xs">${b.uom}</span></td>
+        <td class="text-center" style="white-space:nowrap;">
+          <button type="button" class="btn btn-secondary btn-xs" onclick="event.stopPropagation(); App.showBatchGenealogy('${b.batchNo}')" title="View Full Batch Genealogy & History">
+            👁️ View
+          </button>
+        </td>
+      </tr>
+    `).join('');
+  }
+
+  function setRmBatchesStageTab(key) {
+    currentRmBatchesStageTab = key;
+    if (!currentRmBatchesModalData) return;
+
+    const pillsContainer = document.getElementById('rm-modal-stage-pills');
+    if (pillsContainer) {
+      pillsContainer.innerHTML = renderRmStageFilterPills(currentRmBatchesModalData.batches, key);
+    }
+
+    const tbody = document.getElementById('rm-batches-modal-tbody');
+    if (tbody) {
+      tbody.innerHTML = renderRmBatchesModalRows(currentRmBatchesModalData.batches, key, currentRmBatchesModalSearch);
+    }
+
+    const countDisplay = document.getElementById('rm-batches-modal-count-display');
+    if (countDisplay) {
+      const filtered = getFilteredRmBatches(currentRmBatchesModalData.batches, key, currentRmBatchesModalSearch);
+      countDisplay.textContent = `Showing ${filtered.length} of ${currentRmBatchesModalData.batches.length} batches`;
+    }
+  }
+
+  function filterRmBatchesModal(val) {
+    currentRmBatchesModalSearch = val;
+    if (!currentRmBatchesModalData) return;
+
+    const tbody = document.getElementById('rm-batches-modal-tbody');
+    if (tbody) {
+      tbody.innerHTML = renderRmBatchesModalRows(currentRmBatchesModalData.batches, currentRmBatchesStageTab, val);
+    }
+
+    const countDisplay = document.getElementById('rm-batches-modal-count-display');
+    if (countDisplay) {
+      const filtered = getFilteredRmBatches(currentRmBatchesModalData.batches, currentRmBatchesStageTab, val);
+      countDisplay.textContent = `Showing ${filtered.length} of ${currentRmBatchesModalData.batches.length} batches`;
+    }
+  }
+
+  function exportRmBatchesModalCSV() {
+    if (!currentRmBatchesModalData || !currentRmBatchesModalData.batches.length) {
+      showToast('No batches available to export', 'warning');
+      return;
+    }
+
+    const list = getFilteredRmBatches(currentRmBatchesModalData.batches, currentRmBatchesStageTab, currentRmBatchesModalSearch);
+    if (!list.length) {
+      showToast('No batches matching current filter to export', 'warning');
+      return;
+    }
+
+    const headers = [
+      '#', 'Batch No', 'Internal Batch No', 'JMREF No', 'Part No', 'Part Description',
+      'Production Date', 'Source RM DC No', 'DC Date', 'RM Code', 'Material Name',
+      'RM Consumed Qty', 'UOM', 'Molded Output Qty (pcs)', 'Rejected Pcs (pcs)', 'Current WIP Stage',
+      'Inventory Status', 'Subcontractor / Unit'
+    ];
+
+    const rows = list.map((b, i) => [
+      i + 1,
+      b.batchNo,
+      b.internalBatchNo || '',
+      b.jmrefNo,
+      b.partNo,
+      b.description,
+      b.productionDate,
+      b.sourceRmDcNo,
+      b.dcDate,
+      b.sourceRmCode,
+      b.rmName,
+      b.rmConsumedQty.toFixed(2),
+      b.uom,
+      b.qty,
+      b.rejectedPcs || 0,
+      b.stageLabel,
+      b.status === 'rejected' ? 'Rejected' : (b.isMissing ? 'Missing' : (b.isCompleted ? 'Store / FG Completed' : 'Active WIP')),
+      b.subcontractor
+    ]);
+
+    const csvContent = [headers.join(','), ...rows.map(r => r.map(v => `"${String(v !== undefined && v !== null ? v : '').replace(/"/g, '""')}"`).join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const prefix = currentRmBatchesModalData.dcNo ? `DC_${currentRmBatchesModalData.dcNo}` : (currentRmBatchesModalData.rmCode ? `RM_${currentRmBatchesModalData.rmCode}` : 'RM_Dispatched');
+    a.download = `${prefix}_Batches_WIP_Mapping_${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast(`Exported ${list.length} batches to CSV`, 'success');
+  }
+
+  function closeRmBatchesModal() {
+    const modal = document.getElementById('rm-batches-wip-modal');
+    if (modal) modal.remove();
+  }
+
+  // ── Subcontractor / Supplier RM Balance Modal Subsystem ──────
+  let currentSubconRmBalanceModalData = null;
+  let currentSubconRmBalanceModalSearch = '';
+  let currentSubconRmBalanceModalStatusFilter = 'all';
+
+  function openSubconRmBalanceModal(rmCode = '', rmName = '', uom = '') {
+    currentSubconRmBalanceModalStatusFilter = 'all';
+    currentSubconRmBalanceModalSearch = '';
+
+    const allBatches = (typeof DB !== 'undefined' && DB.Batches && DB.Batches.all) ? DB.Batches.all() : [];
+    const allDcs = (typeof DB !== 'undefined' && DB.DeliveryChallans && DB.DeliveryChallans.all) ? DB.DeliveryChallans.all() : [];
+    const allRms = (typeof DB !== 'undefined' && DB.RawMaterials && DB.RawMaterials.all) ? DB.RawMaterials.all() : [];
+    const allRejections = (typeof DB !== 'undefined' && DB.RejectionTracker && DB.RejectionTracker.all) ? DB.RejectionTracker.all() : [];
+
+    const cleanRm = (rmCode || '').trim().toUpperCase();
+
+    // Fast lookup for RM UOM and names
+    const rmMap = new Map();
+    allRms.forEach(r => {
+      const c = (r.code || r.itemCode || '').trim().toUpperCase();
+      if (c) rmMap.set(c, r);
+    });
+
+    // Rejection mapping
+    const rejectionByBatchId = new Map();
+    const rejectionByBatchNo = new Map();
+    allRejections.forEach(r => {
+      const q = parseFloat(r.qty) || 0;
+      if (r.batchId) rejectionByBatchId.set(r.batchId, (rejectionByBatchId.get(r.batchId) || 0) + q);
+      if (r.batchNo) {
+        const bNo = String(r.batchNo).trim().toUpperCase();
+        rejectionByBatchNo.set(bNo, (rejectionByBatchNo.get(bNo) || 0) + q);
+      }
+    });
+
+    // Map DC batches and consumptions
+    const dcConsumedMap = {};
+    const dcBatchesMap = new Map();
+    allBatches.forEach(b => {
+      if (!b || !b.batchNo || b.status === 'missing') return;
+      const bDc = (b.sourceRmDcNo || '').trim().toUpperCase();
+      if (bDc) {
+        let list = dcBatchesMap.get(bDc);
+        if (!list) { list = []; dcBatchesMap.set(bDc, list); }
+        list.push(b);
+
+        const bRm = (b.sourceRmCode || '').trim().toUpperCase();
+        if (bRm && b.rmConsumedQty) {
+          const key = `${bDc}|${bRm}`;
+          dcConsumedMap[key] = (dcConsumedMap[key] || 0) + (parseFloat(b.rmConsumedQty) || 0);
+        }
+      }
+    });
+
+    // Filter relevant Delivery Challans
+    const candidateDcs = allDcs.filter(dc => dc.type === 'rm-processing' || (dc.rmItems && dc.rmItems.length > 0));
+    const today = new Date();
+    const lineItems = [];
+
+    candidateDcs.forEach(dc => {
+      const subName = dc.vendorName || dc.vendorId || 'Subcontractor / Supplier';
+      const dcNo = dc.dcNo || '—';
+      const dcDate = dc.date || (dc.createdAt ? dc.createdAt.slice(0, 10) : '—');
+      const vehicleNo = dc.vehicleNo || '—';
+
+      (dc.rmItems || []).forEach(it => {
+        const itemCode = (it.itemCode || '').trim().toUpperCase();
+        if (!itemCode) return;
+
+        // If specific RM code is requested, filter
+        if (cleanRm && itemCode !== cleanRm) return;
+
+        const rmObj = rmMap.get(itemCode) || {};
+        const itemName = it.name || it.description || rmObj.name || (itemCode + ' Material');
+        const itemUom = it.uom || rmObj.uom || uom || getRmUom(itemCode);
+        const sentQty = parseFloat(it.qty) || 0;
+
+        const dcKey = dcNo.trim().toUpperCase();
+        const consKey = `${dcKey}|${itemCode}`;
+        const consumedQty = dcConsumedMap[consKey] || 0;
+        const balanceQty = Math.max(0, sentQty - consumedQty);
+        const rate = parseFloat(it.rate) || parseFloat(rmObj.unitPrice || rmObj.rate) || 0;
+        const holdingVal = balanceQty * rate;
+
+        let ageDays = 0;
+        if (dcDate && dcDate !== '—') {
+          const d = new Date(dcDate);
+          if (!isNaN(d.getTime())) {
+            ageDays = Math.max(0, Math.floor((today - d) / 86400000));
+          }
+        }
+
+        // Get batches created from this DC and item
+        const allDcBatches = dcBatchesMap.get(dcKey) || [];
+        const dcBatches = allDcBatches.filter(b => (b.sourceRmCode || '').trim().toUpperCase() === itemCode || (!b.sourceRmCode && cleanRm));
+        const wipCount = dcBatches.filter(b => b.status === 'active' && b.currentStage !== 'store').length;
+        const completedCount = dcBatches.filter(b => b.status === 'completed' || b.currentStage === 'store').length;
+        
+        let dcRejectedPcs = 0;
+        dcBatches.forEach(b => {
+          const rej = rejectionByBatchId.get(b.id) || rejectionByBatchNo.get((b.batchNo || '').trim().toUpperCase()) || (b.status === 'rejected' ? (parseFloat(b.initialQty || b.qty) || 0) : 0);
+          dcRejectedPcs += rej;
+        });
+
+        let statusKey = 'open';
+        let statusBadge = '<span class="badge badge-blue font-bold">🔵 Active Holding</span>';
+        let statusText = 'Active Holding';
+        if (balanceQty <= 0.001) {
+          statusKey = 'closed';
+          statusBadge = '<span class="badge badge-green font-bold">✅ Reconciled</span>';
+          statusText = 'Fully Consumed';
+        } else if (consumedQty > 0) {
+          statusKey = 'partial';
+          statusBadge = '<span class="badge badge-amber font-bold">🔄 Partial Balance</span>';
+          statusText = 'Partially Consumed';
+        }
+
+        lineItems.push({
+          dcNo,
+          dcDate,
+          subName,
+          vehicleNo,
+          itemCode,
+          itemName,
+          uom: itemUom,
+          sentQty,
+          consumedQty,
+          balanceQty,
+          rate,
+          holdingVal,
+          ageDays,
+          statusKey,
+          statusBadge,
+          statusText,
+          dcBatchesCount: dcBatches.length,
+          wipCount,
+          completedCount,
+          rejectedPcs: dcRejectedPcs
+        });
+      });
+    });
+
+    // Sort by DC Date desc
+    lineItems.sort((a,b) => (b.dcDate).localeCompare(a.dcDate));
+
+    currentSubconRmBalanceModalData = {
+      rmCode: cleanRm,
+      rmName: rmName,
+      uom: uom,
+      items: lineItems
+    };
+
+    // Calculate aggregated metrics
+    const totalDispatched = lineItems.reduce((acc, it) => acc + it.sentQty, 0);
+    const totalConsumed = lineItems.reduce((acc, it) => acc + it.consumedQty, 0);
+    const totalBalance = lineItems.reduce((acc, it) => acc + it.balanceQty, 0);
+    const totalValue = lineItems.reduce((acc, it) => acc + it.holdingVal, 0);
+    const activeDcsCount = lineItems.filter(it => it.balanceQty > 0.001).length;
+    const totalBatchesProduced = lineItems.reduce((acc, it) => acc + it.dcBatchesCount, 0);
+    const totalRejectedPcs = lineItems.reduce((acc, it) => acc + it.rejectedPcs, 0);
+    const primaryUom = uom || (lineItems.length > 0 ? lineItems[0].uom : 'pcs');
+
+    // Remove existing modal if any
+    const existing = document.getElementById('subcon-rm-balance-modal');
+    if (existing) existing.remove();
+
+    let contextSubtitle = 'Delivery Challans & Material Holding Breakdown across all Subcontractors / Suppliers';
+    if (cleanRm) {
+      contextSubtitle = `Raw Material: <strong class="text-teal font-mono">${cleanRm}</strong> ${rmName ? '&bull; <strong>' + escapeHtmlText(rmName) + '</strong>' : ''} &bull; UOM: <strong class="text-purple">${primaryUom}</strong>`;
+    }
+
+    const modal = document.createElement('div');
+    modal.className = 'modal-overlay';
+    modal.id = 'subcon-rm-balance-modal';
+    modal.style.zIndex = '2150';
+    modal.onclick = function(e) { if (e.target === modal) closeSubconRmBalanceModal(); };
+
+    modal.innerHTML = `
+      <div class="modal modal-lg" style="max-width: 1240px; width: 95%; max-height: 92vh; border-radius: 16px; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.35);">
+        <!-- Modal Header -->
+        <div class="modal-header flex items-center justify-between" style="padding: 16px 20px; border-bottom: 1px solid var(--border-color); background: var(--bg-card); flex-shrink: 0;">
+          <div>
+            <h3 style="margin:0; font-size: 17px; font-weight: 700; display:flex; align-items:center; gap:8px;">
+              <span>🏢</span>
+              <span>Subcontractor / Supplier RM Holding Balance & Delivery Challans</span>
+              <span class="badge badge-amber font-mono" style="font-size:12px;">${lineItems.length} Challans</span>
+            </h3>
+            <p class="text-xs text-muted mt-1" style="margin:0;">${contextSubtitle}</p>
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="ReportsModule.closeSubconRmBalanceModal()" style="border-radius:50%; width:32px; height:32px; padding:0; display:flex; align-items:center; justify-content:center; font-size:16px;">✕</button>
+        </div>
+
+        <!-- Modal Body Container -->
+        <div style="padding: 16px 20px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 14px;">
+          <!-- KPI Summary Strip -->
+          <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin: 0;">
+            <div class="stat-card blue" style="padding: 12px 14px;">
+              <div class="stat-label">Total Dispatched</div>
+              <div class="stat-value blue" style="font-size: 20px;">${formatNum(totalDispatched, 2)} <span style="font-size:12px;">${primaryUom}</span></div>
+              <div class="text-xs text-muted mt-1">Across ${lineItems.length} Challan Items</div>
+            </div>
+            <div class="stat-card teal" style="padding: 12px 14px;">
+              <div class="stat-label">Material Consumed</div>
+              <div class="stat-value teal" style="font-size: 20px;">${formatNum(totalConsumed, 2)} <span style="font-size:12px;">${primaryUom}</span></div>
+              <div class="text-xs text-success font-semibold mt-1">Consumed in Batches</div>
+            </div>
+            <div class="stat-card amber" style="padding: 12px 14px;">
+              <div class="stat-label">Live Subcon Balance</div>
+              <div class="stat-value amber" style="font-size: 20px;">${formatNum(totalBalance, 2)} <span style="font-size:12px;">${primaryUom}</span></div>
+              <div class="text-xs font-semibold mt-1" style="color:var(--accent-amber);">⚡ Under-Process Holding</div>
+            </div>
+            <div class="stat-card purple" style="padding: 12px 14px;">
+              <div class="stat-label">Active Holding DCs</div>
+              <div class="stat-value purple" style="font-size: 20px;">${formatNum(activeDcsCount)}</div>
+              <div class="text-xs font-semibold mt-1" style="color:var(--accent-purple);">Balance > 0</div>
+            </div>
+            <div class="stat-card green" style="padding: 12px 14px; cursor:pointer;" onclick="ReportsModule.openRmBatchesModal('${cleanRm}', '', '', 'all')" title="Click to view Batches & WIP Mapping">
+              <div class="stat-label">Batches Produced ↗</div>
+              <div class="stat-value green" style="font-size: 20px;">${formatNum(totalBatchesProduced)}</div>
+              <div class="text-xs text-success font-semibold mt-1">Click to view WIP Mapping</div>
+            </div>
+            <div class="stat-card red" style="padding: 12px 14px;">
+              <div class="stat-label">Rejected Pieces</div>
+              <div class="stat-value red" style="font-size: 20px;">${formatNum(totalRejectedPcs)}</div>
+              <div class="text-xs text-danger font-semibold mt-1">${totalRejectedPcs > 0 ? '❌ Scrapped in Processing' : '0 Rejections'}</div>
+            </div>
+          </div>
+
+          <!-- Controls Bar: Filter Pills & Search -->
+          <div class="flex flex-wrap items-center justify-between gap-3 p-2 rounded-lg" style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px;">
+            <!-- Status Filter Pills -->
+            <div class="flex flex-wrap gap-1" id="subcon-balance-filter-pills">
+              ${renderSubconBalanceFilterPills(lineItems, currentSubconRmBalanceModalStatusFilter)}
+            </div>
+
+            <!-- Search & Actions -->
+            <div class="flex items-center gap-2">
+              <div class="relative" style="min-width: 250px;">
+                <input type="text" id="subcon-rm-balance-search" class="form-input" placeholder="🔍 Search DC No, Subcontractor, RM Code..." 
+                  style="padding: 6px 12px; font-size: 12.5px; border-radius: 6px;"
+                  value="${escapeHtmlText(currentSubconRmBalanceModalSearch)}"
+                  oninput="ReportsModule.filterSubconRmBalanceModal(this.value)">
+              </div>
+              <button class="btn btn-secondary btn-sm" onclick="ReportsModule.exportSubconRmBalanceCSV()" title="Export Subcontractor RM Balance to CSV" style="white-space:nowrap; display:flex; align-items:center; gap:5px;">
+                <span>📥</span> <span>Export CSV</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Subcontractor DC Balance Table -->
+          <div class="table-wrap" style="border: 1px solid var(--border-color); border-radius: 8px; max-height: 480px; overflow-y: auto;">
+            <table class="data-table" style="margin: 0;">
+              <thead style="position: sticky; top: 0; background: var(--bg-card); z-index: 2;">
+                <tr>
+                  <th style="width: 40px;">#</th>
+                  <th>DC No</th>
+                  <th>DC Date</th>
+                  <th>Subcontractor / Supplier</th>
+                  <th>Vehicle No</th>
+                  <th>RM Item Code & Description</th>
+                  <th class="text-right">Dispatched Qty</th>
+                  <th class="text-right">Consumed Qty</th>
+                  <th class="text-right">Holding Balance</th>
+                  <th class="text-right">Age (Days)</th>
+                  <th class="text-center">Batches Created</th>
+                  <th class="text-center">Status</th>
+                  <th class="text-center" style="width: 90px;">Action</th>
+                </tr>
+              </thead>
+              <tbody id="subcon-rm-balance-tbody">
+                ${renderSubconRmBalanceModalRows(lineItems, currentSubconRmBalanceModalStatusFilter, currentSubconRmBalanceModalSearch)}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Modal Footer -->
+        <div class="modal-footer flex items-center justify-between" style="padding: 12px 20px; border-top: 1px solid var(--border-color); background: var(--bg-card); flex-shrink: 0;">
+          <div class="text-xs text-muted" id="subcon-rm-balance-count-display">
+            Showing ${getFilteredSubconBalanceItems(lineItems, currentSubconRmBalanceModalStatusFilter, currentSubconRmBalanceModalSearch).length} of ${lineItems.length} Challan items
+          </div>
+          <div class="flex gap-2">
+            <button class="btn btn-secondary btn-sm" onclick="ReportsModule.closeSubconRmBalanceModal()">Close</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(modal);
+  }
+
+  function renderSubconBalanceFilterPills(items, activeStatus) {
+    const tabs = [
+      { key: 'all', label: 'All Challans', count: items.length },
+      { key: 'holding', label: '🔵 Active Holding (>0)', count: items.filter(r => r.balanceQty > 0.001).length },
+      { key: 'closed', label: '✅ Fully Reconciled', count: items.filter(r => r.balanceQty <= 0.001).length }
+    ];
+
+    return tabs.map(t => `
+      <button type="button" class="btn btn-xs ${activeStatus === t.key ? 'btn-primary font-bold' : 'btn-secondary'}" 
+        style="border-radius: 6px; font-size: 11.5px; padding: 4px 8px; display: inline-flex; align-items: center; gap: 4px;"
+        onclick="ReportsModule.setSubconRmBalanceStatusFilter('${t.key}')">
+        <span>${t.label}</span>
+        <span class="badge ${activeStatus === t.key ? 'badge-blue' : 'badge-gray'}" style="font-size: 10px; padding: 1px 5px;">${t.count}</span>
+      </button>
+    `).join('');
+  }
+
+  function getFilteredSubconBalanceItems(items, statusFilter, searchVal) {
+    let filtered = items;
+
+    if (statusFilter === 'holding') {
+      filtered = filtered.filter(r => r.balanceQty > 0.001);
+    } else if (statusFilter === 'closed') {
+      filtered = filtered.filter(r => r.balanceQty <= 0.001);
+    }
+
+    if (searchVal && searchVal.trim()) {
+      const q = searchVal.trim().toLowerCase();
+      filtered = filtered.filter(r =>
+        (r.dcNo && r.dcNo.toLowerCase().includes(q)) ||
+        (r.subName && r.subName.toLowerCase().includes(q)) ||
+        (r.itemCode && r.itemCode.toLowerCase().includes(q)) ||
+        (r.itemName && r.itemName.toLowerCase().includes(q)) ||
+        (r.vehicleNo && r.vehicleNo.toLowerCase().includes(q)) ||
+        (r.statusText && r.statusText.toLowerCase().includes(q))
+      );
+    }
+
+    return filtered;
+  }
+
+  function renderSubconRmBalanceModalRows(items, statusFilter, searchVal) {
+    const list = getFilteredSubconBalanceItems(items, statusFilter, searchVal);
+
+    if (!list.length) {
+      return `
+        <tr>
+          <td colspan="13" class="text-center p-6 text-muted">
+            <div style="font-size:24px; margin-bottom:6px;">🔍</div>
+            <div class="font-bold">No Delivery Challans found matching the selected filter.</div>
+            <div class="text-xs text-muted mt-1">Try switching filters or clearing the search text.</div>
+          </td>
+        </tr>
+      `;
+    }
+
+    return list.map((r, idx) => `
+      <tr>
+        <td class="text-xs text-muted font-mono" style="width: 40px;">${idx + 1}</td>
+        <td class="font-mono font-bold text-teal" style="white-space:nowrap;">
+          <button type="button" class="btn btn-xs badge badge-teal" style="cursor:pointer; border:none; padding:3px 7px; font-size:11.5px;"
+            onclick="ReportsModule.openRmBatchesModal('${r.itemCode}', '${r.subName.replace(/'/g, "\\'")}', '${r.dcNo}', 'all')"
+            title="View all batches created from DC ${r.dcNo}">
+            🚚 ${r.dcNo}
+          </button>
+        </td>
+        <td class="text-xs font-mono" style="white-space:nowrap;">${r.dcDate}</td>
+        <td>
+          <div class="font-semibold text-blue" style="font-size:12.5px;">${escapeHtmlText(r.subName)}</div>
+        </td>
+        <td class="text-xs font-mono text-muted" style="white-space:nowrap;">${r.vehicleNo}</td>
+        <td>
+          <div class="font-semibold" style="font-size:12.5px;">
+            <span class="badge badge-purple font-mono" style="font-size:11px;">${r.itemCode}</span>
+            <span class="ml-1">${escapeHtmlText(r.itemName)}</span>
+          </div>
+        </td>
+        <td class="text-right font-mono font-bold text-muted" style="white-space:nowrap;">
+          ${formatNum(r.sentQty, 2)} <span class="text-xs">${r.uom}</span>
+        </td>
+        <td class="text-right font-mono font-bold text-blue" style="white-space:nowrap;">
+          ${formatNum(r.consumedQty, 2)} <span class="text-xs">${r.uom}</span>
+        </td>
+        <td class="text-right font-mono font-bold ${r.balanceQty > 0.001 ? 'text-amber' : 'text-success'}" style="font-size:13px; white-space:nowrap;">
+          ${formatNum(r.balanceQty, 2)} <span class="text-xs">${r.uom}</span>
+        </td>
+        <td class="text-right font-mono" style="white-space:nowrap;">
+          ${r.ageDays > 30 ? `<span class="badge badge-amber font-bold">${r.ageDays} d</span>` : `${r.ageDays} d`}
+        </td>
+        <td class="text-center" style="white-space:nowrap;">
+          ${r.dcBatchesCount > 0 ? `
+            <button type="button" class="btn btn-xs badge badge-purple" style="cursor:pointer; border:none; padding:2px 6px; font-size:11px;"
+              onclick="ReportsModule.openRmBatchesModal('${r.itemCode}', '${r.subName.replace(/'/g, "\\'")}', '${r.dcNo}', 'all')"
+              title="Click to view ${r.dcBatchesCount} batches in WIP modal">
+              ⚡ ${r.dcBatchesCount} Batches
+            </button>
+            ${r.rejectedPcs > 0 ? `<div class="mt-0.5"><span class="badge badge-red font-bold" style="font-size:10px;">❌ ${formatNum(r.rejectedPcs)} rej</span></div>` : ''}
+          ` : '<span class="text-muted text-xs">—</span>'}
+        </td>
+        <td class="text-center" style="white-space:nowrap;">${r.statusBadge}</td>
+        <td class="text-center" style="white-space:nowrap;">
+          <button type="button" class="btn btn-secondary btn-xs" 
+            onclick="ReportsModule.openRmBatchesModal('${r.itemCode}', '${r.subName.replace(/'/g, "\\'")}', '${r.dcNo}', 'all')"
+            title="View Batches & WIP Mapping for DC ${r.dcNo}">
+            ⚡ Batches
+          </button>
+        </td>
+      </tr>
+    `).join('');
+  }
+
+  function setSubconRmBalanceStatusFilter(key) {
+    currentSubconRmBalanceModalStatusFilter = key;
+    if (!currentSubconRmBalanceModalData) return;
+
+    const pillsContainer = document.getElementById('subcon-balance-filter-pills');
+    if (pillsContainer) {
+      pillsContainer.innerHTML = renderSubconBalanceFilterPills(currentSubconRmBalanceModalData.items, key);
+    }
+
+    const tbody = document.getElementById('subcon-rm-balance-tbody');
+    if (tbody) {
+      tbody.innerHTML = renderSubconRmBalanceModalRows(currentSubconRmBalanceModalData.items, key, currentSubconRmBalanceModalSearch);
+    }
+
+    const countDisplay = document.getElementById('subcon-rm-balance-count-display');
+    if (countDisplay) {
+      const filtered = getFilteredSubconBalanceItems(currentSubconRmBalanceModalData.items, key, currentSubconRmBalanceModalSearch);
+      countDisplay.textContent = `Showing ${filtered.length} of ${currentSubconRmBalanceModalData.items.length} Challan items`;
+    }
+  }
+
+  function filterSubconRmBalanceModal(val) {
+    currentSubconRmBalanceModalSearch = val;
+    if (!currentSubconRmBalanceModalData) return;
+
+    const tbody = document.getElementById('subcon-rm-balance-tbody');
+    if (tbody) {
+      tbody.innerHTML = renderSubconRmBalanceModalRows(currentSubconRmBalanceModalData.items, currentSubconRmBalanceModalStatusFilter, val);
+    }
+
+    const countDisplay = document.getElementById('subcon-rm-balance-count-display');
+    if (countDisplay) {
+      const filtered = getFilteredSubconBalanceItems(currentSubconRmBalanceModalData.items, currentSubconRmBalanceModalStatusFilter, val);
+      countDisplay.textContent = `Showing ${filtered.length} of ${currentSubconRmBalanceModalData.items.length} Challan items`;
+    }
+  }
+
+  function exportSubconRmBalanceCSV() {
+    if (!currentSubconRmBalanceModalData || !currentSubconRmBalanceModalData.items.length) {
+      showToast('No challan items available to export', 'warning');
+      return;
+    }
+
+    const list = getFilteredSubconBalanceItems(currentSubconRmBalanceModalData.items, currentSubconRmBalanceModalStatusFilter, currentSubconRmBalanceModalSearch);
+    if (!list.length) {
+      showToast('No challans matching current filter to export', 'warning');
+      return;
+    }
+
+    const headers = [
+      '#', 'DC No', 'DC Date', 'Subcontractor / Supplier', 'Vehicle No',
+      'RM Item Code', 'Material Name', 'Dispatched Qty', 'Consumed Qty',
+      'Holding Balance at Subcontractor', 'UOM', 'Rate (₹)', 'Holding Value (₹)',
+      'Age (Days)', 'Batches Molded', 'Rejected Pcs', 'Status'
+    ];
+
+    const rows = list.map((r, i) => [
+      i + 1,
+      r.dcNo,
+      r.dcDate,
+      r.subName,
+      r.vehicleNo,
+      r.itemCode,
+      r.itemName,
+      r.sentQty.toFixed(2),
+      r.consumedQty.toFixed(2),
+      r.balanceQty.toFixed(2),
+      r.uom,
+      r.rate > 0 ? r.rate.toFixed(2) : '—',
+      r.holdingVal > 0 ? r.holdingVal.toFixed(2) : '0.00',
+      r.ageDays,
+      r.dcBatchesCount,
+      r.rejectedPcs,
+      r.statusText
+    ]);
+
+    const csvContent = [headers.join(','), ...rows.map(row => row.map(v => `"${String(v !== undefined && v !== null ? v : '').replace(/"/g, '""')}"`).join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const prefix = currentSubconRmBalanceModalData.rmCode ? `Subcon_Balance_RM_${currentSubconRmBalanceModalData.rmCode}` : 'Subcontractor_RM_Balance';
+    a.download = `${prefix}_${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast(`Exported ${list.length} Challan items to CSV`, 'success');
+  }
+
+  function closeSubconRmBalanceModal() {
+    const modal = document.getElementById('subcon-rm-balance-modal');
+    if (modal) modal.remove();
+  }
+
+
   const savedFilters = {};
   const savedResults = {};
 
@@ -6656,6 +9762,12 @@ const ReportsModule = (() => {
       plMould: g('rpt-pl-mould'),
       plReprocess: g('rpt-pl-reprocess'),
       plStatus: g('rpt-pl-status'),
+      rmCode: g('rpt-rm-code'),
+      rmCategory: g('rpt-rm-category'),
+      rmStockStatus: g('rpt-rm-stock-status'),
+      supplierName: g('rpt-supplier'),
+      dcStatus: g('rpt-dc-status'),
+      txType: g('rpt-tx-type'),
     };
   }
 
@@ -6690,6 +9802,12 @@ const ReportsModule = (() => {
     setVal('rpt-pl-mould', saved.plMould);
     setVal('rpt-pl-reprocess', saved.plReprocess);
     setVal('rpt-pl-status', saved.plStatus);
+    setVal('rpt-rm-code', saved.rmCode);
+    setVal('rpt-rm-category', saved.rmCategory);
+    setVal('rpt-rm-stock-status', saved.rmStockStatus);
+    setVal('rpt-supplier', saved.supplierName);
+    setVal('rpt-dc-status', saved.dcStatus);
+    setVal('rpt-tx-type', saved.txType);
   }
 
   function restoreSavedResult(reportKey) {
@@ -6789,6 +9907,11 @@ const ReportsModule = (() => {
       case 'audit-missing-batches': result = renderAuditMissingCrossSessionReport(filters); break;
       case 'cryo-deflash-trim': result = renderCryoDeflashTrimReport(filters); break;
       case 'process-leakage': result = renderProcessLeakageReport(filters); break;
+      case 'rm-inventory':        result = renderRmInventory(filters); break;
+      case 'rm-sub-balance':      result = renderRmSubBalance(filters); break;
+      case 'rm-consumption':      result = renderRmConsumption(filters); break;
+      case 'rm-inward-register':  result = renderRmInwardRegister(filters); break;
+      case 'rm-stock-ledger':     result = renderRmStockLedger(filters); break;
       default: result = emptyState('Unknown report');
     }
 
@@ -6821,50 +9944,267 @@ const ReportsModule = (() => {
     }
   }
 
-  // ── Report Configs ─────────────────────────────────────────
-  const REPORTS = [
-    { key:'reprocess',  label:'🔄 Reprocessed Items Report',   desc:'Chronological list of all batches and quantities sent for reprocessing' },
-    { key:'inventory',  label:'📦 Inventory Report',           desc:'Current quantity per part at each stage' },
-    { key:'store-stock',label:'🏪 Store Stock Report',         desc:'Finished Goods inventory available in Store with batch breakdown and valuation' },
-    { key:'sales',      label:'💰 Sales Report',               desc:'Sales records with date range filter' },
-    { key:'production', label:'🏭 Production Report',          desc:'Operator-wise and JMREF-wise production output' },
-    { key:'cryogenic',  label:'❄️ Cryogenic Loss Report',      desc:'Loss during cryogenic processing' },
-    { key:'deflashing', label:'🔧 DE Flashing Loss Report',    desc:'Loss during manual DE flashing' },
-    { key:'trimming',   label:'✂️ Trimming Loss Report',       desc:'Loss during trimming process' },
-    { key:'post-curing',label:'🔥 Post Curing Loss Report',     desc:'Loss during post curing process' },
-    { key:'waiting-visual',label:'⏳ Waiting for Visual Report', desc:'Rack allocation and location details' },
-    { key:'visual',     label:'👁️ Visual Inspection Report',   desc:'Inspector-wise loss and inspection records' },
-    { key:'gauge',      label:'📏 Gauge Inspection Report',    desc:'Loss during gauge inspection' },
-    { key:'quality',    label:'⭐ Quality Final (QC) Report',   desc:'Detailed evaluation outcomes, pass rate, rework history, and scrap loss at Quality Final inspection stage' },
-    { key:'rejected',   label:'🚫 Rejected Batch Report',      desc:'All batches rejected due to quality issues' },
-    { key:'recheck',    label:'🔄 Quality Final Recheck',      desc:'Date-wise and operator-wise recheck tracking' },
-    { key:'slob',       label:'📉 SLOB Report',                desc:'Slow-moving and Obsolete inventory aging analysis' },
-    { key:'aging',      label:'⏳ Aging WIP Report (> 1 Week)', desc:'Active batches sitting in the same stage for more than 7 days' },
-    { key:'pending-batches', label:'⏳ Pending Batch Report',  desc:'Pending batches filtered by stage and timeframe from date Received' },
-    { key:'qty-gain',   label:'📈 Quantity Gain Report',       desc:'Stages where the batch output quantity was greater than the input quantity' },
-    { key:'qty-loss',   label:'📉 Whole Batch Loss & Scrap Report', desc:'Cumulative quantity loss and scrap rate per batch from production to completion, filterable by 50% loss threshold' },
-    { key:'op-efficiency',  label:'👷 Operator & Inspector Efficiency', desc:'Operator-wise and Inspector-wise output, yield, and defect rates' },
-    { key:'mould-lifecycle',label:'⚙️ Mould Lifecycle & Performance',    desc:'Accumulative lift count, output yield, and maintenance alert status per mould' },
-    { key:'cycle-time',     label:'⏳ Production Cycle Time & Bottlenecks', desc:'Average hours/days batches spend at each process stage' },
-    { key:'wip-valuation',  label:'💰 WIP Inventory Valuation',          desc:'Financial valuation of live inventory based on part sale prices' },
-    { key:'sub-vs-inhouse', label:'🏢 Subcontractor vs. In-House Comparison', desc:'Yield, cycle time, and rejection comparison between manufacturing channels' },
-    { key:'sub-pending', label:'🏢 Subcontractor Pending Batches', desc:'Batches of subcontractor parts currently in pending/WIP stages other than Store' },
-    { key:'sub-batches', label:'🏢 Subcontractor Batches Report (by Production Date)', desc:'Chronological list of all subcontractor-produced batches filtered by production date and subcontractor' },
-    { key:'sub-performance', label:'🏢 Subcontractor & Vendor Performance Scorecard', desc:'Detailed quality, speed, and WIP load scorecard for all subcontractors and process vendors' },
-    { key:'store-aging', label:'⏳ Finished-Goods FIFO Aging Report', desc:'Available stock batches in the Store with FIFO-calculated remaining quantities and age' },
-    { key:'daily-summary', label:'📊 Daily Production & Scrap Summary', desc:'Daily overview of total pieces molded, completed, reprocessed, and scrap rates across all stages' },
-    { key:'analytics', label:'📈 Production & Quality Analytics', desc:'Interactive visual charts showing WIP bottlenecks, daily production yield trends, and top defective parts' },
-    { key:'stock-audit', label:'📊 Stock Audit Discrepancy & Reconciliation', desc:'Monthly physical stock audit variance, exact match rates, and financial discrepancy report' },
-    { key:'audit-missing-batches', label:'🚨 Missing Batches Cross-Session Audit', desc:'Actual missing batches by stage verified against all monthly stock taking sessions' },
-    { key:'cryo-deflash-trim', label:'❄️🔧✂️ 3-Stage Process (Cryo, De-Flash & Trim)', desc:'JMREFs that undergo all three processes: Cryogenic Deflashing, Manual DE Flashing, and Trimming, with live WIP & scrap tracking' },
-    { key:'process-leakage', label:'🔀 JMREF & Mould Process Leakage Report', desc:'Identify JMREFs and Moulds where batches follow inconsistent finishing processes (e.g. Cryo+Trim today vs Cryo+De-Flash+Trim yesterday) to detect process leakage and SOP bypass' }
+  // ── Report Functional Groups ──────────────────────────────
+  const REPORT_GROUPS = [
+    { id:'inv_stock',      label:'Inventory & Stock Management', icon:'📦', color:'#10b981', desc:'Finished goods, live WIP inventory, Store stock valuation, FIFO aging, pending batches, and SLOB analysis' },
+    { id:'prod_ops',       label:'Production & Operations',      icon:'🏭', color:'#3b82f6', desc:'Daily output, cycle times, bottleneck tracking, operator yield, mould lifts, and process routes' },
+    { id:'quality_loss',   label:'Quality, Inspection & Process Loss', icon:'⭐', color:'#f59e0b', desc:'Quality Final evaluations, visual/gauge inspections, reprocess logs, and stage scrap tracking' },
+    { id:'subcontractor',  label:'Subcontractor & Vendor Intelligence', icon:'🏢', color:'#8b5cf6', desc:'Subcontractor vs. in-house comparison, vendor performance scorecards, and pending WIP' },
+    { id:'raw_material',   label:'Raw Material (RM) Tracking',    icon:'🧪', color:'#ec4899', desc:'3-State physical vs under-process stock, subcontractor holding, GRN register, and running ledger' },
+    { id:'stock_audit',    label:'Physical Stock Taking & Audit', icon:'🛡️', color:'#ef4444', desc:'Monthly physical stock count reconciliation, variance tracking, and missing batches cross-audit' },
+    { id:'sales_analytics',label:'Sales & Executive Analytics',   icon:'📈', color:'#06b6d4', desc:'Customer sales dispatches, revenue, and visual analytics dashboards' },
   ];
 
+  // ── Report Configs ─────────────────────────────────────────
+  const REPORTS = [
+    // ── Inventory & Stock Management (8) ──
+    { key:'inventory', module:'report_inventory', group:'inv_stock', label:'📦 Inventory Report', desc:'Current quantity per part at each stage (WIP & Store)' },
+    { key:'store-stock', module:'report_store_stock', group:'inv_stock', label:'🏪 Store Stock Report', desc:'Finished Goods inventory available in Store with batch breakdown and valuation' },
+    { key:'store-aging', module:'report_store_aging', group:'inv_stock', label:'⏳ Finished-Goods FIFO Aging Report', desc:'Available stock batches in the Store with FIFO-calculated remaining quantities and age' },
+    { key:'wip-valuation', module:'report_wip_valuation', group:'inv_stock', label:'💰 WIP Inventory Valuation', desc:'Financial valuation of live inventory based on part sale prices' },
+    { key:'aging', module:'report_aging', group:'inv_stock', label:'⏳ Aging WIP Report (> 1 Week)', desc:'Active batches sitting in the same stage for more than 7 days' },
+    { key:'pending-batches', module:'report_pending_batches', group:'inv_stock', label:'⏳ Pending Batch Report', desc:'Pending batches filtered by stage and timeframe from date Received' },
+    { key:'waiting-visual', module:'report_waiting_visual', group:'inv_stock', label:'⏳ Waiting for Visual Report', desc:'Rack allocation and location details' },
+    { key:'slob', module:'report_slob', group:'inv_stock', label:'📉 SLOB Report', desc:'Slow-moving and Obsolete inventory aging analysis' },
+
+    // ── Production & Operations (7) ──
+    { key:'production', module:'report_production', group:'prod_ops', label:'🏭 Production Report', desc:'Operator-wise and JMREF-wise production output' },
+    { key:'daily-summary', module:'report_daily_summary', group:'prod_ops', label:'📊 Daily Production & Scrap Summary', desc:'Daily overview of total pieces molded, completed, reprocessed, and scrap rates across all stages' },
+    { key:'cycle-time', module:'report_cycle_time', group:'prod_ops', label:'⏳ Production Cycle Time & Bottlenecks', desc:'Average hours/days batches spend at each process stage' },
+    { key:'op-efficiency', module:'report_op_efficiency', group:'prod_ops', label:'👷 Operator & Inspector Efficiency', desc:'Operator-wise and Inspector-wise output, yield, and defect rates' },
+    { key:'mould-lifecycle', module:'report_mould_lifecycle', group:'prod_ops', label:'⚙️ Mould Lifecycle & Performance', desc:'Accumulative lift count, output yield, and maintenance alert status per mould' },
+    { key:'cryo-deflash-trim', module:'report_cryo_deflash_trim', group:'prod_ops', label:'❄️🔧✂️ 3-Stage Process (Cryo, De-Flash & Trim)', desc:'JMREFs that undergo all three processes with live WIP & scrap tracking' },
+    { key:'process-leakage', module:'report_process_leakage', group:'prod_ops', label:'🔀 JMREF & Mould Process Leakage Report', desc:'Identify JMREFs and Moulds where batches follow inconsistent finishing processes to detect SOP bypass' },
+
+    // ── Quality, Inspection & Process Loss (12) ──
+    { key:'quality', module:'report_quality', group:'quality_loss', label:'⭐ Quality Final (QC) Report', desc:'Detailed evaluation outcomes, pass rate, rework history, and scrap loss at Quality Final inspection stage' },
+    { key:'visual', module:'report_visual', group:'quality_loss', label:'👁️ Visual Inspection Report', desc:'Inspector-wise loss and inspection records' },
+    { key:'gauge', module:'report_gauge', group:'quality_loss', label:'📏 Gauge Inspection Report', desc:'Loss during gauge inspection' },
+    { key:'rejected', module:'report_rejected', group:'quality_loss', label:'🚫 Rejected Batch Report', desc:'All batches rejected due to quality issues' },
+    { key:'recheck', module:'report_recheck', group:'quality_loss', label:'🔄 Quality Final Recheck', desc:'Date-wise and operator-wise recheck tracking' },
+    { key:'reprocess', module:'report_reprocess', group:'quality_loss', label:'🔄 Reprocessed Items Report', desc:'Chronological list of all batches and quantities sent for reprocessing' },
+    { key:'qty-loss', module:'report_qty_loss', group:'quality_loss', label:'📉 Whole Batch Loss & Scrap Report', desc:'Cumulative quantity loss and scrap rate per batch from production to completion' },
+    { key:'qty-gain', module:'report_qty_gain', group:'quality_loss', label:'📈 Quantity Gain Report', desc:'Stages where the batch output quantity was greater than the input quantity' },
+    { key:'cryogenic', module:'report_cryogenic', group:'quality_loss', label:'❄️ Cryogenic Loss Report', desc:'Loss during cryogenic processing' },
+    { key:'deflashing', module:'report_deflashing', group:'quality_loss', label:'🔧 DE Flashing Loss Report', desc:'Loss during manual DE flashing' },
+    { key:'trimming', module:'report_trimming', group:'quality_loss', label:'✂️ Trimming Loss Report', desc:'Loss during trimming process' },
+    { key:'post-curing', module:'report_post_curing', group:'quality_loss', label:'🔥 Post Curing Loss Report', desc:'Loss during post curing process' },
+
+    // ── Subcontractor & Vendor Intelligence (4) ──
+    { key:'sub-vs-inhouse', module:'report_sub_vs_inhouse', group:'subcontractor', label:'🏢 Subcontractor vs. In-House Comparison', desc:'Yield, cycle time, and rejection comparison between manufacturing channels' },
+    { key:'sub-pending', module:'report_sub_pending', group:'subcontractor', label:'🏢 Subcontractor Pending Batches', desc:'Batches of subcontractor parts currently in pending/WIP stages other than Store' },
+    { key:'sub-batches', module:'report_sub_batches', group:'subcontractor', label:'🏢 Subcontractor Batches Report (by Production Date)', desc:'Chronological list of all subcontractor-produced batches filtered by production date and subcontractor' },
+    { key:'sub-performance', module:'report_sub_performance', group:'subcontractor', label:'🏢 Subcontractor & Vendor Performance Scorecard', desc:'Detailed quality, speed, and WIP load scorecard for all subcontractors and process vendors' },
+
+    // ── Raw Material (RM) Tracking (5) ──
+    { key:'rm-inventory', module:'report_rm_inventory', group:'raw_material', label:'🧪 RM Inventory & 3-State Stock Tracking', desc:'Live Raw Material inventory status showing Warehouse Balance, Under-Process stock at Subcontractors, and Consumed volume with financial valuation' },
+    { key:'rm-sub-balance', module:'report_rm_sub_balance', group:'raw_material', label:'🏢 Subcontractor RM Balance & Holding Report', desc:'Subcontractor-wise holding of Raw Materials dispatched via Delivery Challans' },
+    { key:'rm-consumption', module:'report_rm_consumption', group:'raw_material', label:'🔥 RM Consumption & Batch Traceability Report', desc:'Batch-wise and JMREF-wise Raw Material consumption analysis during production moulding' },
+    { key:'rm-inward-register', module:'report_rm_inward_register', group:'raw_material', label:'📥 RM GRN Inward & Supplier Receipt Register', desc:'Supplier-wise and shipment-wise raw material inward receipt register with purchase order, invoice, and lot tracking' },
+    { key:'rm-stock-ledger', module:'report_rm_stock_ledger', group:'raw_material', label:'🔄 RM Stock Ledger & Movement Audit Trail', desc:'Item-level chronological transaction ledger tracking every Inward, Outward, and Moulding Consumption' },
+
+    // ── Physical Stock Taking & Audit (2) ──
+    { key:'stock-audit', module:'report_stock_audit', group:'stock_audit', label:'📊 Stock Audit Discrepancy & Reconciliation', desc:'Monthly physical stock audit variance, exact match rates, and financial discrepancy report' },
+    { key:'audit-missing-batches', module:'report_audit_missing', group:'stock_audit', label:'🚨 Missing Batches Cross-Session Audit', desc:'Actual missing batches by stage verified against all monthly stock taking sessions' },
+
+    // ── Sales & Executive Analytics (2) ──
+    { key:'sales', module:'report_sales', group:'sales_analytics', label:'💰 Sales Report', desc:'Sales records with date range filter and customer breakdown' },
+    { key:'analytics', module:'report_analytics', group:'sales_analytics', label:'📈 Production & Quality Analytics', desc:'Interactive visual charts showing WIP bottlenecks, daily production yield trends, and top defective parts' }
+  ];
+
+  // ── In-Page Reports Hub ────────────────────────────────────
+  let hubSearchQuery = '';
+  let hubSelectedGroup = 'all';
+
+  function renderReportsHub() {
+    const el = document.getElementById('content');
+    if (!el) return;
+
+    // Filter reports according to user permissions
+    const permittedReports = REPORTS.filter(r => {
+      if (typeof Auth !== 'undefined' && Auth.isAdmin && Auth.isAdmin()) return true;
+      const navItem = (typeof NAV !== 'undefined' ? NAV : []).find(n => n.module === r.module);
+      if (!navItem) return true;
+      if (!navItem.perm) return true;
+      return typeof Auth !== 'undefined' && Auth.hasPermission ? Auth.hasPermission(navItem.perm) : true;
+    });
+
+    const activeGroups = REPORT_GROUPS.map(grp => {
+      const reports = permittedReports.filter(r => r.group === grp.id);
+      return { ...grp, reports };
+    }).filter(grp => grp.reports.length > 0);
+
+    const totalCount = permittedReports.length;
+
+    el.innerHTML = `
+      <div class="animate-in reports-hub-container">
+        <!-- Hub Header Banner -->
+        <div class="card mb-6" style="background: linear-gradient(135deg, rgba(27,122,67,0.06), rgba(59,130,246,0.06)); border: 1px solid rgba(27,122,67,0.15);">
+          <div class="card-body" style="padding: 24px;">
+            <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div>
+                <div class="flex items-center gap-2 mb-1">
+                  <span style="font-size: 24px;">📊</span>
+                  <h2 class="font-extrabold" style="font-size: 22px; margin: 0; letter-spacing: -0.3px;">Enterprise Reports Hub</h2>
+                  <span class="badge badge-teal" style="font-size: 11px; padding: 3px 8px; font-weight: 700;">${totalCount} Reports Active</span>
+                </div>
+                <p class="text-sm text-muted" style="margin: 0; max-width: 680px;">
+                  Comprehensive operations, inventory, quality, subcontractor, raw material, and audit intelligence organized into 7 functional domains. Search or select any report below to launch.
+                </p>
+              </div>
+              <div class="flex items-center gap-3">
+                <div class="stat-box" style="padding: 8px 16px; background: white; border-radius: 8px; border: 1px solid var(--border); text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+                  <div class="text-xs text-muted font-bold uppercase" style="letter-spacing: 0.5px;">Domains</div>
+                  <div class="font-extrabold text-blue" style="font-size: 18px;">${activeGroups.length}</div>
+                </div>
+                <div class="stat-box" style="padding: 8px 16px; background: white; border-radius: 8px; border: 1px solid var(--border); text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+                  <div class="text-xs text-muted font-bold uppercase" style="letter-spacing: 0.5px;">Data Export</div>
+                  <div class="font-extrabold text-success" style="font-size: 18px;">Excel & CSV</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Search and Filter Bar -->
+            <div class="mt-5 flex flex-col md:flex-row gap-3 items-stretch md:items-center">
+              <div style="position: relative; flex: 1;">
+                <span style="position: absolute; left: 14px; top: 50%; transform: translateY(-50%); font-size: 15px; color: var(--text-muted); pointer-events: none;">🔍</span>
+                <input type="text" id="hub-search-input" class="form-control" placeholder="Search 40 reports by name, stage, RM, mould, scrap, subcontractor, or description..." value="${escapeHtml(hubSearchQuery)}" oninput="ReportsModule.filterReportsHub(this.value)" style="padding-left: 40px; font-size: 13.5px; height: 42px; border-radius: 8px;">
+                ${hubSearchQuery ? `<button class="btn btn-ghost btn-xs" onclick="ReportsModule.filterReportsHub('')" style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); font-size: 13px;">✕</button>` : ''}
+              </div>
+            </div>
+
+            <!-- Category Filter Tabs -->
+            <div class="flex gap-2 mt-4 overflow-x-auto pb-1" style="scrollbar-width: thin;">
+              <button class="btn btn-xs ${hubSelectedGroup === 'all' ? 'btn-teal' : 'btn-secondary'}" onclick="ReportsModule.selectHubCategory('all')" style="font-size: 11.5px; padding: 4px 10px; border-radius: 6px; white-space: nowrap;">
+                All Domains (${totalCount})
+              </button>
+              ${activeGroups.map(grp => `
+                <button class="btn btn-xs ${hubSelectedGroup === grp.id ? 'btn-teal' : 'btn-secondary'}" onclick="ReportsModule.selectHubCategory('${grp.id}')" style="font-size: 11.5px; padding: 4px 10px; border-radius: 6px; white-space: nowrap;">
+                  ${grp.icon} ${grp.label} (${grp.reports.length})
+                </button>
+              `).join('')}
+            </div>
+          </div>
+        </div>
+
+        <!-- Functional Categories Grid -->
+        <div id="hub-groups-container" style="display: flex; flex-direction: column; gap: 24px;">
+          ${renderHubGroupsHtml(activeGroups, hubSearchQuery, hubSelectedGroup)}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderHubGroupsHtml(activeGroups, query, selectedGroup) {
+    const q = (query || '').toLowerCase().trim();
+    const filteredGroups = activeGroups.filter(grp => selectedGroup === 'all' || grp.id === selectedGroup);
+
+    let html = '';
+    let totalMatchedReports = 0;
+
+    filteredGroups.forEach(grp => {
+      const matchedReports = grp.reports.filter(r => {
+        if (!q) return true;
+        return (r.label || '').toLowerCase().includes(q) ||
+               (r.desc || '').toLowerCase().includes(q) ||
+               (r.key || '').toLowerCase().includes(q) ||
+               (r.module || '').toLowerCase().includes(q);
+      });
+
+      if (matchedReports.length === 0) return;
+      totalMatchedReports += matchedReports.length;
+
+      html += `
+        <div class="card" style="border-top: 3px solid ${grp.color};">
+          <div class="card-header" style="background: rgba(0,0,0,0.015); padding: 12px 18px; display: flex; align-items: center; justify-content: space-between;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 20px;">${grp.icon}</span>
+              <div>
+                <h3 style="font-size: 15px; font-weight: 700; margin: 0; color: var(--text-primary);">${grp.label}</h3>
+                <p class="text-xs text-muted" style="margin: 0; line-height: 1.3;">${grp.desc}</p>
+              </div>
+            </div>
+            <span class="badge badge-teal" style="font-size: 11px; padding: 3px 8px; font-weight: 700;">${matchedReports.length} Reports</span>
+          </div>
+          <div class="card-body" style="padding: 16px;">
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px;">
+              ${matchedReports.map(r => `
+                <div class="hub-report-card" onclick="App.navigate('${r.module}')">
+                  <div>
+                    <div class="flex items-center justify-between gap-2 mb-1">
+                      <h4 style="font-size: 13.5px; font-weight: 700; margin: 0; color: var(--text-primary); display: flex; align-items: center; gap: 6px;">
+                        ${r.label}
+                      </h4>
+                      <span class="hub-arrow" style="font-size: 13px; font-weight: bold; color: var(--accent-blue);">➜</span>
+                    </div>
+                    <p style="font-size: 12px; color: var(--text-secondary); margin: 0; line-height: 1.4;">${r.desc}</p>
+                  </div>
+                  <div class="flex items-center justify-between mt-3 pt-2" style="border-top: 1px dashed rgba(0,0,0,0.06);">
+                    <span class="font-mono text-xs text-muted" style="font-size: 11px;">#${r.key}</span>
+                    <span class="text-xs font-semibold text-blue" style="display: flex; align-items: center; gap: 3px;">Launch Report ↗</span>
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        </div>
+      `;
+    });
+
+    if (totalMatchedReports === 0) {
+      return `
+        <div class="card card-body text-center" style="padding: 48px 24px;">
+          <div style="font-size: 36px; margin-bottom: 8px;">🔍</div>
+          <h3 class="font-bold" style="font-size: 16px;">No reports matched your search</h3>
+          <p class="text-sm text-muted mt-1">No report found matching "${escapeHtml(q)}". Try searching by process stage, batch, mould, or raw material.</p>
+          <div class="mt-4">
+            <button class="btn btn-secondary btn-sm" onclick="ReportsModule.filterReportsHub('')">Clear Search Filter</button>
+          </div>
+        </div>
+      `;
+    }
+
+    return html;
+  }
+
+  function filterReportsHub(val) {
+    hubSearchQuery = val || '';
+    const container = document.getElementById('hub-groups-container');
+    if (!container) {
+      renderReportsHub();
+      return;
+    }
+    const permittedReports = REPORTS.filter(r => {
+      if (typeof Auth !== 'undefined' && Auth.isAdmin && Auth.isAdmin()) return true;
+      const navItem = (typeof NAV !== 'undefined' ? NAV : []).find(n => n.module === r.module);
+      if (!navItem) return true;
+      if (!navItem.perm) return true;
+      return typeof Auth !== 'undefined' && Auth.hasPermission ? Auth.hasPermission(navItem.perm) : true;
+    });
+
+    const activeGroups = REPORT_GROUPS.map(grp => {
+      const reports = permittedReports.filter(r => r.group === grp.id);
+      return { ...grp, reports };
+    }).filter(grp => grp.reports.length > 0);
+
+    container.innerHTML = renderHubGroupsHtml(activeGroups, hubSearchQuery, hubSelectedGroup);
+  }
+
+  function selectHubCategory(catId) {
+    hubSelectedGroup = catId;
+    renderReportsHub();
+  }
+
   // ── Render ────────────────────────────────────────────────
-  function render(reportKey = 'inventory') {
+  function render(reportKey = 'hub') {
     const session = Auth.getSession();
     const el = document.getElementById('content');
     if (!el) return;
+
+    if (reportKey === 'hub') {
+      renderReportsHub();
+      return;
+    }
 
     const report = REPORTS.find(r => r.key === reportKey);
     if (!report) return;
@@ -6873,10 +10213,18 @@ const ReportsModule = (() => {
       agingSearch = '';
     }
 
+    const groupInfo = REPORT_GROUPS.find(g => g.id === report.group);
+
     el.innerHTML = `
       <div class="animate-in">
-        <div class="flex items-center justify-between mb-6">
+        <div class="flex items-center justify-between mb-4">
           <div>
+            <div class="flex items-center gap-2 mb-1">
+              <button class="btn btn-ghost btn-xs text-muted no-print" onclick="App.navigate('reports')" style="font-size:12px; padding:3px 8px; border:1px solid var(--border); border-radius:4px; display:inline-flex; align-items:center; gap:4px;">
+                ◀ All Reports Hub
+              </button>
+              ${groupInfo ? `<span class="badge" style="font-size:11px; background:rgba(0,0,0,0.05); color:var(--text-secondary);">${groupInfo.icon} ${groupInfo.label}</span>` : ''}
+            </div>
             <h2 class="font-bold" style="font-size:20px;">${report.label}</h2>
             <p class="text-sm text-muted mt-1">${report.desc}</p>
           </div>
@@ -6921,7 +10269,12 @@ const ReportsModule = (() => {
     restoreSavedFilters(reportKey);
 
     // Restore previously generated report output if available
-    restoreSavedResult(reportKey);
+    const restored = restoreSavedResult(reportKey);
+    if (!restored && ['inventory', 'store-stock', 'rm-inventory', 'rm-sub-balance', 'rm-consumption', 'rm-inward-register', 'rm-stock-ledger'].includes(reportKey)) {
+      setTimeout(() => {
+        document.getElementById('rpt-run-btn')?.click();
+      }, 50);
+    }
 
     document.getElementById('rpt-export-csv')?.addEventListener('click', () => {
       const out = document.getElementById('report-output');
@@ -8501,6 +11854,16 @@ const ReportsModule = (() => {
   window.exportExcel = exportExcel;
   window.applyDatePreset = applyDatePreset;
   window.openDeviatedBatchesModal = openDeviatedBatchesModal;
+  window.openRmBatchesModal = openRmBatchesModal;
+  window.filterRmBatchesModal = filterRmBatchesModal;
+  window.setRmBatchesStageTab = setRmBatchesStageTab;
+  window.exportRmBatchesModalCSV = exportRmBatchesModalCSV;
+  window.closeRmBatchesModal = closeRmBatchesModal;
+  window.openSubconRmBalanceModal = openSubconRmBalanceModal;
+  window.closeSubconRmBalanceModal = closeSubconRmBalanceModal;
+  window.filterSubconRmBalanceModal = filterSubconRmBalanceModal;
+  window.setSubconRmBalanceStatusFilter = setSubconRmBalanceStatusFilter;
+  window.exportSubconRmBalanceCSV = exportSubconRmBalanceCSV;
 
-  return { render, filterAging, showPartBatches, closePartBatches, openDefectiveBatchesModal, filterDeviatedModalBatches, openDailySummaryBatchesModal, filterDailySummaryModalBatches, openDeviatedBatchesModal, filterDeviatedModalBatches, exportDeviatedBatchesCSV, exportCSV, exportExcel, applyDatePreset };
+  return { render, filterReportsHub, selectHubCategory, renderReportsHub, REPORT_GROUPS, REPORTS, filterAging, showPartBatches, closePartBatches, openDefectiveBatchesModal, filterDeviatedModalBatches, openDailySummaryBatchesModal, filterDailySummaryModalBatches, openDeviatedBatchesModal, filterDeviatedModalBatches, exportDeviatedBatchesCSV, exportCSV, exportExcel, applyDatePreset, openRmBatchesModal, filterRmBatchesModal, setRmBatchesStageTab, exportRmBatchesModalCSV, closeRmBatchesModal, openSubconRmBalanceModal, closeSubconRmBalanceModal, filterSubconRmBalanceModal, setSubconRmBalanceStatusFilter, exportSubconRmBalanceCSV };
 })();

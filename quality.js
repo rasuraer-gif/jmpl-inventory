@@ -266,6 +266,21 @@ const QualityModule = (() => {
         }
       }
 
+      const qc = b.qcParams || (qfRec && qfRec.qcParams) || {};
+      const idVal = qc.id_status || (qc.id_d1 != null ? String(qc.id_d1) : null);
+      const profVal = qc.profile != null ? qc.profile : (qc.profile_delta != null ? qc.profile_delta : null);
+      const hasQc = idVal != null || qc.csd_a != null || qc.csd_r != null || profVal != null || qc.shift_offset != null || qc.flash_projection || (qc.visual_defect && qc.visual_defect !== 'OK');
+      const qcCellHtml = hasQc ? `
+        <div style="font-size:11px; line-height:1.45;">
+          ${idVal != null ? `<div><span class="text-muted">ID:</span> <span class="badge ${idVal === 'Ok' || idVal === 'OK' ? 'badge-green' : 'badge-red'}" style="font-size:10px; padding:1px 5px;">${idVal}</span></div>` : ''}
+          ${qc.csd_a != null || qc.csd_r != null ? `<div><span class="text-muted">CSD:</span> A:${qc.csd_a ?? '-'} / R:${qc.csd_r ?? '-'}</div>` : ''}
+          ${profVal != null ? `<div><span class="text-muted">Profile:</span> ${profVal}</div>` : ''}
+          ${qc.shift_offset != null ? `<div><span class="text-muted">Shift:</span> ${qc.shift_offset}</div>` : ''}
+          ${qc.flash_projection ? `<div><span class="text-muted">Flash:</span> ${qc.flash_projection}</div>` : ''}
+          ${qc.visual_defect ? `<div><span class="badge ${qc.visual_defect === 'OK' || qc.visual_defect === 'Ok' ? 'badge-green' : 'badge-amber'}" style="font-size:10px; padding:1px 5px;">${qc.visual_defect}</span></div>` : ''}
+        </div>
+      ` : '<span class="text-muted">—</span>';
+
       return `<tr>
         <td class="font-semibold text-blue">${b.batchNo}</td>
         <td>${b.partNo||'—'}</td>
@@ -273,6 +288,7 @@ const QualityModule = (() => {
         <td class="font-semibold">${formatNum(inputQty)}</td>
         <td class="font-semibold text-success">${formatNum(passedQty)}</td>
         <td class="font-semibold text-danger">${formatNum(lossQty)}</td>
+        <td>${qcCellHtml}</td>
         <td>${b.recheckCount || 0}</td>
         <td>${formatDate(b.completedAt)}</td>
       </tr>`;
@@ -286,9 +302,9 @@ const QualityModule = (() => {
         <div class="table-wrap">
           <table class="data-table">
             <thead>
-              <tr><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Input Qty</th><th>Passed Qty</th><th>Loss at QF</th><th>Rechecks</th><th>Completed At</th></tr>
+              <tr><th>Batch No</th><th>Part No</th><th>JMREF</th><th>Input Qty</th><th>Passed Qty</th><th>Loss at QF</th><th>QC Parameters</th><th>Rechecks</th><th>Completed At</th></tr>
             </thead>
-            <tbody>${rows || '<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-muted);">No completed batches found</td></tr>'}</tbody>
+            <tbody>${rows || '<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--text-muted);">No completed batches found</td></tr>'}</tbody>
           </table>
         </div>
         ${totalPages > 1 ? `
@@ -477,7 +493,110 @@ const QualityModule = (() => {
 
 
   function passModal() {
-    return '<div class="modal-overlay hidden" id="qf-pass-modal"><div class="modal modal-sm"><div class="modal-header"><h3>Pass to Store</h3><button class="modal-close" onclick="document.getElementById(\'qf-pass-modal\').classList.add(\'hidden\')">&#x2715;</button></div><div class="modal-body"><input type="hidden" id="qf-pass-batch-id"><input type="hidden" id="qf-pass-input-qty"><div id="qf-pass-info" style="padding:12px;background:var(--bg-input);border-radius:8px;margin-bottom:16px;"></div><div class="form-group"><label class="form-label">Output Quantity (for Store) <span class="required">*</span></label><input type="number" id="qf-pass-output" class="form-control" min="0" oninput="QualityModule.calcPassLoss()"></div><div class="form-group"><label class="form-label">Loss at Quality Final (Auto)</label><input type="text" id="qf-pass-loss" class="form-control" readonly style="color:var(--accent-red);font-weight:700;"></div><div class="form-group"><label class="form-label">Notes</label><textarea id="qf-pass-notes" class="form-control" rows="2"></textarea></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="document.getElementById(\'qf-pass-modal\').classList.add(\'hidden\')">Cancel</button><button class="btn btn-teal" onclick="QualityModule.passBatch()">Pass to Store</button></div></div></div>';
+    return `
+      <div class="modal-overlay hidden" id="qf-pass-modal">
+        <div class="modal modal-md" style="max-width: 740px;">
+          <div class="modal-header" style="background:var(--bg-glass-hover); border-bottom:1px solid var(--border);">
+            <div>
+              <h3 style="margin:0; font-size:17px; font-weight:700; display:flex; align-items:center; gap:8px;">
+                <span>🔬 Quality Final Inspection &amp; Pass to Store</span>
+              </h3>
+              <p class="text-xs text-muted" style="margin:0; margin-top:2px;">Record final QA dimensional verification &amp; visual release</p>
+            </div>
+            <button class="modal-close" onclick="document.getElementById('qf-pass-modal').classList.add('hidden')">&#x2715;</button>
+          </div>
+          <div class="modal-body" style="padding:20px; max-height:80vh; overflow-y:auto;">
+            <input type="hidden" id="qf-pass-batch-id">
+            <input type="hidden" id="qf-pass-input-qty">
+            
+            <!-- Batch Summary Banner -->
+            <div id="qf-pass-info" style="padding:12px 16px; background:var(--bg-input); border:1px solid var(--border); border-radius:8px; margin-bottom:16px;"></div>
+
+            <!-- QA Dimensional & Visual Inspection Parameters Card -->
+            <div class="card mb-4" style="background:rgba(59, 130, 246, 0.03); border:1.5px solid var(--border); border-radius:10px; padding:16px; margin-bottom:16px;">
+              <div style="font-weight:700; font-size:13px; color:var(--primary); margin-bottom:12px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:6px;">
+                <span style="display:flex; align-items:center; gap:6px;">
+                  <span>📐 Quality Final QA Parameters</span>
+                </span>
+              </div>
+
+              <!-- Row 1: ID, CSD A, CSD R -->
+              <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:12px; margin-bottom:12px;">
+                <div class="form-group mb-0">
+                  <label class="form-label" style="font-size:12px; font-weight:600;">ID</label>
+                  <select id="qf-pass-param-id" class="form-control form-control-sm font-semibold">
+                    <option value="Ok">Ok</option>
+                    <option value="Not Ok">Not Ok</option>
+                  </select>
+                </div>
+                <div class="form-group mb-0">
+                  <label class="form-label" style="font-size:12px; font-weight:600;">CSD A (Axial Thickness) (mm)</label>
+                  <input type="number" step="0.001" id="qf-pass-param-csd-a" class="form-control form-control-sm" placeholder="e.g. 2.50">
+                </div>
+                <div class="form-group mb-0">
+                  <label class="form-label" style="font-size:12px; font-weight:600;">CSD R (Radial Thickness) (mm)</label>
+                  <input type="number" step="0.001" id="qf-pass-param-csd-r" class="form-control form-control-sm" placeholder="e.g. 2.48">
+                </div>
+              </div>
+
+              <!-- Row 2: Profile, Shift (Mould Offset), Flash (ID/OD Projection) -->
+              <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:12px; margin-bottom:12px;">
+                <div class="form-group mb-0">
+                  <label class="form-label" style="font-size:12px; font-weight:600;">Profile (mm)</label>
+                  <input type="number" step="0.001" id="qf-pass-param-profile" class="form-control form-control-sm" placeholder="e.g. 0.02">
+                </div>
+                <div class="form-group mb-0">
+                  <label class="form-label" style="font-size:12px; font-weight:600;">Shift (Mould Offset) (mm)</label>
+                  <input type="number" step="0.001" id="qf-pass-param-shift" class="form-control form-control-sm" placeholder="e.g. 0.02">
+                </div>
+                <div class="form-group mb-0">
+                  <label class="form-label" style="font-size:12px; font-weight:600;">Flash (ID / OD Projection)</label>
+                  <input type="text" id="qf-pass-param-flash" class="form-control form-control-sm" placeholder="e.g. 0.05 mm or OK">
+                </div>
+              </div>
+
+              <!-- Row 3: Visual (Flow / Pit / Trim / Non-fill) -->
+              <div class="form-group mb-0">
+                <label class="form-label" style="font-size:12px; font-weight:600;">Visual (Flow / Pit / Trim / Non-fill)</label>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:6px;">
+                  <input type="text" id="qf-pass-param-visual" class="form-control form-control-sm" value="OK" placeholder="OK or Flow / Pit / Trim / Non-fill" style="flex:1; min-width:180px;">
+                </div>
+                <div style="display:flex; gap:6px; flex-wrap:wrap; font-size:11px;">
+                  <button type="button" class="btn btn-ghost btn-xs text-success" onclick="QualityModule.setVisualParam('qf-pass', 'OK')">✅ OK</button>
+                  <button type="button" class="btn btn-ghost btn-xs text-amber" onclick="QualityModule.toggleVisualDefect('qf-pass', 'Flow')">⚠️ Flow</button>
+                  <button type="button" class="btn btn-ghost btn-xs text-amber" onclick="QualityModule.toggleVisualDefect('qf-pass', 'Pit')">⚠️ Pit</button>
+                  <button type="button" class="btn btn-ghost btn-xs text-amber" onclick="QualityModule.toggleVisualDefect('qf-pass', 'Trim')">⚠️ Trim</button>
+                  <button type="button" class="btn btn-ghost btn-xs text-amber" onclick="QualityModule.toggleVisualDefect('qf-pass', 'Non-fill')">⚠️ Non-fill</button>
+                  <button type="button" class="btn btn-ghost btn-xs text-muted" onclick="QualityModule.setVisualParam('qf-pass', '')">✕ Clear</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Quantity & Store Movement Section -->
+            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:12px; margin-bottom:12px;">
+              <div class="form-group mb-0">
+                <label class="form-label" style="font-weight:700;">Output Quantity (for Store) <span class="required">*</span></label>
+                <input type="number" id="qf-pass-output" class="form-control font-bold" min="0" oninput="QualityModule.calcPassLoss()" style="font-size:15px; color:var(--primary);">
+              </div>
+              <div class="form-group mb-0">
+                <label class="form-label" style="font-weight:700;">Loss at Quality Final (Auto)</label>
+                <input type="text" id="qf-pass-loss" class="form-control font-bold" readonly style="color:var(--accent-red); font-size:15px; background:var(--bg-glass-hover);">
+              </div>
+            </div>
+
+            <div class="form-group mb-0" style="margin-top:12px;">
+              <label class="form-label">Notes / Inspector Remarks</label>
+              <textarea id="qf-pass-notes" class="form-control" rows="2" placeholder="Optional QA notes or observations..."></textarea>
+            </div>
+          </div>
+
+          <div class="modal-footer" style="background:var(--bg-glass-hover); border-top:1px solid var(--border); padding:12px 20px;">
+            <button class="btn btn-secondary" onclick="document.getElementById('qf-pass-modal').classList.add('hidden')">Cancel</button>
+            <button class="btn btn-teal font-bold" onclick="QualityModule.passBatch()">✅ Pass to Store</button>
+          </div>
+        </div>
+      </div>
+    `;
   }
 
   function rejectModal() {
@@ -486,7 +605,139 @@ const QualityModule = (() => {
 
   function recheckModal() {
     const stageOpts = Object.entries(STAGE_LABELS).filter(([k,v]) => k !== 'production').map(([k,v]) => '<option value="' + k + '">' + v + '</option>').join('');
-    return '<div class="modal-overlay hidden" id="qf-recheck-modal"><div class="modal modal-sm"><div class="modal-header"><h3>Send for Recheck</h3><button class="modal-close" onclick="document.getElementById(\'qf-recheck-modal\').classList.add(\'hidden\')">&#x2715;</button></div><div class="modal-body"><input type="hidden" id="qf-rc-batch-id"><input type="hidden" id="qf-rc-input-qty"><div id="qf-rc-info" style="padding:12px;background:var(--bg-input);border-radius:8px;margin-bottom:16px;"></div><div class="form-group"><label class="form-label">Target Stage <span class="required">*</span></label><select id="qf-rc-stage" class="form-control">' + stageOpts + '</select></div><div class="form-group"><label class="form-label">Qty to Send for Recheck <span class="required">*</span></label><input type="number" id="qf-rc-qty" class="form-control" min="1" oninput="QualityModule.calcRecheckLoss()"></div><div class="form-group"><label class="form-label">Loss at Quality Final (Auto)</label><input type="text" id="qf-rc-loss" class="form-control" readonly style="color:var(--accent-red);font-weight:700;"></div><div class="form-group"><label class="form-label">Iteration No</label><input type="text" id="qf-rc-iter" class="form-control" readonly style="opacity:0.7;"></div><div class="form-group"><label class="form-label">Notes</label><textarea id="qf-rc-notes" class="form-control" rows="2"></textarea></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="document.getElementById(\'qf-recheck-modal\').classList.add(\'hidden\')">Cancel</button><button class="btn btn-amber" onclick="QualityModule.sendRecheck()">Send for Recheck</button></div></div></div>';
+    return `
+      <div class="modal-overlay hidden" id="qf-recheck-modal">
+        <div class="modal modal-md" style="max-width: 740px;">
+          <div class="modal-header" style="background:var(--bg-glass-hover); border-bottom:1px solid var(--border);">
+            <div>
+              <h3 style="margin:0; font-size:17px; font-weight:700; display:flex; align-items:center; gap:8px;">
+                <span>🔄 Send Batch for Recheck</span>
+              </h3>
+              <p class="text-xs text-muted" style="margin:0; margin-top:2px;">Route batch back to earlier stage with specific defect parameters</p>
+            </div>
+            <button class="modal-close" onclick="document.getElementById('qf-recheck-modal').classList.add('hidden')">&#x2715;</button>
+          </div>
+          <div class="modal-body" style="padding:20px; max-height:80vh; overflow-y:auto;">
+            <input type="hidden" id="qf-rc-batch-id">
+            <input type="hidden" id="qf-rc-input-qty">
+            
+            <div id="qf-rc-info" style="padding:12px 16px; background:var(--bg-input); border:1px solid var(--border); border-radius:8px; margin-bottom:16px;"></div>
+
+            <!-- Target Stage & Qty -->
+            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:12px; margin-bottom:12px;">
+              <div class="form-group mb-0">
+                <label class="form-label" style="font-weight:700;">Target Stage for Recheck <span class="required">*</span></label>
+                <select id="qf-rc-stage" class="form-control font-semibold">${stageOpts}</select>
+              </div>
+              <div class="form-group mb-0">
+                <label class="form-label" style="font-weight:700;">Qty to Send for Recheck <span class="required">*</span></label>
+                <input type="number" id="qf-rc-qty" class="form-control font-bold" min="1" oninput="QualityModule.calcRecheckLoss()" style="color:var(--warning);">
+              </div>
+            </div>
+
+            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:12px; margin-bottom:16px;">
+              <div class="form-group mb-0">
+                <label class="form-label">Loss at Quality Final (Auto)</label>
+                <input type="text" id="qf-rc-loss" class="form-control font-bold" readonly style="color:var(--accent-red); background:var(--bg-glass-hover);">
+              </div>
+              <div class="form-group mb-0">
+                <label class="form-label">Iteration No</label>
+                <input type="text" id="qf-rc-iter" class="form-control" readonly style="opacity:0.7; font-weight:600;">
+              </div>
+            </div>
+
+            <!-- Observed Defect Parameters Card -->
+            <div class="card mb-4" style="background:rgba(245, 158, 11, 0.04); border:1.5px solid rgba(245, 158, 11, 0.3); border-radius:10px; padding:16px; margin-bottom:16px;">
+              <div style="font-weight:700; font-size:13px; color:var(--warning); margin-bottom:12px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:6px;">
+                <span>⚠️ Observed Dimensional / Visual Defect Parameters</span>
+              </div>
+
+              <!-- Row 1: ID, CSD A, CSD R -->
+              <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:12px; margin-bottom:12px;">
+                <div class="form-group mb-0">
+                  <label class="form-label text-xs">ID</label>
+                  <select id="qf-rc-param-id" class="form-control form-control-sm font-semibold">
+                    <option value="Ok">Ok</option>
+                    <option value="Not Ok">Not Ok</option>
+                  </select>
+                </div>
+                <div class="form-group mb-0">
+                  <label class="form-label text-xs">CSD A (Axial Thickness) (mm)</label>
+                  <input type="number" step="0.001" id="qf-rc-param-csd-a" class="form-control form-control-sm" placeholder="e.g. 2.50">
+                </div>
+                <div class="form-group mb-0">
+                  <label class="form-label text-xs">CSD R (Radial Thickness) (mm)</label>
+                  <input type="number" step="0.001" id="qf-rc-param-csd-r" class="form-control form-control-sm" placeholder="e.g. 2.48">
+                </div>
+              </div>
+
+              <!-- Row 2: Profile, Shift, Flash -->
+              <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:12px; margin-bottom:12px;">
+                <div class="form-group mb-0">
+                  <label class="form-label text-xs">Profile (mm)</label>
+                  <input type="number" step="0.001" id="qf-rc-param-profile" class="form-control form-control-sm" placeholder="e.g. 0.02">
+                </div>
+                <div class="form-group mb-0">
+                  <label class="form-label text-xs">Shift (Mould Offset) (mm)</label>
+                  <input type="number" step="0.001" id="qf-rc-param-shift" class="form-control form-control-sm" placeholder="e.g. 0.02">
+                </div>
+                <div class="form-group mb-0">
+                  <label class="form-label text-xs">Flash (ID / OD Projection)</label>
+                  <input type="text" id="qf-rc-param-flash" class="form-control form-control-sm" placeholder="e.g. 0.15 mm">
+                </div>
+              </div>
+
+              <!-- Row 3: Visual defect -->
+              <div class="form-group mb-0">
+                <label class="form-label text-xs">Visual Defect (Flow / Pit / Trim / Non-fill)</label>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:6px;">
+                  <input type="text" id="qf-rc-param-visual" class="form-control form-control-sm" placeholder="e.g. Trim, Non-fill" style="flex:1; min-width:180px;">
+                </div>
+                <div style="display:flex; gap:6px; flex-wrap:wrap; font-size:11px;">
+                  <button type="button" class="btn btn-ghost btn-xs text-amber" onclick="QualityModule.toggleVisualDefect('qf-rc', 'Flow')">⚠️ Flow</button>
+                  <button type="button" class="btn btn-ghost btn-xs text-amber" onclick="QualityModule.toggleVisualDefect('qf-rc', 'Pit')">⚠️ Pit</button>
+                  <button type="button" class="btn btn-ghost btn-xs text-amber" onclick="QualityModule.toggleVisualDefect('qf-rc', 'Trim')">⚠️ Trim</button>
+                  <button type="button" class="btn btn-ghost btn-xs text-amber" onclick="QualityModule.toggleVisualDefect('qf-rc', 'Non-fill')">⚠️ Non-fill</button>
+                  <button type="button" class="btn btn-ghost btn-xs text-muted" onclick="QualityModule.setVisualParam('qf-rc', '')">✕ Clear</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-group mb-0">
+              <label class="form-label">Notes / Recheck Instructions</label>
+              <textarea id="qf-rc-notes" class="form-control" rows="2" placeholder="Specify rework instructions or defect details..."></textarea>
+            </div>
+          </div>
+          <div class="modal-footer" style="background:var(--bg-glass-hover); border-top:1px solid var(--border); padding:12px 20px;">
+            <button class="btn btn-secondary" onclick="document.getElementById('qf-recheck-modal').classList.add('hidden')">Cancel</button>
+            <button class="btn btn-amber font-bold" onclick="QualityModule.sendRecheck()">🔄 Send for Recheck</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function setVisualParam(prefix, val) {
+    const inp = document.getElementById(`${prefix}-param-visual`);
+    if (inp) inp.value = val;
+  }
+
+  function toggleVisualDefect(prefix, defect) {
+    const inp = document.getElementById(`${prefix}-param-visual`);
+    if (!inp) return;
+    let cur = inp.value.trim();
+    if (!cur || cur === 'OK') {
+      inp.value = defect;
+      return;
+    }
+    const parts = cur.split(',').map(s => s.trim()).filter(Boolean);
+    const idx = parts.indexOf(defect);
+    if (idx !== -1) {
+      parts.splice(idx, 1);
+    } else {
+      parts.push(defect);
+    }
+    inp.value = parts.length ? parts.join(', ') : 'OK';
   }
 
   let _passInputQty = 0, _rcInputQty = 0;
@@ -496,10 +747,33 @@ const QualityModule = (() => {
     const b = DB.Batches.find(batchId)||{};
     document.getElementById('qf-pass-batch-id').value = batchId;
     document.getElementById('qf-pass-input-qty').value = inputQty;
-    document.getElementById('qf-pass-info').innerHTML = '<strong>' + b.batchNo + '</strong> &#x2014; ' + b.jmrefNo + '<br><span class="text-muted text-sm">Input Qty: <strong>' + formatNum(inputQty) + '</strong></span>';
+    document.getElementById('qf-pass-info').innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+        <div>
+          <span style="font-size:15px; font-weight:800; color:var(--primary);">${b.batchNo}</span>
+          <span class="badge badge-teal" style="margin-left:8px;">${b.jmrefNo || '—'}</span>
+          <div class="text-xs text-muted mt-1">Part: <strong>${b.partNo || '—'}</strong> ${b.description ? `• ${b.description}` : ''}</div>
+        </div>
+        <div style="text-align:right;">
+          <div class="text-xs text-muted">Input Qty from Previous Stage</div>
+          <div style="font-size:16px; font-weight:800; color:var(--text);">${formatNum(inputQty)} pcs</div>
+        </div>
+      </div>
+    `;
     document.getElementById('qf-pass-output').value = inputQty;
     document.getElementById('qf-pass-loss').value = '0';
     document.getElementById('qf-pass-notes').value = '';
+
+    const qc = b.qcParams || {};
+    const idVal = qc.id_status || (qc.id_d1 != null ? String(qc.id_d1) : 'Ok');
+    document.getElementById('qf-pass-param-id').value = (idVal === 'Not Ok' || idVal === 'NOT OK' || idVal === 'not ok') ? 'Not Ok' : 'Ok';
+    document.getElementById('qf-pass-param-csd-a').value = qc.csd_a != null ? qc.csd_a : '';
+    document.getElementById('qf-pass-param-csd-r').value = qc.csd_r != null ? qc.csd_r : '';
+    document.getElementById('qf-pass-param-profile').value = qc.profile != null ? qc.profile : (qc.profile_delta != null ? qc.profile_delta : '');
+    document.getElementById('qf-pass-param-shift').value = qc.shift_offset != null ? qc.shift_offset : '';
+    document.getElementById('qf-pass-param-flash').value = qc.flash_projection || '';
+    document.getElementById('qf-pass-param-visual').value = qc.visual_defect || 'OK';
+
     document.getElementById('qf-pass-modal').classList.remove('hidden');
   }
 
@@ -528,16 +802,95 @@ const QualityModule = (() => {
           showLossWarning(); return;
         }
       }
+
+      // Gather Quality Final Parameters
+      const paramId = (document.getElementById('qf-pass-param-id')?.value || 'Ok').trim();
+      const paramCsdA = (document.getElementById('qf-pass-param-csd-a')?.value || '').trim();
+      const paramCsdR = (document.getElementById('qf-pass-param-csd-r')?.value || '').trim();
+      const paramProfile = (document.getElementById('qf-pass-param-profile')?.value || '').trim();
+      const paramShift = (document.getElementById('qf-pass-param-shift')?.value || '').trim();
+      const paramFlash = (document.getElementById('qf-pass-param-flash')?.value || '').trim();
+      const paramVisual = (document.getElementById('qf-pass-param-visual')?.value || '').trim() || 'OK';
+
       const session = Auth.getSession();
       const batch = DB.Batches.find(batchId);
       const dateStr = new Date().toISOString().slice(0,10);
       const nowStr = new Date().toISOString();
-      DB.StageRecords.insert({ batchId, stage:'quality', inputQty:_passInputQty, outputQty, lossQty, movedTo:'store', movedFrom:'quality', date:dateStr, recordedBy:session&&session.userId, notes:document.getElementById('qf-pass-notes').value });
-      if (lossQty > 0) DB.LossTracker.insert({ batchId, stage:'quality', lossQty, date:dateStr, jmrefNo:batch&&batch.jmrefNo, partNo:batch&&batch.partNo });
-      DB.StageRecords.insert({ batchId, stage:'store', inputQty:outputQty, outputQty:0, lossQty:0, movedFrom:'quality', date:dateStr, recordedBy:session&&session.userId });
-      DB.Batches.update(batchId, { status:'completed', currentStage:'store', completedAt:nowStr, remainingQty: outputQty });
+      const inspectorName = session?.name || session?.username || 'QC Inspector';
+
+      const profileParsed = paramProfile !== '' ? (!isNaN(parseFloat(paramProfile)) ? parseFloat(paramProfile) : paramProfile) : null;
+
+      const qcParams = {
+        id_status: paramId,
+        id_d1: paramId,
+        csd_a: paramCsdA !== '' ? parseFloat(paramCsdA) : null,
+        csd_r: paramCsdR !== '' ? parseFloat(paramCsdR) : null,
+        profile: profileParsed,
+        profile_delta: profileParsed,
+        shift_offset: paramShift !== '' ? parseFloat(paramShift) : null,
+        flash_projection: paramFlash || null,
+        visual_defect: paramVisual || 'OK',
+        inspectedAt: nowStr,
+        inspectorName
+      };
+
+      DB.StageRecords.insert({
+        batchId,
+        stage: 'quality',
+        inputQty: _passInputQty,
+        outputQty,
+        lossQty,
+        movedTo: 'store',
+        movedFrom: 'quality',
+        date: dateStr,
+        recordedBy: session && session.userId,
+        recordedByName: inspectorName,
+        inspectorName,
+        notes: document.getElementById('qf-pass-notes').value,
+        qcParams,
+        id_d1: qcParams.id_d1,
+        csd_a: qcParams.csd_a,
+        csd_r: qcParams.csd_r,
+        profile: qcParams.profile,
+        profile_delta: qcParams.profile_delta,
+        shift_offset: qcParams.shift_offset,
+        flash_projection: qcParams.flash_projection,
+        visual_defect: qcParams.visual_defect
+      });
+
+      if (lossQty > 0) {
+        DB.LossTracker.insert({
+          batchId,
+          stage: 'quality',
+          lossQty,
+          date: dateStr,
+          jmrefNo: batch && batch.jmrefNo,
+          partNo: batch && batch.partNo
+        });
+      }
+
+      DB.StageRecords.insert({
+        batchId,
+        stage: 'store',
+        inputQty: outputQty,
+        outputQty: 0,
+        lossQty: 0,
+        movedFrom: 'quality',
+        date: dateStr,
+        recordedBy: session && session.userId,
+        recordedByName: inspectorName
+      });
+
+      DB.Batches.update(batchId, {
+        status: 'completed',
+        currentStage: 'store',
+        completedAt: nowStr,
+        remainingQty: outputQty,
+        qcParams
+      });
+
       document.getElementById('qf-pass-modal').classList.add('hidden');
-      showToast('Batch passed to Store! Batch completed.', 'success');
+      showToast('Batch passed to Store! Quality Final inspection saved.', 'success');
       App.navigate(App.current);
     } catch (err) {
       console.error("QC Final pass error:", err);
@@ -580,11 +933,34 @@ const QualityModule = (() => {
     const iterNo = DB.RecheckTracker.nextIterationNo(batchId);
     document.getElementById('qf-rc-batch-id').value = batchId;
     document.getElementById('qf-rc-input-qty').value = inputQty;
-    document.getElementById('qf-rc-info').innerHTML = '<strong>' + b.batchNo + '</strong> &#x2014; ' + b.jmrefNo + '<br><span class="text-muted text-sm">Qty at QF: <strong>' + formatNum(inputQty) + '</strong> | Current Rechecks: ' + (b.recheckCount||0) + '</span>';
+    document.getElementById('qf-rc-info').innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+        <div>
+          <span style="font-size:15px; font-weight:800; color:var(--primary);">${b.batchNo}</span>
+          <span class="badge badge-teal" style="margin-left:8px;">${b.jmrefNo || '—'}</span>
+          <div class="text-xs text-muted mt-1">Part: <strong>${b.partNo || '—'}</strong> | Current Rechecks: <strong>${b.recheckCount || 0}</strong></div>
+        </div>
+        <div style="text-align:right;">
+          <div class="text-xs text-muted">Qty at Quality Final</div>
+          <div style="font-size:16px; font-weight:800; color:var(--text);">${formatNum(inputQty)} pcs</div>
+        </div>
+      </div>
+    `;
     document.getElementById('qf-rc-qty').value = '';
     document.getElementById('qf-rc-loss').value = '';
     document.getElementById('qf-rc-iter').value = 'Recheck #' + iterNo;
     document.getElementById('qf-rc-notes').value = '';
+
+    const qc = b.qcParams || {};
+    const idVal = qc.id_status || (qc.id_d1 != null ? String(qc.id_d1) : 'Ok');
+    document.getElementById('qf-rc-param-id').value = (idVal === 'Not Ok' || idVal === 'NOT OK' || idVal === 'not ok') ? 'Not Ok' : 'Ok';
+    document.getElementById('qf-rc-param-csd-a').value = qc.csd_a != null ? qc.csd_a : '';
+    document.getElementById('qf-rc-param-csd-r').value = qc.csd_r != null ? qc.csd_r : '';
+    document.getElementById('qf-rc-param-profile').value = qc.profile != null ? qc.profile : (qc.profile_delta != null ? qc.profile_delta : '');
+    document.getElementById('qf-rc-param-shift').value = qc.shift_offset != null ? qc.shift_offset : '';
+    document.getElementById('qf-rc-param-flash').value = qc.flash_projection || '';
+    document.getElementById('qf-rc-param-visual').value = qc.visual_defect || '';
+
     document.getElementById('qf-recheck-modal').classList.remove('hidden');
   }
 
@@ -614,14 +990,98 @@ const QualityModule = (() => {
           showLossWarning(); return;
         }
       }
+
+      // Gather QA inspection parameters for Recheck
+      const paramId = (document.getElementById('qf-rc-param-id')?.value || 'Ok').trim();
+      const paramCsdA = (document.getElementById('qf-rc-param-csd-a')?.value || '').trim();
+      const paramCsdR = (document.getElementById('qf-rc-param-csd-r')?.value || '').trim();
+      const paramProfile = (document.getElementById('qf-rc-param-profile')?.value || '').trim();
+      const paramShift = (document.getElementById('qf-rc-param-shift')?.value || '').trim();
+      const paramFlash = (document.getElementById('qf-rc-param-flash')?.value || '').trim();
+      const paramVisual = (document.getElementById('qf-rc-param-visual')?.value || '').trim();
+
       const iterNo = DB.RecheckTracker.nextIterationNo(batchId);
       const session = Auth.getSession();
       const batch = DB.Batches.find(batchId);
       const dateStr = new Date().toISOString().slice(0,10);
-      DB.RecheckTracker.insert({ batchId, fromStage:'quality', toStage, qty:recheckQty, recheckNo:iterNo, date:dateStr, lossQty, recordedBy:session&&session.userId, notes:document.getElementById('qf-rc-notes').value });
-      if (lossQty > 0) DB.LossTracker.insert({ batchId, stage:'quality', lossQty, date:dateStr, jmrefNo:batch&&batch.jmrefNo, partNo:batch&&batch.partNo, iterationNo:iterNo });
-      DB.StageRecords.insert({ batchId, stage:'quality', inputQty:_rcInputQty, outputQty:0, recheckQty, lossQty, movedTo:toStage, movedFrom:'quality', date:dateStr, isRecheck:true, recheckNo:iterNo, recordedBy:session&&session.userId });
-      DB.Batches.update(batchId, { currentStage:toStage, recheckCount:(batch&&batch.recheckCount||0)+1, recheckIteration:iterNo });
+      const inspectorName = session?.name || session?.username || 'QC Inspector';
+
+      const profileParsed = paramProfile !== '' ? (!isNaN(parseFloat(paramProfile)) ? parseFloat(paramProfile) : paramProfile) : null;
+
+      const qcParams = {
+        id_status: paramId,
+        id_d1: paramId,
+        csd_a: paramCsdA !== '' ? parseFloat(paramCsdA) : null,
+        csd_r: paramCsdR !== '' ? parseFloat(paramCsdR) : null,
+        profile: profileParsed,
+        profile_delta: profileParsed,
+        shift_offset: paramShift !== '' ? parseFloat(paramShift) : null,
+        flash_projection: paramFlash || null,
+        visual_defect: paramVisual || null,
+        inspectedAt: dateStr,
+        inspectorName
+      };
+
+      DB.RecheckTracker.insert({
+        batchId,
+        fromStage: 'quality',
+        toStage,
+        qty: recheckQty,
+        recheckNo: iterNo,
+        date: dateStr,
+        lossQty,
+        recordedBy: session && session.userId,
+        recordedByName: inspectorName,
+        notes: document.getElementById('qf-rc-notes').value,
+        qcParams
+      });
+
+      if (lossQty > 0) {
+        DB.LossTracker.insert({
+          batchId,
+          stage: 'quality',
+          lossQty,
+          date: dateStr,
+          jmrefNo: batch && batch.jmrefNo,
+          partNo: batch && batch.partNo,
+          iterationNo: iterNo
+        });
+      }
+
+      DB.StageRecords.insert({
+        batchId,
+        stage: 'quality',
+        inputQty: _rcInputQty,
+        outputQty: 0,
+        recheckQty,
+        lossQty,
+        movedTo: toStage,
+        movedFrom: 'quality',
+        date: dateStr,
+        isRecheck: true,
+        recheckNo: iterNo,
+        recordedBy: session && session.userId,
+        recordedByName: inspectorName,
+        inspectorName,
+        notes: document.getElementById('qf-rc-notes').value,
+        qcParams,
+        id_d1: qcParams.id_d1,
+        csd_a: qcParams.csd_a,
+        csd_r: qcParams.csd_r,
+        profile: qcParams.profile,
+        profile_delta: qcParams.profile_delta,
+        shift_offset: qcParams.shift_offset,
+        flash_projection: qcParams.flash_projection,
+        visual_defect: qcParams.visual_defect
+      });
+
+      DB.Batches.update(batchId, {
+        currentStage: toStage,
+        recheckCount: (batch && batch.recheckCount || 0) + 1,
+        recheckIteration: iterNo,
+        qcParams
+      });
+
       document.getElementById('qf-recheck-modal').classList.add('hidden');
       showToast('Batch sent for recheck #' + iterNo + ' to ' + (STAGE_LABELS[toStage]||toStage), 'success');
       App.navigate(App.current);
@@ -671,7 +1131,7 @@ const QualityModule = (() => {
     }
   }
 
-  return { render, openPass, calcPassLoss, passBatch, openReject, rejectBatch, openRecheck, calcRecheckLoss, sendRecheck, filterRechecks, filterRejects, filterPending, changePage };
+  return { render, openPass, calcPassLoss, setVisualParam, toggleVisualDefect, passBatch, openReject, rejectBatch, openRecheck, calcRecheckLoss, sendRecheck, filterRechecks, filterRejects, filterPending, changePage };
 })();
 window.QualityModule = QualityModule;
 

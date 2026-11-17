@@ -23,15 +23,64 @@ const DB = (() => {
   // Returns true if a string looks like a SHA-256 hex hash (64 lowercase hex chars)
   function isHashedPw(v) { return typeof v === 'string' && /^[0-9a-f]{64}$/.test(v); }
 
+  // Strict Production Database Guard: Blocks test/mock/dummy data from ever entering Firestore or local cache
+  function isTestEntity(record, table) {
+    if (!record || typeof record !== 'object') return false;
+
+    const batchNo = String(record.batchNo || '').trim().toUpperCase();
+    if (batchNo) {
+      if (batchNo === '7132A-6TEST-16-D-S-1' || batchNo === '7002-TESTBATCH-22-D-I-1') return true;
+      if (batchNo.startsWith('01TEST') || batchNo.startsWith('BATCH-TEST') || batchNo.startsWith('TEST-') || batchNo.startsWith('TEST_')) return true;
+      if (batchNo.includes('TESTBATCH') || batchNo.includes('-TEST-') || batchNo.includes('_TEST_') || batchNo.includes('6TEST')) return true;
+      if (batchNo === 'TEST' || batchNo === 'DUMMY' || batchNo === 'MOCK') return true;
+    }
+
+    const jmrefNo = String(record.jmrefNo || '').trim().toUpperCase();
+    if (jmrefNo === '01TEST' || jmrefNo === 'JMREF-101' || jmrefNo === 'TEST' || jmrefNo.startsWith('TEST-') || jmrefNo.endsWith('-TEST')) return true;
+
+    const partNo = String(record.partNo || '').trim().toUpperCase();
+    if (partNo === 'TEST' || partNo === '01TEST' || partNo === 'DUMMY' || partNo === 'MOCK' || partNo.startsWith('TEST-') || partNo.endsWith('-TEST')) return true;
+
+    const rmCode = String(record.code || record.sourceRmCode || '').trim().toUpperCase();
+    if (rmCode === 'RM-TEST-001' || rmCode === 'TEST' || rmCode.startsWith('RM-TEST') || rmCode.startsWith('TEST-')) return true;
+
+    const dcNo = String(record.dcNo || record.sourceRmDcNo || '').trim().toUpperCase();
+    if (dcNo === 'DC-TEST-999' || dcNo.startsWith('DC-TEST') || dcNo.includes('-TEST-') || dcNo.endsWith('-TEST')) return true;
+
+    const mouldId = String(record.mouldId || record.uniqueMouldId || '').trim().toUpperCase();
+    if (mouldId.startsWith('01TEST') || mouldId.includes('01TEST-') || mouldId.startsWith('TEST-') || mouldId.endsWith('-TEST')) return true;
+
+    const trNo = String(record.trNo || '').trim().toUpperCase();
+    if (trNo === 'TESTBATCH' || trNo.startsWith('TEST-') || trNo === 'TEST') return true;
+
+    const id = String(record.id || '').trim().toLowerCase();
+    if (id.startsWith('test-') || id === 'test') return true;
+
+    if (table === 'tasks') {
+      const title = String(record.title || '').trim().toLowerCase();
+      if (title === 'test' && record.status === 'cancelled') return true;
+    }
+
+    if (Array.isArray(record.batches)) {
+      for (const b of record.batches) {
+        if (b && typeof b === 'object' && isTestEntity(b, 'batches')) return true;
+      }
+    }
+
+    return false;
+  }
+
   let db = null;
   let isInitialized = false;
   let syncStateListener = null;
   let dataChangeListener = null;
   let refreshTimeout = null;
   let _connectionHealthy = true;
+  let _consecutiveFailures = 0;
   let _isReconnecting = false;
   let _lastActiveTime = Date.now();
   let _reconnectDebounce = null;
+  let recheckAllListeners = null;
 
   function onSyncStateChange(callback) {
     syncStateListener = callback;
@@ -57,10 +106,11 @@ const DB = (() => {
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
       return false;
     }
-    if (!_connectionHealthy) {
+    if (!db) {
       return false;
     }
-    if (!db) {
+    // Only report offline if multiple consecutive network probes have explicitly failed
+    if (!_connectionHealthy && _consecutiveFailures >= 2) {
       return false;
     }
     return true;
@@ -86,36 +136,119 @@ const DB = (() => {
     }
   }
 
+  // Zero-Cost Cloud & Network Reachability Probe (0 Firestore Document Reads)
+  // Keeps router NAT sessions warm and verifies connectivity to Google/Firebase servers
+  async function pingCloud(timeoutMs = 4000) {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      if (_connectionHealthy) {
+        _connectionHealthy = false;
+        triggerSyncStateChange('connection', true);
+      }
+      return false;
+    }
+
+    try {
+      // 1. Ultra-fast, zero-quota HTTP ping to Google CDN (0 Firestore document reads)
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+      
+      await fetch('https://www.gstatic.com/generate_204', {
+        method: 'HEAD',
+        mode: 'no-cors',
+        cache: 'no-store',
+        signal: controller ? controller.signal : undefined
+      });
+      if (timeoutId) clearTimeout(timeoutId);
+
+      if (!_connectionHealthy) {
+        _connectionHealthy = true;
+        _consecutiveFailures = 0;
+        triggerSyncStateChange('connection', false);
+      } else {
+        _consecutiveFailures = 0;
+      }
+      return true;
+    } catch (err) {
+      // Secondary zero-cost check to Google Firestore gateway
+      try {
+        await fetch('https://firestore.googleapis.com', { method: 'HEAD', mode: 'no-cors', cache: 'no-store' });
+        if (!_connectionHealthy) {
+          _connectionHealthy = true;
+          _consecutiveFailures = 0;
+          triggerSyncStateChange('connection', false);
+        } else {
+          _consecutiveFailures = 0;
+        }
+        return true;
+      } catch (err2) {
+        _consecutiveFailures++;
+        if (_consecutiveFailures >= 2) {
+          if (_connectionHealthy) {
+            _connectionHealthy = false;
+            triggerSyncStateChange('connection', true);
+          }
+          if (db) {
+            try { db.enableNetwork(); } catch (e) {}
+          }
+        }
+        return false;
+      }
+    }
+  }
+
   async function reconnect(silent = false) {
     if (!db || _isReconnecting) return;
     _isReconnecting = true;
-    _connectionHealthy = false;
-    triggerSyncStateChange('connection', true);
     if (!silent && typeof showToast === 'function') {
-      showToast('Syncing with Online DB...', 'info');
+      showToast('Checking Cloud Connection...', 'info');
     }
     try {
-      await db.disableNetwork();
-      await new Promise(r => setTimeout(r, 200));
+      // Idempotently wake network channel without tearing down active listener sockets
       await db.enableNetwork();
-      _connectionHealthy = true;
-      triggerSyncStateChange('connection', false);
-      // Force refresh master reference data on explicit reconnect/sync
-      await refreshMasterData();
-      if (!silent && typeof showToast === 'function') {
-        const count = cache.master ? cache.master.length : 0;
-        showToast(`Online DB synced successfully! (${count} parts loaded) ✅`, 'success');
+      const isHealthy = await pingCloud(5000);
+
+      if (isHealthy) {
+        _connectionHealthy = true;
+        _consecutiveFailures = 0;
+        triggerSyncStateChange('connection', false);
+        if (typeof recheckAllListeners === 'function') recheckAllListeners();
+        // Check master reference data without forcing fresh DB reads if already cached (< 4 hours)
+        await syncMasterDataIfStale(false);
+        if (!silent && typeof showToast === 'function') {
+          const count = cache.master ? cache.master.length : 0;
+          showToast(`Cloud Online & Verified! (${count} parts) ✅`, 'success');
+        }
+        console.log(`[DB] Cloud Firestore connection verified and Master cache verified (${cache.master?.length} parts).`);
+      } else {
+        // Deep reset: cycle network stack only if genuine disconnect occurred
+        await db.disableNetwork();
+        await new Promise(r => setTimeout(r, 250));
+        await db.enableNetwork();
+        const retryOk = await pingCloud(7000);
+        _connectionHealthy = retryOk;
+        _consecutiveFailures = retryOk ? 0 : _consecutiveFailures + 1;
+        triggerSyncStateChange('connection', !retryOk);
+
+        if (retryOk) {
+          if (typeof recheckAllListeners === 'function') recheckAllListeners();
+          await syncMasterDataIfStale(false);
+          if (!silent && typeof showToast === 'function') {
+            showToast('Cloud connection restored successfully! ✅', 'success');
+          }
+        } else {
+          if (!silent && typeof showToast === 'function') {
+            showToast('Cloud server unreachable. Check internet connection.', 'warning');
+          }
+        }
       }
-      console.log(`[DB] Cloud Firestore connection and Master data synced successfully (${cache.master?.length} parts).`);
     } catch (err) {
-      console.warn("[DB] Reconnect error:", err);
-      _connectionHealthy = false;
-      triggerSyncStateChange('connection', true);
+      console.warn("[DB] Reconnect notice:", err);
       if (!silent && typeof showToast === 'function') {
-        showToast('Online sync warning: ' + err.message, 'warning');
+        showToast('Connection check notice: ' + (err.message || 'Offline'), 'warning');
       }
     } finally {
       _isReconnecting = false;
+      triggerSyncStateChange('connection', !_connectionHealthy);
     }
   }
 
@@ -129,8 +262,14 @@ const DB = (() => {
 
   function handleUserResumed() {
     _lastActiveTime = Date.now();
-    // Firestore's built-in web socket handles reconnecting with zero overhead.
-    // Do NOT drop and rebuild network connection on idle resume.
+    if (db && (typeof navigator === 'undefined' || navigator.onLine !== false)) {
+      try { db.enableNetwork(); } catch (e) {}
+      pingCloud(4000).then(ok => {
+        if (ok && typeof recheckAllListeners === 'function') {
+          recheckAllListeners();
+        }
+      }).catch(() => {});
+    }
   }
 
   if (typeof window !== 'undefined') {
@@ -144,21 +283,13 @@ const DB = (() => {
       }, { passive: true });
     });
 
-    // Background Keep-Alive Heartbeat: Ping Firestore every 2.5 minutes to prevent NAT router TCP timeouts
+    // Background Keep-Alive Heartbeat: Ping Firestore every 30 seconds (well within NAT 60s window)
+    // Prevents router TCP timeouts and immediately self-heals any dropped cloud connection
     setInterval(() => {
-      if (db && navigator.onLine) {
-        db.collection('users').doc('user-admin-default').get({ source: 'server' })
-          .then(() => {
-            if (!_connectionHealthy) {
-              _connectionHealthy = true;
-              triggerSyncStateChange('connection', false);
-            }
-          })
-          .catch(err => {
-            console.warn("[DB] Heartbeat ping notice:", err.message);
-          });
+      if (db && (typeof navigator === 'undefined' || navigator.onLine !== false)) {
+        pingCloud(4000).catch(() => {});
       }
-    }, 2.5 * 60 * 1000);
+    }, 30 * 1000);
   }
 
   // In-memory cache for all collections
@@ -186,6 +317,8 @@ const DB = (() => {
     auditSessions: [],
     auditRecords: [],
     deliveryChallans: [],
+    grnRecords: [],
+    rawMaterials: [],
     printHistory: [],
     auditLogs: []
   };
@@ -243,7 +376,7 @@ const DB = (() => {
         if (b.internalBatchNo != null) {
           batchesByNoIndex.set(String(b.internalBatchNo).trim(), b);
         }
-        if (b.status === 'active' && !isRec && !b.isArchived) {
+        if (b.status === 'active' && !isRec && !b.isArchived && b.status !== 'missing') {
           activeBatchesMap.set(b.id, b);
           if (b.currentStage) {
             let stageList = batchesByStageIndex.get(b.currentStage);
@@ -329,8 +462,15 @@ const DB = (() => {
         const data = localStorage.getItem(PREFIX + key);
         if (data) {
           let parsed = JSON.parse(data);
-          if (key === 'batches' && Array.isArray(parsed)) {
-            const filtered = parsed.filter(b => !(b.batchNo && (b.batchNo.includes('-REC-') || b.batchNo.includes('REC'))));
+          if (Array.isArray(parsed)) {
+            const filtered = parsed.filter(item => {
+              if (!item) return false;
+              if (key === 'batches') {
+                const bNo = String(item.batchNo || '');
+                if (bNo.includes('-REC-') || bNo.includes('REC')) return false;
+              }
+              return !isTestEntity(item, key);
+            });
             if (filtered.length !== parsed.length) {
               parsed = filtered;
               localStorage.setItem(PREFIX + key, JSON.stringify(parsed));
@@ -529,17 +669,50 @@ const DB = (() => {
           saveLocal('mouldMaintenance');
         }
         triggerDataChange('moulds');
-      } else if (moduleId === 'delivery-challan') {
-        _loadedModules.add(moduleId);
-        const snap = await db.collection('deliveryChallans').get().catch(err => {
-          console.warn("[DB] deliveryChallans fetch error:", err);
-          return null;
-        });
-        if (snap && snap.docs && snap.docs.length > 0) {
-          cache.deliveryChallans = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      } else if (moduleId === 'delivery-challan' || moduleId === 'dc-jobwork' || moduleId === 'dc-rm-processing') {
+        _loadedModules.add('delivery-challan');
+        _loadedModules.add('dc-jobwork');
+        _loadedModules.add('dc-rm-processing');
+        const [dcSnap, rmSnap, grnSnap] = await Promise.all([
+          db.collection('deliveryChallans').get().catch(err => { console.warn("[DB] deliveryChallans fetch error:", err); return null; }),
+          db.collection('rawMaterials').get().catch(err => { console.warn("[DB] rawMaterials fetch error:", err); return null; }),
+          db.collection('grnRecords').get().catch(err => { console.warn("[DB] grnRecords fetch error:", err); return null; })
+        ]);
+        if (dcSnap && dcSnap.docs && dcSnap.docs.length > 0) {
+          cache.deliveryChallans = dcSnap.docs.map(d => ({ id: d.id, ...d.data() }));
           rebuildIndexesForTable('deliveryChallans');
           saveLocal('deliveryChallans');
           triggerDataChange('deliveryChallans');
+        }
+        if (rmSnap && rmSnap.docs && rmSnap.docs.length > 0) {
+          cache.rawMaterials = rmSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+          rebuildIndexesForTable('rawMaterials');
+          saveLocal('rawMaterials');
+          triggerDataChange('rawMaterials');
+        }
+        if (grnSnap && grnSnap.docs && grnSnap.docs.length > 0) {
+          cache.grnRecords = grnSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+          rebuildIndexesForTable('grnRecords');
+          saveLocal('grnRecords');
+          triggerDataChange('grnRecords');
+        }
+      } else if (moduleId === 'raw-material' || moduleId === 'rm-master') {
+        _loadedModules.add(moduleId);
+        const [grnSnap, rmSnap] = await Promise.all([
+          db.collection('grnRecords').get().catch(err => { console.warn("[DB] grnRecords fetch error:", err); return null; }),
+          db.collection('rawMaterials').get().catch(err => { console.warn("[DB] rawMaterials fetch error:", err); return null; })
+        ]);
+        if (grnSnap && grnSnap.docs && grnSnap.docs.length > 0) {
+          cache.grnRecords = grnSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+          rebuildIndexesForTable('grnRecords');
+          saveLocal('grnRecords');
+          triggerDataChange('grnRecords');
+        }
+        if (rmSnap && rmSnap.docs && rmSnap.docs.length > 0) {
+          cache.rawMaterials = rmSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+          rebuildIndexesForTable('rawMaterials');
+          saveLocal('rawMaterials');
+          triggerDataChange('rawMaterials');
         }
       } else if (moduleId === 'monthly-plan') {
         _loadedModules.add(moduleId);
@@ -672,13 +845,9 @@ const DB = (() => {
       const CORE_REALTIME_TABLES = ['batches', 'stageRecords', 'lossTracker', 'productionRecords', 'sales', 'rejectionTracker', 'recheckTracker'];
       
       const now = new Date();
-      const d7 = new Date(now);
-      d7.setDate(d7.getDate() - 7);
-      const cutoff7 = d7.toISOString().slice(0, 10);
-
-      const d14 = new Date(now);
-      d14.setDate(d14.getDate() - 14);
-      const cutoff14 = d14.toISOString().slice(0, 10);
+      const d30 = new Date(now);
+      d30.setDate(d30.getDate() - 30);
+      const cutoff30 = d30.toISOString().slice(0, 10);
 
       // Real-time Master Reference Data Sync: Watches a single lightweight metadata doc (1 read).
       // Automatically refreshes parts catalogue when any other machine/admin modifies products.
@@ -703,29 +872,43 @@ const DB = (() => {
       // Refresh master data if local cache is empty or older than TTL or missing recent parts
       syncMasterDataIfStale();
 
-      CORE_REALTIME_TABLES.forEach(table => {
+      const tableUnsubscribers = {};
+      const tableRetryTimers = {};
+
+      function setupTableListener(table, retryAttempt = 0) {
+        if (!db) return;
+        if (tableUnsubscribers[table]) {
+          try { tableUnsubscribers[table](); } catch (e) {}
+          delete tableUnsubscribers[table];
+        }
+        if (tableRetryTimers[table]) {
+          clearTimeout(tableRetryTimers[table]);
+          delete tableRetryTimers[table];
+        }
+
         let query = db.collection(table);
         if (table === 'batches') {
           // Only listen in real-time to active batches (completed batches don't need real-time push)
           query = query.where('status', '==', 'active');
-        } else if (table === 'stageRecords') {
-          // Only listen in real-time to active operational window (last 7 days)
-          query = query.where('date', '>=', cutoff7);
-        } else if (table === 'lossTracker') {
-          query = query.where('date', '>=', cutoff7);
-        } else if (table === 'productionRecords') {
-          query = query.where('date', '>=', cutoff7);
+        } else if (table === 'stageRecords' || table === 'lossTracker' || table === 'productionRecords' || table === 'rejectionTracker' || table === 'recheckTracker') {
+          // Listen in real-time to active manufacturing window (last 30 days)
+          query = query.where('date', '>=', cutoff30);
         } else if (table === 'sales') {
-          query = query.where('saleDate', '>=', cutoff14);
-        } else if (table === 'rejectionTracker') {
-          query = query.where('date', '>=', cutoff14);
-        } else if (table === 'recheckTracker') {
-          query = query.where('date', '>=', cutoff14);
+          query = query.where('saleDate', '>=', cutoff30);
         }
 
         let isInitial = true;
 
-        query.onSnapshot(snapshot => {
+        const unsubscribe = query.onSnapshot(snapshot => {
+          // Every snapshot arrival proves an active, live cloud connection
+          if (!_connectionHealthy) {
+            _connectionHealthy = true;
+            _consecutiveFailures = 0;
+            triggerSyncStateChange('connection', false);
+          } else {
+            _consecutiveFailures = 0;
+          }
+
           if (isInitial) {
             isInitial = false;
             const list = [];
@@ -745,8 +928,13 @@ const DB = (() => {
                   if (table === 'batches' && item.status === 'active') {
                     // Batches queried with where('status', '==', 'active') represent the authoritative active set.
                     // If an item in local cache was previously 'active' but is absent from Firestore's active set,
-                    // it has transitioned to completed/non-active in Firestore while offline or on another device.
-                    item.status = 'completed';
+                    // check if it was marked missing or completed.
+                    if (item.missingMarkedAt || item.status === 'missing') {
+                      item.status = 'missing';
+                      item.isArchived = true;
+                    } else {
+                      item.status = 'completed';
+                    }
                   }
                   merged.push(item);
                 }
@@ -761,6 +949,9 @@ const DB = (() => {
             saveLocal(table);
             if (['batches', 'recheckTracker', 'stageRecords', 'lossTracker'].includes(table)) {
               runRecheckPatch();
+            }
+            if (table === 'batches' || table === 'stageRecords') {
+              reconcileActiveBatchStages();
             }
             triggerDataChange(table);
             return;
@@ -818,14 +1009,50 @@ const DB = (() => {
             if (['batches', 'recheckTracker', 'stageRecords', 'lossTracker'].includes(table)) {
               runRecheckPatch();
             }
+            if (table === 'batches' || table === 'stageRecords') {
+              reconcileActiveBatchStages();
+            }
             triggerDataChange(table);
           }
         }, err => {
-          console.warn(`Firestore listener error on table "${table}":`, err.message);
-          _connectionHealthy = false;
-          triggerSyncStateChange('connection', true);
+          console.warn(`Firestore listener notice on table "${table}":`, err.message);
+          delete tableUnsubscribers[table];
+
+          // Auto-resubscribe after delay so this table listener is never lost forever
+          const backoff = Math.min(30000, 2000 * Math.pow(1.5, Math.min(retryAttempt, 5)));
+          tableRetryTimers[table] = setTimeout(() => {
+            if (db && (typeof navigator === 'undefined' || navigator.onLine !== false)) {
+              setupTableListener(table, retryAttempt + 1);
+            }
+          }, backoff);
+
+          // Only flag connection unhealthy if navigator is explicitly offline or multiple listeners failed
+          _consecutiveFailures++;
+          if (_consecutiveFailures >= 3 || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+            _connectionHealthy = false;
+            triggerSyncStateChange('connection', true);
+          }
         });
-      });
+
+        tableUnsubscribers[table] = unsubscribe;
+      }
+
+      recheckAllListeners = function() {
+        if (!db) return;
+        CORE_REALTIME_TABLES.forEach(t => {
+          if (!tableUnsubscribers[t]) {
+            setupTableListener(t, 0);
+          }
+        });
+      };
+
+      CORE_REALTIME_TABLES.forEach(table => setupTableListener(table, 0));
+      if (typeof Batches !== 'undefined' && typeof Batches.fetchMissingBatchesFromCloud === 'function') {
+        Batches.fetchMissingBatchesFromCloud();
+      }
+      if (typeof Batches !== 'undefined' && typeof Batches.fetchRejectedBatchesFromCloud === 'function') {
+        Batches.fetchRejectedBatchesFromCloud();
+      }
 
       isCloudSyncComplete = true;
       localStorage.setItem('jmpl_archival_migration_run_v1', 'true');
@@ -1069,6 +1296,46 @@ const DB = (() => {
             updatedAt: b.updatedAt
           }, { merge: true }).catch(console.error);
         }
+      }
+    });
+    if (changed) {
+      rebuildIndexesForTable('batches');
+      saveLocal('batches');
+    }
+  }
+
+  const _reconciledStageKeys = new Set();
+  function reconcileActiveBatchStages() {
+    if (!cache.batches || !cache.batches.length || !cache.stageRecords || !cache.stageRecords.length) return;
+    const mismatches = Batches.findStageMismatches();
+    if (!mismatches.length) return;
+    let changed = false;
+    const nowIso = new Date().toISOString();
+    mismatches.forEach(({ batch: b, expectedStage, lastRecord }) => {
+      const key = `${b.id}::${b.currentStage}->${expectedStage}`;
+      if (_reconciledStageKeys.has(key)) return;
+      _reconciledStageKeys.add(key);
+
+      const updates = {
+        currentStage: expectedStage,
+        updatedAt: nowIso
+      };
+      if (expectedStage === 'store') {
+        updates.status = 'completed';
+        updates.completedAt = (lastRecord && (lastRecord.createdAt || lastRecord.date)) || b.updatedAt || nowIso;
+        updates.remainingQty = (lastRecord && (lastRecord.outputQty || lastRecord.inputQty)) || b.remainingQty || b.initialQty || 0;
+        updates.isArchived = Number(updates.remainingQty) === 0;
+      } else if (lastRecord && lastRecord.vendorId !== undefined) {
+        updates.vendorId = lastRecord.vendorId || '';
+      }
+      Object.assign(b, updates);
+      changed = true;
+      console.log(`[DB Auto-Reconcile] Synced batch ${b.batchNo} stage -> ${expectedStage}`);
+
+      if (db && navigator.onLine) {
+        db.collection('batches').doc(b.id).set(sanitizeFirestoreDoc(updates), { merge: true }).catch(err => {
+          console.warn(`[DB Auto-Reconcile] Cloud sync failed for batch ${b.id}:`, err.message);
+        });
       }
     });
     if (changed) {
@@ -1388,13 +1655,14 @@ const DB = (() => {
   }
 
   function setAll(table, data) {
-    cache[table] = data;
+    const cleanData = Array.isArray(data) ? data.filter(item => !isTestEntity(item, table)) : data;
+    cache[table] = cleanData;
     rebuildIndexesForTable(table);
     saveLocal(table);
     if (db) {
       // Overwrite collection docs in Firestore
       const batch = db.batch();
-      data.forEach(item => {
+      cleanData.forEach(item => {
         const docRef = db.collection(table).doc(item.id || genId());
         const docData = { ...item };
         delete docData.id;
@@ -1431,6 +1699,10 @@ const DB = (() => {
   // Resilient Cloud Writer with Timeout & Auto-Recovery
   function syncDocToCloud(table, id, docData, operation = 'set') {
     if (!db) return Promise.resolve();
+    if (operation !== 'delete' && isTestEntity(docData, table)) {
+      console.warn(`[DB Guard] Blocked syncing test document to Cloud Firestore: ${table}/${id}`, docData);
+      return Promise.resolve();
+    }
     triggerSyncStateChange(table, true);
 
     const executeOp = () => {
@@ -1458,23 +1730,28 @@ const DB = (() => {
     let opFinished = false;
     const opPromise = Promise.resolve().then(() => executeOp()).then(() => {
       opFinished = true;
-      _connectionHealthy = true;
+      if (!_connectionHealthy) {
+        _connectionHealthy = true;
+        _consecutiveFailures = 0;
+        triggerSyncStateChange('connection', false);
+      }
       triggerSyncStateChange(table, false);
     });
 
     const timeoutPromise = new Promise((_, reject) => {
       setTimeout(() => {
-        if (!opFinished) reject(new Error('Cloud sync timeout (25s)'));
+        if (!opFinished) reject(new Error('Cloud sync delayed'));
       }, 25000);
     });
 
     return Promise.race([opPromise, timeoutPromise]).catch(err => {
       console.warn(`[DB] Cloud sync delayed on ${table}/${id} (${err.message}). Firestore will persist in background.`);
-      _connectionHealthy = false;
       triggerSyncStateChange(table, true);
       // Let Firestore's background pipeline retry safely without tearing down active network listeners
       return executeOp().then(() => {
         _connectionHealthy = true;
+        _consecutiveFailures = 0;
+        triggerSyncStateChange('connection', false);
         triggerSyncStateChange(table, false);
       }).catch(retryErr => {
         console.warn(`[DB] Cloud sync background queue on ${table}/${id}:`, retryErr.message);
@@ -1484,6 +1761,14 @@ const DB = (() => {
   }
 
   function insert(table, record) {
+    if (isTestEntity(record, table)) {
+      const errMsg = `[DB Guard] Blocked test record insertion in production table "${table}": ${record.batchNo || record.jmrefNo || record.id || 'test entity'}`;
+      console.error(errMsg, record);
+      if (typeof showToast === 'function') {
+        showToast('Test items cannot be saved to the production database.', 'error');
+      }
+      throw new Error(errMsg);
+    }
     assertOnline('insert into ' + table);
 
     const id = record.id || genId();
@@ -1526,6 +1811,14 @@ const DB = (() => {
   }
 
   function update(table, id, changes) {
+    if (isTestEntity(changes, table)) {
+      const errMsg = `[DB Guard] Blocked updating record in "${table}" with test data`;
+      console.error(errMsg, changes);
+      if (typeof showToast === 'function') {
+        showToast('Test data cannot be saved to the production database.', 'error');
+      }
+      throw new Error(errMsg);
+    }
     assertOnline('update ' + table);
 
     const index = cache[table].findIndex(r => r.id === id);
@@ -1599,6 +1892,14 @@ const DB = (() => {
   }
 
   async function insertAsync(table, record) {
+    if (isTestEntity(record, table)) {
+      const errMsg = `[DB Guard] Blocked test record insertion in production table "${table}": ${record.batchNo || record.jmrefNo || record.id || 'test entity'}`;
+      console.error(errMsg, record);
+      if (typeof showToast === 'function') {
+        showToast('Test items cannot be saved to the production database.', 'error');
+      }
+      throw new Error(errMsg);
+    }
     if (!db && typeof navigator !== 'undefined' && navigator.onLine !== false && !isInitialized) {
       await waitForDb(6000);
     }
@@ -1645,6 +1946,14 @@ const DB = (() => {
   }
 
   async function updateAsync(table, id, changes) {
+    if (isTestEntity(changes, table)) {
+      const errMsg = `[DB Guard] Blocked updating record in "${table}" with test data`;
+      console.error(errMsg, changes);
+      if (typeof showToast === 'function') {
+        showToast('Test data cannot be saved to the production database.', 'error');
+      }
+      throw new Error(errMsg);
+    }
     if (!db && typeof navigator !== 'undefined' && navigator.onLine !== false && !isInitialized) {
       await waitForDb(6000);
     }
@@ -1922,10 +2231,14 @@ const DB = (() => {
   // ── SUBCONTRACTORS ────────────────────────────────────────
   const Subcontractors = {
     all: () => getAll('subcontractors'),
-    active: () => getAll('subcontractors').filter(r => r.active),
+    active: () => getAll('subcontractors').filter(r => r && r.active !== false),
     find: (id) => findById('subcontractors', id),
     insert: (r) => insert('subcontractors', r),
+    insertAsync: (r) => insertAsync('subcontractors', r),
     update: (id, c) => update('subcontractors', id, c),
+    updateAsync: (id, c) => updateAsync('subcontractors', id, c),
+    remove: (id) => remove('subcontractors', id),
+    removeAsync: (id) => removeAsync('subcontractors', id)
   };
 
   // ── VENDORS ───────────────────────────────────────────────
@@ -1937,17 +2250,21 @@ const DB = (() => {
           if (!v.name) return false;
           const nameLower = v.name.toLowerCase();
           if (nameLower.includes('chitra trimming')) {
-            const allowed = ['master', 'delivery-challan', 'trimming', 'admin', 'reports', 'dashboard'];
+            const allowed = ['master', 'suppliers', 'raw-material', 'delivery-challan', 'dc-jobwork', 'dc-rm-processing', 'trimming', 'admin', 'reports', 'dashboard'];
             return allowed.includes(App.current) || App.current.startsWith('report');
           }
           if (nameLower.includes('shanthi flash')) {
-            const allowed = ['master', 'delivery-challan', 'admin', 'reports', 'dashboard'];
+            const allowed = ['master', 'suppliers', 'raw-material', 'delivery-challan', 'dc-jobwork', 'dc-rm-processing', 'admin', 'reports', 'dashboard'];
             return allowed.includes(App.current) || App.current.startsWith('report');
           }
           return true;
         });
       }
       return list;
+    },
+    active: () => {
+      const list = typeof Vendors.all === 'function' ? Vendors.all() : getAll('vendors');
+      return list.filter(r => r && r.active !== false);
     },
     byDept: (dept) => {
       const list = getAll('vendors').filter(r => r.department === dept && r.active);
@@ -1956,11 +2273,11 @@ const DB = (() => {
           if (!v.name) return false;
           const nameLower = v.name.toLowerCase();
           if (nameLower.includes('chitra trimming')) {
-            const allowed = ['master', 'delivery-challan', 'trimming', 'admin', 'reports', 'dashboard'];
+            const allowed = ['master', 'suppliers', 'raw-material', 'delivery-challan', 'dc-jobwork', 'dc-rm-processing', 'trimming', 'admin', 'reports', 'dashboard'];
             return allowed.includes(App.current) || App.current.startsWith('report');
           }
           if (nameLower.includes('shanthi flash')) {
-            const allowed = ['master', 'delivery-challan', 'admin', 'reports', 'dashboard'];
+            const allowed = ['master', 'suppliers', 'raw-material', 'delivery-challan', 'dc-jobwork', 'dc-rm-processing', 'admin', 'reports', 'dashboard'];
             return allowed.includes(App.current) || App.current.startsWith('report');
           }
           return true;
@@ -1970,7 +2287,11 @@ const DB = (() => {
     },
     find: (id) => findById('vendors', id),
     insert: (r) => insert('vendors', r),
+    insertAsync: (r) => insertAsync('vendors', r),
     update: (id, c) => update('vendors', id, c),
+    updateAsync: (id, c) => updateAsync('vendors', id, c),
+    remove: (id) => remove('vendors', id),
+    removeAsync: (id) => removeAsync('vendors', id)
   };
 
   // ── OPERATORS ─────────────────────────────────────────────
@@ -2196,6 +2517,17 @@ const DB = (() => {
     update: (id, c) => {
       const fields = { ...c };
       const currentBatch = findById('batches', id) || {};
+
+      // Auto-reactivate if a transaction/update occurs on a batch marked 'missing'
+      if (currentBatch.status === 'missing' && fields.status === undefined) {
+        const checkStage = fields.currentStage !== undefined ? fields.currentStage : currentBatch.currentStage;
+        fields.status = (checkStage === 'store' ? 'completed' : 'active');
+        fields.isArchived = false;
+        fields.missingResolvedAt = new Date().toISOString();
+        if (typeof showToast === 'function') {
+          showToast(`⚡ Batch ${currentBatch.batchNo || ''} reactivated from Missing to ${fields.status === 'completed' ? 'Completed (Store)' : 'Active'}!`, 'info');
+        }
+      }
       
       // If updating initialQty, keep remainingQty in sync
       if (fields.initialQty !== undefined) {
@@ -2212,6 +2544,8 @@ const DB = (() => {
       const checkRemaining = fields.remainingQty !== undefined ? fields.remainingQty : (currentBatch.remainingQty !== undefined ? currentBatch.remainingQty : currentBatch.initialQty || 0);
       
       if (checkStatus === 'rejected') {
+        fields.isArchived = true;
+      } else if (checkStatus === 'missing') {
         fields.isArchived = true;
       } else if (checkStatus === 'completed' && checkRemaining === 0) {
         fields.isArchived = true;
@@ -2268,6 +2602,17 @@ const DB = (() => {
     updateAsync: async (id, c) => {
       const fields = { ...c };
       const currentBatch = findById('batches', id) || {};
+
+      // Auto-reactivate if a transaction/update occurs on a batch marked 'missing'
+      if (currentBatch.status === 'missing' && fields.status === undefined) {
+        const checkStage = fields.currentStage !== undefined ? fields.currentStage : currentBatch.currentStage;
+        fields.status = (checkStage === 'store' ? 'completed' : 'active');
+        fields.isArchived = false;
+        fields.missingResolvedAt = new Date().toISOString();
+        if (typeof showToast === 'function') {
+          showToast(`⚡ Batch ${currentBatch.batchNo || ''} reactivated from Missing to ${fields.status === 'completed' ? 'Completed (Store)' : 'Active'}!`, 'info');
+        }
+      }
       
       // If updating initialQty, keep remainingQty in sync
       if (fields.initialQty !== undefined) {
@@ -2285,6 +2630,8 @@ const DB = (() => {
       
       if (checkStatus === 'rejected') {
         fields.isArchived = true;
+      } else if (checkStatus === 'missing') {
+        fields.isArchived = true;
       } else if (checkStatus === 'completed' && checkRemaining === 0) {
         fields.isArchived = true;
       } else if (checkStatus === 'completed' && checkRemaining > 0) {
@@ -2295,8 +2642,212 @@ const DB = (() => {
       
       return await updateAsync('batches', id, fields);
     },
+    fetchMissingBatchesFromCloud: async () => {
+      if (!db) return [];
+      try {
+        const snap = await db.collection('batches').where('status', '==', 'missing').get();
+        let changed = false;
+        snap.forEach(doc => {
+          const data = { id: doc.id, ...doc.data() };
+          const idx = cache.batches.findIndex(b => b.id === doc.id);
+          if (idx >= 0) {
+            cache.batches[idx] = data;
+          } else {
+            cache.batches.push(data);
+          }
+          changed = true;
+        });
+        if (changed) {
+          rebuildIndexesForTable('batches');
+          saveLocal('batches');
+          if (typeof notifyListeners === 'function') notifyListeners();
+        }
+      } catch (e) {
+        console.warn('fetchMissingBatchesFromCloud error:', e);
+      }
+    },
+    fetchRejectedBatchesFromCloud: async () => {
+      if (!db) return [];
+      try {
+        const snap = await db.collection('batches').where('status', '==', 'rejected').get();
+        let changed = false;
+        snap.forEach(doc => {
+          const data = { id: doc.id, ...doc.data() };
+          const idx = cache.batches.findIndex(b => b.id === doc.id);
+          if (idx >= 0) {
+            cache.batches[idx] = data;
+          } else {
+            cache.batches.push(data);
+          }
+          changed = true;
+        });
+        if (changed) {
+          rebuildIndexesForTable('batches');
+          saveLocal('batches');
+          if (typeof notifyListeners === 'function') notifyListeners();
+        }
+      } catch (e) {
+        console.warn('fetchRejectedBatchesFromCloud error:', e);
+      }
+    },
     remove: (id) => remove('batches', id),
     removeAsync: (id) => removeAsync('batches', id),
+    getExpectedStage: (batchId) => {
+      const VALID_STAGES = new Set(['production', 'cryogenic', 'deflashing', 'waiting-trimming', 'trimming', 'post-curing', 'waiting-visual', 'visual', 'gauge', 'quality', 'store']);
+      const recs = StageRecords.byBatch(batchId);
+      if (!recs || recs.length === 0) return null;
+      const sorted = [...recs].sort((x, y) => {
+        const tX = x.createdAt || (x.date ? (x.time ? `${x.date}T${x.time}` : x.date) : '');
+        const tY = y.createdAt || (y.date ? (y.time ? `${y.date}T${y.time}` : y.date) : '');
+        return tX.localeCompare(tY);
+      });
+      for (let i = sorted.length - 1; i >= 0; i--) {
+        const r = sorted[i];
+        if (!r) continue;
+        const candidate = r.movedTo || r.toStage || r.stage;
+        if (candidate && VALID_STAGES.has(candidate)) {
+          return { expectedStage: candidate, lastRecord: r, recsCount: recs.length };
+        }
+      }
+      return null;
+    },
+    findStageMismatches: () => {
+      const batches = getAll('batches');
+      const mismatches = [];
+
+      // Manufacturing stage progression order (higher rank = further along in lifecycle)
+      const STAGE_RANK = {
+        'production': 10,
+        'cryogenic': 20,
+        'deflashing': 20,
+        'waiting-trimming': 30,
+        'trimming': 40,
+        'post-curing': 50,
+        'waiting-visual': 60,
+        'visual': 70,
+        'gauge': 80,
+        'quality': 90,
+        'store': 100,
+        'completed': 100
+      };
+
+      for (let i = 0; i < batches.length; i++) {
+        const b = batches[i];
+        if (!b || b.status !== 'active' || b.isArchived) continue;
+        const bNo = String(b.batchNo || '').toUpperCase();
+        if (bNo.includes('STK-ADJ') || bNo.includes('STK_ADJ') || bNo.includes('STKADJ') || bNo.includes('REC-')) continue;
+        const info = Batches.getExpectedStage(b.id);
+        if (!info || !info.expectedStage || b.currentStage === info.expectedStage) continue;
+
+        // SAFEGUARD: Prevent downgrading batches based on older/incomplete cached records
+        const currentRank = STAGE_RANK[b.currentStage] || 0;
+        const expectedRank = STAGE_RANK[info.expectedStage] || 0;
+        const lastRec = info.lastRecord;
+        const recTime = lastRec && (lastRec.createdAt ? new Date(lastRec.createdAt).getTime() : (lastRec.date ? new Date(lastRec.date).getTime() : 0));
+        const batchTime = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+
+        // If the calculated expected stage is at an earlier stage than where the batch currently is,
+        // and the record was created before the batch was last updated in its current stage,
+        // it means the record in cache is an older historical movement (or partial cache) — NEVER downgrade!
+        if (expectedRank < currentRank && recTime && batchTime && recTime < (batchTime - 60000)) {
+          const notesLower = (lastRec && lastRec.notes) ? lastRec.notes.toLowerCase() : '';
+          const isExplicitRework = notesLower.includes('recheck') || notesLower.includes('rework') || notesLower.includes('audit');
+          if (!isExplicitRework) {
+            continue; // Skip false mismatch
+          }
+        }
+
+        mismatches.push({
+          batch: b,
+          currentStage: b.currentStage,
+          expectedStage: info.expectedStage,
+          lastRecord: info.lastRecord
+        });
+      }
+      return mismatches;
+    },
+    syncStageFromRecords: async (batchId, targetStage, lastRecord) => {
+      const b = findById('batches', batchId);
+      if (!b || !targetStage) return null;
+      const updates = { currentStage: targetStage };
+      if (targetStage === 'store') {
+        updates.status = 'completed';
+        updates.completedAt = (lastRecord && (lastRecord.createdAt || lastRecord.date)) || b.updatedAt || new Date().toISOString();
+        updates.remainingQty = (lastRecord && (lastRecord.outputQty || lastRecord.inputQty)) || b.remainingQty || b.initialQty || 0;
+      } else if (lastRecord && lastRecord.vendorId !== undefined) {
+        updates.vendorId = lastRecord.vendorId || '';
+      }
+      return await Batches.updateAsync(batchId, updates);
+    },
+    transitionStageAsync: async (batchId, { toStage, fromStage, inputQty, outputQty, lossQty, vendorId, notes, date, recordedBy, iterationNo }) => {
+      const b = findById('batches', batchId);
+      if (!b) throw new Error('Batch not found: ' + batchId);
+
+      const from = fromStage || b.currentStage || 'production';
+      const record = {
+        batchId,
+        batchNo: b.batchNo,
+        stage: from,
+        movedFrom: from,
+        movedTo: toStage,
+        toStage,
+        inputQty: Number(inputQty) || 0,
+        outputQty: Number(outputQty) || 0,
+        lossQty: Number(lossQty) || 0,
+        vendorId: vendorId || '',
+        date: date || new Date().toISOString().slice(0, 10),
+        notes: notes || '',
+        recordedBy: recordedBy || '',
+        iterationNo: iterationNo || null
+      };
+
+      const batchUpdates = {
+        currentStage: toStage,
+        vendorId: vendorId !== undefined ? (vendorId || '') : (b.vendorId || '')
+      };
+
+      if (toStage === 'store') {
+        batchUpdates.status = 'completed';
+        batchUpdates.completedAt = new Date().toISOString();
+        batchUpdates.remainingQty = outputQty != null ? Number(outputQty) : (b.remainingQty || 0);
+        batchUpdates.isArchived = batchUpdates.remainingQty === 0;
+      }
+
+      // Execute StageRecord insert and Batch stage update atomically in tandem
+      const [stageRec, updatedBatch] = await Promise.all([
+        StageRecords.insertAsync(record),
+        Batches.updateAsync(batchId, batchUpdates)
+      ]);
+
+      return { stageRecord: stageRec, batch: updatedBatch };
+    },
+    deepScanStageMismatches: async (days = 90) => {
+      if (db) {
+        try {
+          const cutoff = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+          const snap = await db.collection('stageRecords').where('date', '>=', cutoff).get();
+          let changed = false;
+          snap.forEach(doc => {
+            const data = { id: doc.id, ...doc.data() };
+            const existingIdx = cache.stageRecords.findIndex(r => r.id === doc.id);
+            if (existingIdx === -1) {
+              cache.stageRecords.push(data);
+              changed = true;
+            } else {
+              cache.stageRecords[existingIdx] = data;
+              changed = true;
+            }
+          });
+          if (changed) {
+            rebuildIndexesForTable('stageRecords');
+            saveLocal('stageRecords');
+          }
+        } catch (err) {
+          console.warn('[DB] Deep scan stageRecords warning:', err.message);
+        }
+      }
+      return Batches.findStageMismatches();
+    },
     fetchByDateRange: async (from, to) => {
       if (!db) return;
       // If no date range, default to last 30 days
@@ -2471,8 +3022,26 @@ const DB = (() => {
       const bList = StageRecords.byBatch(batchId);
       return bList.filter(r => r.stage === stage);
     },
-    insert: (r) => insert('stageRecords', r),
-    insertAsync: (r) => insertAsync('stageRecords', r),
+    insert: (r) => {
+      if (r && r.batchId) {
+        const b = findById('batches', r.batchId);
+        if (b && b.status === 'missing') {
+          const reactivatedStatus = (r.movedTo === 'store' || b.currentStage === 'store') ? 'completed' : 'active';
+          Batches.update(b.id, { status: reactivatedStatus, isArchived: false, missingResolvedAt: new Date().toISOString() });
+        }
+      }
+      return insert('stageRecords', r);
+    },
+    insertAsync: async (r) => {
+      if (r && r.batchId) {
+        const b = findById('batches', r.batchId);
+        if (b && b.status === 'missing') {
+          const reactivatedStatus = (r.movedTo === 'store' || b.currentStage === 'store') ? 'completed' : 'active';
+          await Batches.updateAsync(b.id, { status: reactivatedStatus, isArchived: false, missingResolvedAt: new Date().toISOString() });
+        }
+      }
+      return await insertAsync('stageRecords', r);
+    },
     update: (id, c) => update('stageRecords', id, c),
     updateAsync: (id, c) => updateAsync('stageRecords', id, c),
     remove: (id) => remove('stageRecords', id),
@@ -2517,8 +3086,24 @@ const DB = (() => {
       }
       return LossTracker.byBatch(batchId);
     },
-    insert: (r) => insert('lossTracker', r),
-    insertAsync: (r) => insertAsync('lossTracker', r),
+    insert: (r) => {
+      if (r && r.batchId) {
+        const b = findById('batches', r.batchId);
+        if (b && b.status === 'missing') {
+          Batches.update(b.id, { status: 'active', isArchived: false, missingResolvedAt: new Date().toISOString() });
+        }
+      }
+      return insert('lossTracker', r);
+    },
+    insertAsync: async (r) => {
+      if (r && r.batchId) {
+        const b = findById('batches', r.batchId);
+        if (b && b.status === 'missing') {
+          await Batches.updateAsync(b.id, { status: 'active', isArchived: false, missingResolvedAt: new Date().toISOString() });
+        }
+      }
+      return await insertAsync('lossTracker', r);
+    },
     update: (id, c) => update('lossTracker', id, c),
     updateAsync: (id, c) => updateAsync('lossTracker', id, c),
     remove: (id) => remove('lossTracker', id),
@@ -2559,8 +3144,24 @@ const DB = (() => {
       }
       return RejectionTracker.byBatch(batchId);
     },
-    insert: (r) => insert('rejectionTracker', r),
-    insertAsync: (r) => insertAsync('rejectionTracker', r),
+    insert: (r) => {
+      if (r && r.batchId) {
+        const b = findById('batches', r.batchId);
+        if (b && b.status === 'missing') {
+          Batches.update(b.id, { status: 'rejected', isArchived: true });
+        }
+      }
+      return insert('rejectionTracker', r);
+    },
+    insertAsync: async (r) => {
+      if (r && r.batchId) {
+        const b = findById('batches', r.batchId);
+        if (b && b.status === 'missing') {
+          await Batches.updateAsync(b.id, { status: 'rejected', isArchived: true });
+        }
+      }
+      return await insertAsync('rejectionTracker', r);
+    },
     remove: (id) => remove('rejectionTracker', id),
     removeAsync: (id) => removeAsync('rejectionTracker', id),
   };
@@ -2595,8 +3196,24 @@ const DB = (() => {
       }
       return RecheckTracker.byBatch(batchId);
     },
-    insert: (r) => insert('recheckTracker', r),
-    insertAsync: (r) => insertAsync('recheckTracker', r),
+    insert: (r) => {
+      if (r && r.batchId) {
+        const b = findById('batches', r.batchId);
+        if (b && b.status === 'missing') {
+          Batches.update(b.id, { status: 'active', isArchived: false, missingResolvedAt: new Date().toISOString() });
+        }
+      }
+      return insert('recheckTracker', r);
+    },
+    insertAsync: async (r) => {
+      if (r && r.batchId) {
+        const b = findById('batches', r.batchId);
+        if (b && b.status === 'missing') {
+          await Batches.updateAsync(b.id, { status: 'active', isArchived: false, missingResolvedAt: new Date().toISOString() });
+        }
+      }
+      return await insertAsync('recheckTracker', r);
+    },
     update: (id, c) => update('recheckTracker', id, c),
     updateAsync: (id, c) => updateAsync('recheckTracker', id, c),
     remove: (id) => remove('recheckTracker', id),
@@ -2845,7 +3462,7 @@ const DB = (() => {
     getFifoStock: (jmrefNo, partId) => {
       const normTarget = String(jmrefNo || '').trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
       const batches = getAll('batches').filter(b => {
-        if (b.status !== 'completed' || b.isArchived) return false;
+        if (b.status !== 'completed' || b.isArchived || b.status === 'missing') return false;
         if (partId && b.partId === partId) return true;
         if (b.jmrefNo) {
           const bNorm = String(b.jmrefNo).trim().replace(/^JMREF[\s\-_]*/i, '').replace(/^JM[\s\-_]*/i, '').toUpperCase();
@@ -2890,6 +3507,7 @@ const DB = (() => {
       const recByMasterId = new Map();
       for (let i = 0; i < batches.length; i++) {
         const b = batches[i];
+        if (b.status === 'missing' || b.isArchived) continue;
         if (b.status !== 'completed' && b.currentStage !== 'store') continue;
         if (b.notes && (b.notes.includes('Closed via stock') || b.notes.includes('Zeroed via stock') || b.notes.includes('zeroing'))) continue;
 
@@ -2974,6 +3592,7 @@ const DB = (() => {
       const sales = getAll('sales');
       let totalReceived = 0;
       batches.forEach(b => {
+        if (b.status === 'missing' || b.isArchived) return;
         if (b.status !== 'completed' && b.currentStage !== 'store') return;
         if (b.notes && (b.notes.includes('Closed via stock') || b.notes.includes('Zeroed via stock') || b.notes.includes('zeroing'))) return;
         let isMatch = false;
@@ -3178,6 +3797,77 @@ const DB = (() => {
     updateAsync: (id, c) => updateAsync('deliveryChallans', id, c),
     remove: (id) => remove('deliveryChallans', id),
     removeAsync: (id) => removeAsync('deliveryChallans', id)
+  };
+
+  const GrnRecords = {
+    all: () => getAll('grnRecords').sort((a,b) => (b.createdAt || b.grnDate || '').localeCompare(a.createdAt || a.grnDate || '')),
+    find: (id) => findById('grnRecords', id),
+    byGrnNo: (no) => getAll('grnRecords').find(g => g.grnNo && g.grnNo.trim().toUpperCase() === String(no).trim().toUpperCase()),
+    nextGrnNo: () => {
+      const year = new Date().getFullYear();
+      const list = getAll('grnRecords');
+      let maxNum = 0;
+      const prefix = `GRN-${year}-`;
+      list.forEach(g => {
+        if (g.grnNo && g.grnNo.startsWith(prefix)) {
+          const num = parseInt(g.grnNo.substring(prefix.length), 10);
+          if (!isNaN(num) && num > maxNum) maxNum = num;
+        } else if (g.grnNo && g.grnNo.startsWith('GRN-')) {
+          const parts = g.grnNo.split('-');
+          const last = parseInt(parts[parts.length - 1], 10);
+          if (!isNaN(last) && last > maxNum) maxNum = last;
+        }
+      });
+      return `${prefix}${String(maxNum + 1).padStart(4, '0')}`;
+    },
+    fetchFromCloud: async () => {
+      if (!db) return getAll('grnRecords');
+      try {
+        const snap = await db.collection('grnRecords').get();
+        if (snap && snap.docs && snap.docs.length > 0) {
+          cache.grnRecords = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          rebuildIndexesForTable('grnRecords');
+          saveLocal('grnRecords');
+          triggerDataChange('grnRecords');
+        }
+      } catch(e) {
+        console.warn("[DB] GrnRecords.fetchFromCloud error:", e);
+      }
+      return getAll('grnRecords');
+    },
+    insert: (r) => insert('grnRecords', r),
+    insertAsync: (r) => insertAsync('grnRecords', r),
+    update: (id, c) => update('grnRecords', id, c),
+    updateAsync: (id, c) => updateAsync('grnRecords', id, c),
+    remove: (id) => remove('grnRecords', id),
+    removeAsync: (id) => removeAsync('grnRecords', id)
+  };
+
+  const RawMaterials = {
+    all: () => getAll('rawMaterials'),
+    find: (id) => findById('rawMaterials', id),
+    byCode: (code) => getAll('rawMaterials').find(m => m.code && m.code.trim().toUpperCase() === String(code).trim().toUpperCase()),
+    fetchFromCloud: async () => {
+      if (!db) return getAll('rawMaterials');
+      try {
+        const snap = await db.collection('rawMaterials').get();
+        if (snap && snap.docs && snap.docs.length > 0) {
+          cache.rawMaterials = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          rebuildIndexesForTable('rawMaterials');
+          saveLocal('rawMaterials');
+          triggerDataChange('rawMaterials');
+        }
+      } catch(e) {
+        console.warn("[DB] RawMaterials.fetchFromCloud error:", e);
+      }
+      return getAll('rawMaterials');
+    },
+    insert: (r) => insert('rawMaterials', r),
+    insertAsync: (r) => insertAsync('rawMaterials', r),
+    update: (id, c) => update('rawMaterials', id, c),
+    updateAsync: (id, c) => updateAsync('rawMaterials', id, c),
+    remove: (id) => remove('rawMaterials', id),
+    removeAsync: (id) => removeAsync('rawMaterials', id)
   };
 
   const AuditLogs = {
@@ -3459,6 +4149,14 @@ const DB = (() => {
       const promises = [];
       const fetchedBatchIds = new Set();
 
+      if (reportKey && reportKey.startsWith('rm-')) {
+        if (typeof RawMaterials.fetchFromCloud === 'function') promises.push(RawMaterials.fetchFromCloud());
+        if (typeof GrnRecords.fetchFromCloud === 'function') promises.push(GrnRecords.fetchFromCloud());
+        if (typeof DeliveryChallans.fetchFromCloud === 'function') promises.push(DeliveryChallans.fetchFromCloud());
+        if (typeof Batches !== 'undefined' && typeof Batches.fetchRejectedBatchesFromCloud === 'function') promises.push(Batches.fetchRejectedBatchesFromCloud());
+        if (typeof syncMasterDataIfStale === 'function') promises.push(syncMasterDataIfStale());
+      }
+
       // 1. Fetch Stage Records if date range is specified or for stage pending/aging reports
       if (from || to || ['pending-batches', 'aging', 'sub-pending', 'process-leakage', 'cryo-deflash-trim'].includes(reportKey)) {
         let qSr = db.collection('stageRecords');
@@ -3660,13 +4358,18 @@ const DB = (() => {
   }
 
   return {
-    initLocal, init, reconnect, isConnected: () => _connectionHealthy, isOnline, assertOnline, onSyncStateChange, onDataChange, genId, seedDefaults, clearTable,
+    initLocal, init, reconnect, ping: pingCloud, isConnected: () => _connectionHealthy, isOnline, assertOnline, onSyncStateChange, onDataChange, genId, seedDefaults, clearTable,
     insertAsync, updateAsync, removeAsync, fetchHistoricalForReport, ensureModuleLoaded, refreshMasterData, notifyMasterSync,
     Users, Master, Subcontractors, Vendors, Operators, Inspectors,
     Batches, StageRecords, LossTracker, RejectionTracker,
     RecheckTracker, StockUploads, Sales, StoreInventory,
     ProductionRecords, MonthlyPlans, ProductionSchedules,
-    Moulds, MouldMovements, MouldMaintenance, Tasks, AuditSessions, AuditRecords, DeliveryChallans, PrintHistory, AuditLogs, exportBackupJSON, importBackupJSON, restoreToOnlineDB, reconcileStockBulk,
-    raw: { getAll, setAll, insert, update, remove, insertAsync, updateAsync, removeAsync, findById, findWhere }
+    Moulds, MouldMovements, MouldMaintenance, Tasks, AuditSessions, AuditRecords, DeliveryChallans, GrnRecords, RawMaterials, PrintHistory, AuditLogs, exportBackupJSON, importBackupJSON, restoreToOnlineDB, reconcileStockBulk,
+    isTestEntity,
+    raw: { getAll, setAll, insert, update, remove, insertAsync, updateAsync, removeAsync, findById, findWhere, isTestEntity }
   };
 })();
+
+if (typeof window !== 'undefined') window.DB = DB;
+if (typeof globalThis !== 'undefined') globalThis.DB = DB;
+if (typeof module !== 'undefined' && module.exports) module.exports = DB;

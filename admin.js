@@ -7,6 +7,9 @@ const AdminModule = (() => {
       name: '🏭 Core Production & Departments',
       perms: [
         { key: 'master', label: 'Inventory Master' },
+        { key: 'rm-master', label: 'RM Master (Raw Material Master)' },
+        { key: 'suppliers', label: 'Suppliers & Subcontractors' },
+        { key: 'raw-material', label: 'Raw Material (GRN Inward)' },
         { key: 'mould-tracking', label: 'Mould Tracking' },
         { key: 'production', label: 'Production / Moulding' },
         { key: 'cryogenic', label: 'Cryogenic' },
@@ -16,6 +19,7 @@ const AdminModule = (() => {
         { key: 'post-curing', label: 'Post Curing' },
         { key: 'waiting-visual', label: 'Waiting for Visual inspection' },
         { key: 'visual', label: 'Visual Inspection' },
+        { key: 'visual-loss-reprocess', label: 'Visual Loss to Reprocess' },
         { key: 'gauge', label: 'Gauge Inspection' },
         { key: 'quality', label: 'Quality Final (QC)' },
         { key: 'store', label: 'Store & Sales' }
@@ -69,7 +73,12 @@ const AdminModule = (() => {
         { key: 'report_daily_summary', label: 'Report: Daily Production & Scrap' },
         { key: 'report_analytics', label: 'Report: Production & Quality Analytics' },
         { key: 'report_cryo_deflash_trim', label: 'Report: Cryo, De-Flash & Trim' },
-        { key: 'report_process_leakage', label: 'Report: JMREF Process Leakage' }
+        { key: 'report_process_leakage', label: 'Report: JMREF Process Leakage' },
+        { key: 'report_rm_inventory', label: 'Report: RM Inventory & Stock' },
+        { key: 'report_rm_sub_balance', label: 'Report: Subcontractor RM Balance' },
+        { key: 'report_rm_consumption', label: 'Report: RM Consumption & Traceability' },
+        { key: 'report_rm_inward_register', label: 'Report: RM GRN Inward Register' },
+        { key: 'report_rm_stock_ledger', label: 'Report: RM Stock Ledger' }
       ]
     }
   ];
@@ -107,7 +116,7 @@ const AdminModule = (() => {
           <button class="tab-btn ${activeTab==='batches'?'active':''}" data-tab="batches">📦 Batches</button>
           <button class="tab-btn ${activeTab==='tasks'?'active':''}" data-tab="tasks">📋 Tasks</button>
           <button class="tab-btn ${activeTab==='audit'?'active':''}" data-tab="audit">🛡️ Audit Logs</button>
-          <button class="tab-btn ${activeTab==='system'?'active':''}" data-tab="system">⚙️ Maintenance</button>
+          <button class="tab-btn ${activeTab==='system'?'active':''}" data-tab="system">⚙️ Settings &amp; Maintenance</button>
         </div>
         <div id="admin-tab-content"></div>
       </div>
@@ -712,6 +721,73 @@ const AdminModule = (() => {
     renderTab('insp');
   }
 
+  // ── Monthly Physical Stock Taking & Audit Barcode Scan Configuration ──
+  const AUDIT_PROD_AGE_CONFIG_KEY = 'jmpl_audit_prod_age_config';
+  const DEFAULT_AUDIT_PROD_AGE_CONFIG = {
+    enabled: true,
+    thresholdDays: 30,
+    mode: 'exceed_only', // 'exceed_only' or 'always'
+    soundAlert: true
+  };
+
+  function getAuditProdAgeConfig() {
+    try {
+      const raw = localStorage.getItem(AUDIT_PROD_AGE_CONFIG_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        return {
+          enabled: parsed.enabled !== false,
+          thresholdDays: (parsed.thresholdDays && !isNaN(parsed.thresholdDays) && Number(parsed.thresholdDays) > 0) ? Number(parsed.thresholdDays) : 30,
+          mode: parsed.mode === 'always' ? 'always' : 'exceed_only',
+          soundAlert: parsed.soundAlert !== false
+        };
+      }
+    } catch (e) {
+      console.warn('Failed to parse audit prod age config', e);
+    }
+    return { ...DEFAULT_AUDIT_PROD_AGE_CONFIG };
+  }
+
+  function saveAuditProdAgeConfig(cfg) {
+    try {
+      const current = getAuditProdAgeConfig();
+      const updated = {
+        ...current,
+        ...cfg,
+        thresholdDays: Math.max(1, parseInt(cfg.thresholdDays || 30, 10))
+      };
+      localStorage.setItem(AUDIT_PROD_AGE_CONFIG_KEY, JSON.stringify(updated));
+      return updated;
+    } catch (e) {
+      console.error('Error saving audit prod age config', e);
+      return null;
+    }
+  }
+
+  function saveAuditProdAgeConfigFromUi() {
+    const enabled = document.getElementById('admin-audit-age-enabled')?.checked ?? true;
+    const thresholdDays = parseInt(document.getElementById('admin-audit-age-threshold')?.value || '30', 10);
+    const mode = document.getElementById('admin-audit-age-mode')?.value || 'exceed_only';
+    const soundAlert = document.getElementById('admin-audit-age-sound')?.checked ?? true;
+
+    if (isNaN(thresholdDays) || thresholdDays < 1) {
+      showToast('Please enter a valid threshold in days (minimum 1 day)', 'warning');
+      return;
+    }
+
+    const saved = saveAuditProdAgeConfig({
+      enabled,
+      thresholdDays,
+      mode,
+      soundAlert
+    });
+
+    if (saved) {
+      showToast(`Stock Audit Production Age Alert saved (${saved.thresholdDays} days, ${saved.enabled ? 'Enabled' : 'Disabled'})`, 'success');
+      renderTab('system');
+    }
+  }
+
   function systemTab() {
     const isLocalBackup = localStorage.getItem('jmpl_db_is_local_backup') === 'true';
     const statusHtml = isLocalBackup 
@@ -720,8 +796,90 @@ const AdminModule = (() => {
 
     const switchBtnText = isLocalBackup ? 'Switch to Cloud Database' : 'Switch to Local Sandbox';
     const switchBtnClass = isLocalBackup ? 'btn-teal' : 'btn-secondary';
+    const ageConfig = getAuditProdAgeConfig();
 
     return `
+      <!-- Stock Taking & Audit Barcode Scan Aging Alert Configuration Card -->
+      <div class="card animate-in" style="margin-bottom:24px; border-left:4px solid var(--accent-blue);">
+        <div class="card-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+          <div>
+            <h3 style="display:flex; align-items:center; gap:8px;">
+              🛡️ Physical Stock Taking &amp; Audit Barcode Scan Configuration
+            </h3>
+            <p class="text-xs text-muted" style="margin-top:4px; margin-bottom:0;">
+              Configure production date checking and aging alert threshold when scanning batch barcodes/QR codes (Rapid scan &amp; Normal scan)
+            </p>
+          </div>
+          <span class="badge ${ageConfig.enabled ? 'badge-green' : 'badge-gray'}">
+            ${ageConfig.enabled ? '✓ Aging Alerts Active' : '✕ Alerts Disabled'}
+          </span>
+        </div>
+        <div class="card-body">
+          <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:20px; margin-bottom:20px;">
+            
+            <div style="background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:16px;">
+              <div class="flex items-center gap-2 mb-2">
+                <input type="checkbox" id="admin-audit-age-enabled" ${ageConfig.enabled ? 'checked' : ''} style="width:18px; height:18px; cursor:pointer;">
+                <label for="admin-audit-age-enabled" class="font-bold text-sm" style="cursor:pointer; margin:0;">
+                  Enable Production Date Age Notification
+                </label>
+              </div>
+              <p class="text-xs text-muted" style="margin-left:26px; margin-bottom:0;">
+                When enabled, batch barcode/QR scans in Stock Audit will compute elapsed days from production date and trigger aging notifications.
+              </p>
+            </div>
+
+            <div style="background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:16px;">
+              <label for="admin-audit-age-threshold" class="font-bold text-sm block mb-1">
+                ⏳ Alert Threshold: How many days old on Production date
+              </label>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <input type="number" id="admin-audit-age-threshold" min="1" max="3650" class="form-control" style="max-width:140px; font-weight:bold; font-size:15px;" value="${ageConfig.thresholdDays}">
+                <span class="text-sm font-semibold text-muted">Days</span>
+              </div>
+              <p class="text-xs text-muted mt-1" style="margin-bottom:0;">
+                Batches with production age &ge; this value trigger an alert warning of aging stock. (Default: 30 days)
+              </p>
+            </div>
+
+            <div style="background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:16px;">
+              <label for="admin-audit-age-mode" class="font-bold text-sm block mb-1">
+                🔔 Notification Display Behavior
+              </label>
+              <select id="admin-audit-age-mode" class="form-control">
+                <option value="exceed_only" ${ageConfig.mode === 'exceed_only' ? 'selected' : ''}>Alert only when age exceeds threshold (Aging Warning)</option>
+                <option value="always" ${ageConfig.mode === 'always' ? 'selected' : ''}>Always display age on every scan (Highlight if over threshold)</option>
+              </select>
+              <p class="text-xs text-muted mt-1" style="margin-bottom:0;">
+                Choose whether to notify on all batch scans or only when older than configured days threshold.
+              </p>
+            </div>
+
+            <div style="background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:16px;">
+              <div class="flex items-center gap-2 mb-2">
+                <input type="checkbox" id="admin-audit-age-sound" ${ageConfig.soundAlert ? 'checked' : ''} style="width:18px; height:18px; cursor:pointer;">
+                <label for="admin-audit-age-sound" class="font-bold text-sm" style="cursor:pointer; margin:0;">
+                  🔊 Play Warning Tone on Aging Batch
+                </label>
+              </div>
+              <p class="text-xs text-muted" style="margin-left:26px; margin-bottom:0;">
+                Plays an audible warning chime when an aging batch exceeding the production date threshold is scanned.
+              </p>
+            </div>
+
+          </div>
+
+          <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px solid var(--border); padding-top:16px; flex-wrap:wrap; gap:12px;">
+            <div class="text-xs text-muted">
+              📌 Applied immediately to both <strong>Rapid Scan</strong> and <strong>Standard Modal Scan</strong> in Monthly Stock Taking &amp; Audit.
+            </div>
+            <button class="btn btn-primary" onclick="AdminModule.saveAuditProdAgeConfigFromUi()">
+              💾 Save Stock Audit Configuration
+            </button>
+          </div>
+        </div>
+      </div>
+
       <!-- Connection Mode -->
       <div class="card animate-in" style="margin-bottom:24px;">
         <div class="card-header">
@@ -785,6 +943,16 @@ const AdminModule = (() => {
           <div class="alert alert-danger" style="margin-bottom: 24px; padding: 16px; background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 8px;">
             <h4 class="font-bold text-danger" style="margin-bottom: 8px; font-size:15px;">⚠️ Danger Zone</h4>
             <p class="text-sm text-muted">The actions listed here are permanent database operations. They cannot be undone.</p>
+          </div>
+
+          <div style="display:flex; justify-content:space-between; align-items:center; padding: 20px; border: 1px solid var(--border-color); border-radius: 8px; background:var(--bg-card); flex-wrap:wrap; gap:16px; margin-bottom:16px;">
+            <div>
+              <h4 class="font-bold" style="font-size:15px; margin-bottom:4px;">⚡ Stock Audit Missing Batches Status Sync</h4>
+              <p class="text-xs text-muted" style="max-width: 480px;">
+                Evaluates physical stock audit discrepancy batches against post-audit transactions across all factory movements, rejections, and losses. Automatically flags untransacted discrepancy batches as <strong>Missing</strong> and reactivates transacted/scanned batches to <strong>Active</strong>.
+              </p>
+            </div>
+            <button class="btn btn-warning" onclick="AdminModule.syncMissingBatchesStatus()">⚡ Sync Missing Batches Status</button>
           </div>
 
           <div style="display:flex; justify-content:space-between; align-items:center; padding: 20px; border: 1px solid var(--border-color); border-radius: 8px; background:var(--bg-card); flex-wrap:wrap; gap:16px;">
@@ -1173,15 +1341,174 @@ const AdminModule = (() => {
     renderTab('tasks');
   }
 
-  function batchesTab() {
+  const MISMATCH_STAGE_LABELS = {
+    production: 'Moulding',
+    cryogenic: 'Cryogenic',
+    deflashing: 'Manual DE Flashing',
+    'waiting-trimming': 'Waiting for Trimming',
+    trimming: 'Trimming',
+    'post-curing': 'Post Curing',
+    'waiting-visual': 'Waiting for Visual',
+    visual: 'Visual Inspection',
+    gauge: 'Gauge Inspection',
+    quality: 'QC Final',
+    store: 'Store'
+  };
+
+  let _cachedMismatches = null;
+
+  function renderStageMismatchCard(mismatchesList = null) {
+    const mismatches = mismatchesList !== null
+      ? mismatchesList
+      : (_cachedMismatches !== null ? _cachedMismatches : (DB.Batches.findStageMismatches ? DB.Batches.findStageMismatches() : []));
+    _cachedMismatches = mismatches;
+
+    const count = mismatches.length;
+    const rowsHtml = mismatches.map(m => {
+      const b = m.batch;
+      const lr = m.lastRecord || {};
+      const curLabel = MISMATCH_STAGE_LABELS[m.currentStage] || m.currentStage || '—';
+      const expLabel = MISMATCH_STAGE_LABELS[m.expectedStage] || m.expectedStage || '—';
+      const moveDate = lr.date || (lr.createdAt ? lr.createdAt.slice(0, 10) : '—');
+      const fromLabel = MISMATCH_STAGE_LABELS[lr.movedFrom || lr.stage] || lr.movedFrom || lr.stage || '—';
+      return `
+        <tr>
+          <td class="font-semibold">${typeof App !== 'undefined' && App.formatBatchCell ? App.formatBatchCell(b.batchNo, b.internalBatchNo) : b.batchNo}</td>
+          <td class="text-muted">${b.jmrefNo || '—'}</td>
+          <td>${b.partNo || '—'}</td>
+          <td><span class="badge badge-red">${curLabel}</span></td>
+          <td><span class="badge badge-green">${expLabel}</span></td>
+          <td class="text-xs text-muted">${fromLabel} ➔ ${expLabel} (${moveDate})</td>
+          <td>
+            <button class="btn btn-primary btn-xs" onclick="AdminModule.syncSingleBatchStage('${b.id}', '${m.expectedStage}')">✅ Sync</button>
+          </td>
+        </tr>
+      `;
+    }).join('');
+
     return `
+      <div class="card animate-in mb-4" style="border: 1.5px solid ${count > 0 ? 'rgba(245, 158, 11, 0.5)' : 'var(--border)'};">
+        <div class="card-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <h3 style="margin:0;">${count > 0 ? '⚠️ Active Stage vs Movement History Mismatches' : '✅ Active Stage Integrity Check'}</h3>
+            ${count > 0
+              ? `<span class="badge badge-amber font-bold">${count} Mismatched</span>`
+              : `<span class="badge badge-green">All Synced</span>`}
+          </div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button id="admin-deep-scan-btn" class="btn btn-secondary btn-xs" onclick="AdminModule.deepScanStageMismatches()">🌐 Deep Cloud Scan (90 Days)</button>
+            ${count > 0 ? `<button id="admin-sync-all-btn" class="btn btn-amber btn-xs font-bold" onclick="AdminModule.syncAllMismatchedStages()">🔄 Sync All (${count})</button>` : ''}
+          </div>
+        </div>
+        ${count > 0 ? `
+          <div class="table-responsive" style="max-height:360px; overflow-y:auto;">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Batch No</th>
+                  <th>JM Ref No</th>
+                  <th>Part No</th>
+                  <th>Active Stage (Current)</th>
+                  <th>Latest Moved Stage</th>
+                  <th>Last Movement</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>${rowsHtml}</tbody>
+            </table>
+          </div>
+        ` : `
+          <div class="card-body" style="padding:12px 16px;">
+            <p class="text-sm text-muted" style="margin:0;">All active batches currently match their latest recorded stage movement. Click <strong>Deep Cloud Scan</strong> to verify older records from Firestore.</p>
+          </div>
+        `}
+      </div>
+    `;
+  }
+
+  async function deepScanStageMismatches(silent = false) {
+    const btn = document.getElementById('admin-deep-scan-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Scanning...'; }
+    try {
+      const mismatches = DB.Batches.deepScanStageMismatches
+        ? await DB.Batches.deepScanStageMismatches(90)
+        : (DB.Batches.findStageMismatches ? DB.Batches.findStageMismatches() : []);
+      _cachedMismatches = mismatches;
+      const container = document.getElementById('admin-stage-mismatch-container');
+      if (container) container.innerHTML = renderStageMismatchCard(mismatches);
+      if (!silent || mismatches.length > 0) {
+        showToast(mismatches.length > 0 ? `Found ${mismatches.length} stage mismatch(es)` : 'No stage mismatches found!', mismatches.length > 0 ? 'warning' : 'success');
+      }
+    } catch (e) {
+      console.error(e);
+      if (!silent) showToast('Deep scan failed: ' + (e.message || e), 'error');
+    }
+  }
+
+  async function syncSingleBatchStage(batchId, expectedStage) {
+    try {
+      const mismatches = _cachedMismatches || (DB.Batches.findStageMismatches ? DB.Batches.findStageMismatches() : []);
+      const item = mismatches.find(m => m.batch.id === batchId);
+      await DB.Batches.syncStageFromRecords(batchId, expectedStage, item ? item.lastRecord : null);
+      _cachedMismatches = DB.Batches.findStageMismatches();
+      const container = document.getElementById('admin-stage-mismatch-container');
+      if (container) container.innerHTML = renderStageMismatchCard(_cachedMismatches);
+      const searchInput = document.getElementById('admin-batch-search');
+      filterAdminBatches(searchInput ? searchInput.value : '', false);
+      showToast(`Batch synced to ${MISMATCH_STAGE_LABELS[expectedStage] || expectedStage}`, 'success');
+    } catch (e) {
+      console.error(e);
+      showToast('Failed to sync batch stage: ' + (e.message || e), 'error');
+    }
+  }
+
+  async function syncAllMismatchedStages() {
+    const mismatches = _cachedMismatches || (DB.Batches.findStageMismatches ? DB.Batches.findStageMismatches() : []);
+    if (!mismatches.length) { showToast('No mismatches to sync', 'info'); return; }
+    if (!confirm(`Sync ${mismatches.length} batch(es) to their latest recorded stage?`)) return;
+    const btn = document.getElementById('admin-sync-all-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Syncing...'; }
+    try {
+      let fixed = 0;
+      for (const m of mismatches) {
+        await DB.Batches.syncStageFromRecords(m.batch.id, m.expectedStage, m.lastRecord);
+        fixed++;
+      }
+      _cachedMismatches = DB.Batches.findStageMismatches();
+      const container = document.getElementById('admin-stage-mismatch-container');
+      if (container) container.innerHTML = renderStageMismatchCard(_cachedMismatches);
+      const searchInput = document.getElementById('admin-batch-search');
+      filterAdminBatches(searchInput ? searchInput.value : '', false);
+      showToast(`Successfully synced ${fixed} batch(es) to their latest stage!`, 'success');
+    } catch (e) {
+      console.error(e);
+      showToast('Bulk sync error: ' + (e.message || e), 'error');
+    }
+  }
+
+  function batchesTab() {
+    _cachedMismatches = null;
+    setTimeout(() => {
+      deepScanStageMismatches(true);
+    }, 50);
+    return `
+      <div id="admin-stage-mismatch-container">
+        ${renderStageMismatchCard()}
+      </div>
       <div class="card animate-in">
         <div class="card-header">
           <h3>📦 Manage Batch Stages</h3>
         </div>
         <div class="card-body">
-          <div class="form-group" style="display:flex; gap:8px; align-items:center; margin-bottom:16px;">
-            <input type="text" id="admin-batch-search" class="form-control" placeholder="Search by Batch No or JM Ref No..." oninput="AdminModule.filterAdminBatches(this.value)" style="flex:1; margin-bottom:0;">
+          <div class="form-group" style="display:flex; gap:8px; align-items:center; margin-bottom:16px; flex-wrap:wrap;">
+            <input type="text" id="admin-batch-search" class="form-control" placeholder="Search by Batch No or JM Ref No..." oninput="AdminModule.filterAdminBatches(this.value)" style="flex:1; min-width:220px; margin-bottom:0;">
+            <select id="admin-batch-status-filter" class="form-control" onchange="AdminModule.filterAdminBatches(document.getElementById('admin-batch-search')?.value, true)" style="max-width:180px; margin-bottom:0;">
+              <option value="">All Statuses</option>
+              <option value="active">Active</option>
+              <option value="missing">⚠️ Missing</option>
+              <option value="completed">Completed (Store)</option>
+              <option value="rejected">Rejected</option>
+            </select>
             <button class="btn btn-secondary" onclick="Scanner.start('admin-batch-search', (val) => {
               const inp = document.getElementById('admin-batch-search');
               if (inp) {
@@ -1197,6 +1524,7 @@ const AdminModule = (() => {
                   <th>Batch Number</th>
                   <th>JM Ref No</th>
                   <th>Part No</th>
+                  <th>Batch Status</th>
                   <th>Current Stage</th>
                   <th>Actions</th>
                 </tr>
@@ -1214,12 +1542,18 @@ const AdminModule = (() => {
 
   function renderAdminBatchRows(query) {
     const batches = DB.Batches.all();
-    const filtered = query
+    const statusFilter = document.getElementById('admin-batch-status-filter')?.value || '';
+    let filtered = query
       ? batches.filter(b => 
           (b.batchNo && b.batchNo.toLowerCase().includes(query.toLowerCase())) ||
-          (b.jmrefNo && b.jmrefNo.toLowerCase().includes(query.toLowerCase()))
+          (b.jmrefNo && b.jmrefNo.toLowerCase().includes(query.toLowerCase())) ||
+          (b.partNo && b.partNo.toLowerCase().includes(query.toLowerCase()))
         )
       : batches;
+
+    if (statusFilter) {
+      filtered = filtered.filter(b => b.status === statusFilter);
+    }
       
     filtered.sort((a, b) => {
       const dateA = a.createdAt || '';
@@ -1259,7 +1593,7 @@ const AdminModule = (() => {
     }, 0);
 
     if (pageItems.length === 0) {
-      return `<tr><td colspan="5" style="text-align:center;" class="text-muted">No batches found</td></tr>`;
+      return `<tr><td colspan="6" style="text-align:center;" class="text-muted">No batches found</td></tr>`;
     }
 
     const ADMIN_STAGES = {
@@ -1282,11 +1616,21 @@ const AdminModule = (() => {
         return `<option value="${val}" ${selected}>${label}</option>`;
       }).join('');
 
+      let statusBadge = '<span class="badge badge-green font-bold">Active</span>';
+      if (b.status === 'missing') {
+        statusBadge = '<span class="badge badge-red font-bold">⚠️ Missing</span>';
+      } else if (b.status === 'completed') {
+        statusBadge = '<span class="badge badge-blue">Completed</span>';
+      } else if (b.status === 'rejected') {
+        statusBadge = '<span class="badge badge-gray">Rejected</span>';
+      }
+
       return `
         <tr>
           <td class="font-semibold">${b.batchNo || 'N/A'}</td>
           <td class="text-muted">${b.jmrefNo || 'N/A'}</td>
           <td>${b.partNo || 'N/A'}</td>
+          <td>${statusBadge}</td>
           <td>
             <select id="admin-stage-select-${b.id}" class="form-control form-control-sm" style="padding:4px 8px; font-size:12px; max-width:200px;">
               ${options}
@@ -1458,6 +1802,15 @@ const AdminModule = (() => {
     renderTab('audit');
   }
 
-  return { render, openAddUser, editUser, saveUser, toggleUser, onRoleChange, toggleCategoryPerms, toggleAllPerms, openAddSub, editSub, saveSub, toggleSub, openAddVendor, editVendor, saveVendor, toggleVendor, openAddOp, editOp, saveOp, toggleOp, openAddInspector, editInspector, saveInspector, toggleInspector, clearTransactionData, toggleDatabaseMode, triggerBackupExport, triggerBackupImport, triggerBackupImportLive, viewTaskDetails, openCreateTask, createTask, filterAdminBatches, saveBatchStage, changeBatchPage, filterAuditCategory, filterAuditSearch };
+  async function syncMissingBatchesStatus() {
+    if (typeof StockAuditModule !== 'undefined' && typeof StockAuditModule.syncMissingBatchesStatus === 'function') {
+      await StockAuditModule.syncMissingBatchesStatus();
+      filterAdminBatches(document.getElementById('admin-batch-search')?.value || '', false);
+    } else {
+      showToast('Stock Audit Module not loaded', 'error');
+    }
+  }
+
+  return { render, openAddUser, editUser, saveUser, toggleUser, onRoleChange, toggleCategoryPerms, toggleAllPerms, openAddSub, editSub, saveSub, toggleSub, openAddVendor, editVendor, saveVendor, toggleVendor, openAddOp, editOp, saveOp, toggleOp, openAddInspector, editInspector, saveInspector, toggleInspector, clearTransactionData, toggleDatabaseMode, triggerBackupExport, triggerBackupImport, triggerBackupImportLive, viewTaskDetails, openCreateTask, createTask, filterAdminBatches, saveBatchStage, changeBatchPage, deepScanStageMismatches, syncSingleBatchStage, syncAllMismatchedStages, filterAuditCategory, filterAuditSearch, getAuditProdAgeConfig, saveAuditProdAgeConfig, saveAuditProdAgeConfigFromUi, syncMissingBatchesStatus };
 })();
 

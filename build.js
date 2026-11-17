@@ -12,6 +12,8 @@ const filesToCopy = [
   'index.html',
   'index.css',
   'logo.png',
+  'firebase-app-compat.js',
+  'firebase-firestore-compat.js',
   'db.js',
   'auth.js',
   'html5-qrcode.min.js',
@@ -42,6 +44,10 @@ const filesToCopy = [
   'stock-audit.js',
   'delivery-challan.js',
   'quick-movement.js',
+  'visual-loss-reprocess.js',
+  'raw-material.js',
+  'suppliers.js',
+  'rm-master.js',
   'xlsx.full.min.js',
   'jmpl_industrial_banner.jpg'
 ];

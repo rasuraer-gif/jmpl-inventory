@@ -581,12 +581,26 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') closeAllModals();
 });
 
+// ── Report Functional Groups ──────────────────────────────
+const REPORT_GROUPS = [
+  { id:'inv_stock',      label:'Inventory & Stock',         icon:'📦', color:'#10b981', desc:'WIP, Store, Aging, SLOB, and Valuation' },
+  { id:'prod_ops',       label:'Production & Operations',   icon:'🏭', color:'#3b82f6', desc:'Output, Cycle Times, Moulds & Efficiency' },
+  { id:'quality_loss',   label:'Quality & Process Loss',    icon:'⭐', color:'#f59e0b', desc:'QC, Inspections, Rejection & Stage Scrap' },
+  { id:'subcontractor',  label:'Subcontractors & Vendors',  icon:'🏢', color:'#8b5cf6', desc:'Pending Batches, Comparison & Scorecards' },
+  { id:'raw_material',   label:'Raw Material (RM)',         icon:'🧪', color:'#ec4899', desc:'3-State Stock, DC Balances, GRN & Ledger' },
+  { id:'stock_audit',    label:'Physical Stock Audit',      icon:'🛡️', color:'#ef4444', desc:'Audit Discrepancies & Missing Batches' },
+  { id:'sales_analytics',label:'Sales & Analytics',         icon:'📈', color:'#06b6d4', desc:'Sales Register & Visual BI Dashboards' },
+];
+
 // ── Navigation Config ──────────────────────────────────────
 const NAV = [
   { id:'dashboard',  label:'Dashboard',           icon:'🏠', module:'dashboard', section:'main' },
   { id:'master',     label:'Inventory Master',    icon:'📋', module:'master',    section:'main', perm:'master' },
+  { id:'rm-master',  label:'RM Master',           icon:'🧪', module:'rm-master', section:'main', perm:'rm-master' },
+  { id:'suppliers',  label:'Suppliers & Vendors', icon:'🏢', module:'suppliers', section:'main', perm:'suppliers' },
   { id:'mould-tracking', label:'Mould Tracking',   icon:'🛠️', module:'mould-tracking', section:'main', perm:'mould-tracking' },
   // Departments
+  { id:'raw-material', label:'Raw Material (GRN)', icon:'🧪', module:'raw-material', section:'dept', perm:'raw-material' },
   { id:'production', label:'Production',          icon:'🏭', module:'production',section:'dept', perm:'production' },
   { id:'cryogenic',  label:'Cryogenic',           icon:'❄️', module:'cryogenic', section:'dept', perm:'cryogenic' },
   { id:'deflashing', label:'Flash Removal',       icon:'🔧', module:'deflashing',section:'dept', perm:'deflashing' },
@@ -595,6 +609,7 @@ const NAV = [
   { id:'post-curing', label:'Post Curing',          icon:'🔥', module:'post-curing',section:'dept', perm:'post-curing' },
   { id:'waiting-visual', label:'Waiting for Visual inspection', icon:'⏳', module:'waiting-visual',section:'dept', perm:'waiting-visual' },
   { id:'visual',     label:'Visual Inspection',   icon:'👁️', module:'visual',    section:'dept', perm:'visual' },
+  { id:'visual-loss-reprocess', label:'Visual Loss Reprocess', icon:'♻️', module:'visual-loss-reprocess', section:'dept', perm:'visual' },
   { id:'gauge',      label:'Gauge Inspection',    icon:'📏', module:'gauge',     section:'dept', perm:'gauge' },
   { id:'quality',    label:'Quality Final',       icon:'⭐', module:'quality',   section:'dept', perm:'quality' },
   { id:'store',      label:'Store & Sales',       icon:'🏪', module:'store',     section:'dept', perm:'store' },
@@ -607,43 +622,62 @@ const NAV = [
   { id:'task-tracking',label:'Task Tracking',     icon:'📋', module:'task-tracking',section:'tools', perm:'task-tracking' },
   { id:'stock-audit',  label:'Monthly Stock Taking', icon:'📋', module:'stock-audit',  section:'tools', perm:'stock-audit' },
   { id:'delivery-challan', label:'Delivery Challan', icon:'🚚', module:'delivery-challan', section:'tools', perm:'delivery-challan' },
+  { id:'dc-jobwork',   label:'Job Work (Batches)',   icon:'📦', module:'dc-jobwork',       section:'tools', parent:'delivery-challan', perm:'delivery-challan' },
+  { id:'dc-rm-processing', label:'RM Processing / Reprocess', icon:'🧪', module:'dc-rm-processing', section:'tools', parent:'delivery-challan', perm:'delivery-challan' },
   { id:'reports',    label:'Reports',             icon:'📊', module:'reports',   section:'tools' },
-  // Sub-reports
-  { id:'rpt-inventory', label:'Inventory Report',  icon:'📦', module:'report_inventory', section:'tools', parent:'reports', perm:'report_inventory' },
-  { id:'rpt-store-stock', label:'Store Stock Report', icon:'🏪', module:'report_store_stock', section:'tools', parent:'reports', perm:'report_store_stock' },
-  { id:'rpt-sales',     label:'Sales Report',      icon:'💰', module:'report_sales',     section:'tools', parent:'reports', perm:'report_sales' },
-  { id:'rpt-production',label:'Production Report', icon:'🏭', module:'report_production',section:'tools', parent:'reports', perm:'report_production' },
-  { id:'rpt-cryogenic', label:'Cryogenic Loss',    icon:'❄️', module:'report_cryogenic', section:'tools', parent:'reports', perm:'report_cryogenic' },
-  { id:'rpt-deflashing',label:'Flash Removal Loss',icon:'🔧', module:'report_deflashing',section:'tools', parent:'reports', perm:'report_deflashing' },
-  { id:'rpt-trimming',  label:'Trimming Loss',     icon:'✂️', module:'report_trimming',  section:'tools', parent:'reports', perm:'report_trimming' },
-  { id:'rpt-post-curing', label:'Post Curing Loss', icon:'🔥', module:'report_post_curing', section:'tools', parent:'reports', perm:'report_post_curing' },
-  { id:'rpt-waiting-visual', label:'Waiting for Visual Report', icon:'⏳', module:'report_waiting_visual', section:'tools', parent:'reports', perm:'report_waiting_visual' },
-  { id:'rpt-visual',    label:'Visual Inspection', icon:'👁️', module:'report_visual',    section:'tools', parent:'reports', perm:'report_visual' },
-  { id:'rpt-gauge',     label:'Gauge Inspection',  icon:'📏', module:'report_gauge',     section:'tools', parent:'reports', perm:'report_gauge' },
-  { id:'rpt-quality',   label:'Quality Final Report', icon:'⭐', module:'report_quality', section:'tools', parent:'reports', perm:'report_quality' },
-  { id:'rpt-rejected',  label:'Rejected Batches',  icon:'🚫', module:'report_rejected',  section:'tools', parent:'reports', perm:'report_rejected' },
-  { id:'rpt-recheck',   label:'QF Recheck Report', icon:'🔄', module:'report_recheck',   section:'tools', parent:'reports', perm:'report_recheck' },
-  { id:'rpt-slob',      label:'SLOB Report',       icon:'📉', module:'report_slob',      section:'tools', parent:'reports', perm:'report_slob' },
-  { id:'rpt-aging',     label:'Aging WIP Report',  icon:'⏳', module:'report_aging',     section:'tools', parent:'reports', perm:'report_aging' },
-  { id:'rpt-pending-batches', label:'Pending Batches', icon:'⏳', module:'report_pending_batches', section:'tools', parent:'reports', perm:'report_pending_batches' },
-  { id:'rpt-reprocess', label:'Reprocessed Items', icon:'🔄', module:'report_reprocess', section:'tools', parent:'reports', perm:'report_reprocess' },
-  { id:'rpt-qty-gain',  label:'Qty Gain Report',   icon:'📈', module:'report_qty_gain',  section:'tools', parent:'reports', perm:'report_qty_gain' },
-  { id:'rpt-qty-loss',  label:'Qty Loss Report',   icon:'📉', module:'report_qty_loss',  section:'tools', parent:'reports', perm:'report_qty_loss' },
-  { id:'rpt-op-efficiency', label:'Operator & Inspector Efficiency', icon:'👷', module:'report_op_efficiency', section:'tools', parent:'reports', perm:'report_op_efficiency' },
-  { id:'rpt-mould-lifecycle', label:'Mould Lifecycle & Performance', icon:'⚙️', module:'report_mould_lifecycle', section:'tools', parent:'reports', perm:'report_mould_lifecycle' },
-  { id:'rpt-cycle-time', label:'Production Cycle Time & Bottlenecks', icon:'⏳', module:'report_cycle_time', section:'tools', parent:'reports', perm:'report_cycle_time' },
-  { id:'rpt-wip-valuation', label:'WIP Inventory Valuation', icon:'💰', module:'report_wip_valuation', section:'tools', parent:'reports', perm:'report_wip_valuation' },
-  { id:'rpt-sub-vs-inhouse', label:'Subcontractor vs. In-House Comparison', icon:'🏢', module:'report_sub_vs_inhouse', section:'tools', parent:'reports', perm:'report_sub_vs_inhouse' },
-  { id:'rpt-sub-pending', label:'Subcontractor Pending Batches', icon:'🏢', module:'report_sub_pending', section:'tools', parent:'reports', perm:'report_sub_pending' },
-  { id:'rpt-sub-batches', label:'Subcontractor Batches (by Prod. Date)', icon:'🏢', module:'report_sub_batches', section:'tools', parent:'reports', perm:'report_sub_batches' },
-  { id:'rpt-sub-performance', label:'Subcontractor & Vendor Scorecard', icon:'🏢', module:'report_sub_performance', section:'tools', parent:'reports', perm:'report_sub_performance' },
-  { id:'rpt-store-aging', label:'Store FIFO Aging Report', icon:'⏳', module:'report_store_aging', section:'tools', parent:'reports', perm:'report_store_aging' },
-  { id:'rpt-daily-summary', label:'Daily Production & Scrap', icon:'📊', module:'report_daily_summary', section:'tools', parent:'reports', perm:'report_daily_summary' },
-  { id:'rpt-analytics', label:'Production & Quality Analytics', icon:'📈', module:'report_analytics', section:'tools', parent:'reports', perm:'report_analytics' },
-  { id:'rpt-stock-audit', label:'Stock Audit Discrepancy & Reconciliation', icon:'📊', module:'report_stock_audit', section:'tools', parent:'reports' },
-  { id:'rpt-audit-missing', label:'Missing Batches Cross-Session Audit', icon:'🚨', module:'report_audit_missing', section:'tools', parent:'reports' },
-  { id:'rpt-cryo-deflash-trim', label:'Cryo, De-Flash & Trim JMREFs', icon:'❄️', module:'report_cryo_deflash_trim', section:'tools', parent:'reports', perm:'report_cryo_deflash_trim' },
-  { id:'rpt-process-leakage', label:'JMREF Process Leakage & Route Deviation', icon:'🔀', module:'report_process_leakage', section:'tools', parent:'reports', perm:'report_process_leakage' },
+  // ── Functional Group: Inventory & Stock (8) ──
+  { id:'rpt-inventory', label:'Inventory Report',  icon:'📦', module:'report_inventory', section:'tools', parent:'reports', reportGroup:'inv_stock', perm:'report_inventory' },
+  { id:'rpt-store-stock', label:'Store Stock Report', icon:'🏪', module:'report_store_stock', section:'tools', parent:'reports', reportGroup:'inv_stock', perm:'report_store_stock' },
+  { id:'rpt-store-aging', label:'Store FIFO Aging Report', icon:'⏳', module:'report_store_aging', section:'tools', parent:'reports', reportGroup:'inv_stock', perm:'report_store_aging' },
+  { id:'rpt-wip-valuation', label:'WIP Inventory Valuation', icon:'💰', module:'report_wip_valuation', section:'tools', parent:'reports', reportGroup:'inv_stock', perm:'report_wip_valuation' },
+  { id:'rpt-aging',     label:'Aging WIP Report',  icon:'⏳', module:'report_aging',     section:'tools', parent:'reports', reportGroup:'inv_stock', perm:'report_aging' },
+  { id:'rpt-pending-batches', label:'Pending Batches', icon:'⏳', module:'report_pending_batches', section:'tools', parent:'reports', reportGroup:'inv_stock', perm:'report_pending_batches' },
+  { id:'rpt-waiting-visual', label:'Waiting for Visual Report', icon:'⏳', module:'report_waiting_visual', section:'tools', parent:'reports', reportGroup:'inv_stock', perm:'report_waiting_visual' },
+  { id:'rpt-slob',      label:'SLOB Report',       icon:'📉', module:'report_slob',      section:'tools', parent:'reports', reportGroup:'inv_stock', perm:'report_slob' },
+
+  // ── Functional Group: Production & Operations (7) ──
+  { id:'rpt-production',label:'Production Report', icon:'🏭', module:'report_production',section:'tools', parent:'reports', reportGroup:'prod_ops', perm:'report_production' },
+  { id:'rpt-daily-summary', label:'Daily Production & Scrap', icon:'📊', module:'report_daily_summary', section:'tools', parent:'reports', reportGroup:'prod_ops', perm:'report_daily_summary' },
+  { id:'rpt-cycle-time', label:'Production Cycle Time & Bottlenecks', icon:'⏳', module:'report_cycle_time', section:'tools', parent:'reports', reportGroup:'prod_ops', perm:'report_cycle_time' },
+  { id:'rpt-op-efficiency', label:'Operator & Inspector Efficiency', icon:'👷', module:'report_op_efficiency', section:'tools', parent:'reports', reportGroup:'prod_ops', perm:'report_op_efficiency' },
+  { id:'rpt-mould-lifecycle', label:'Mould Lifecycle & Performance', icon:'⚙️', module:'report_mould_lifecycle', section:'tools', parent:'reports', reportGroup:'prod_ops', perm:'report_mould_lifecycle' },
+  { id:'rpt-cryo-deflash-trim', label:'Cryo, De-Flash & Trim JMREFs', icon:'❄️', module:'report_cryo_deflash_trim', section:'tools', parent:'reports', reportGroup:'prod_ops', perm:'report_cryo_deflash_trim' },
+  { id:'rpt-process-leakage', label:'JMREF Process Leakage & Route Deviation', icon:'🔀', module:'report_process_leakage', section:'tools', parent:'reports', reportGroup:'prod_ops', perm:'report_process_leakage' },
+
+  // ── Functional Group: Quality, Inspection & Stage Losses (12) ──
+  { id:'rpt-quality',   label:'Quality Final Report', icon:'⭐', module:'report_quality', section:'tools', parent:'reports', reportGroup:'quality_loss', perm:'report_quality' },
+  { id:'rpt-visual',    label:'Visual Inspection', icon:'👁️', module:'report_visual',    section:'tools', parent:'reports', reportGroup:'quality_loss', perm:'report_visual' },
+  { id:'rpt-gauge',     label:'Gauge Inspection',  icon:'📏', module:'report_gauge',     section:'tools', parent:'reports', reportGroup:'quality_loss', perm:'report_gauge' },
+  { id:'rpt-rejected',  label:'Rejected Batches',  icon:'🚫', module:'report_rejected',  section:'tools', parent:'reports', reportGroup:'quality_loss', perm:'report_rejected' },
+  { id:'rpt-recheck',   label:'QF Recheck Report', icon:'🔄', module:'report_recheck',   section:'tools', parent:'reports', reportGroup:'quality_loss', perm:'report_recheck' },
+  { id:'rpt-reprocess', label:'Reprocessed Items', icon:'🔄', module:'report_reprocess', section:'tools', parent:'reports', reportGroup:'quality_loss', perm:'report_reprocess' },
+  { id:'rpt-qty-loss',  label:'Qty Loss Report',   icon:'📉', module:'report_qty_loss',  section:'tools', parent:'reports', reportGroup:'quality_loss', perm:'report_qty_loss' },
+  { id:'rpt-qty-gain',  label:'Qty Gain Report',   icon:'📈', module:'report_qty_gain',  section:'tools', parent:'reports', reportGroup:'quality_loss', perm:'report_qty_gain' },
+  { id:'rpt-cryogenic', label:'Cryogenic Loss',    icon:'❄️', module:'report_cryogenic', section:'tools', parent:'reports', reportGroup:'quality_loss', perm:'report_cryogenic' },
+  { id:'rpt-deflashing',label:'Flash Removal Loss',icon:'🔧', module:'report_deflashing',section:'tools', parent:'reports', reportGroup:'quality_loss', perm:'report_deflashing' },
+  { id:'rpt-trimming',  label:'Trimming Loss',     icon:'✂️', module:'report_trimming',  section:'tools', parent:'reports', reportGroup:'quality_loss', perm:'report_trimming' },
+  { id:'rpt-post-curing', label:'Post Curing Loss', icon:'🔥', module:'report_post_curing', section:'tools', parent:'reports', reportGroup:'quality_loss', perm:'report_post_curing' },
+
+  // ── Functional Group: Subcontractors & Vendors (4) ──
+  { id:'rpt-sub-vs-inhouse', label:'Subcontractor vs. In-House Comparison', icon:'🏢', module:'report_sub_vs_inhouse', section:'tools', parent:'reports', reportGroup:'subcontractor', perm:'report_sub_vs_inhouse' },
+  { id:'rpt-sub-pending', label:'Subcontractor Pending Batches', icon:'🏢', module:'report_sub_pending', section:'tools', parent:'reports', reportGroup:'subcontractor', perm:'report_sub_pending' },
+  { id:'rpt-sub-batches', label:'Subcontractor Batches (by Prod. Date)', icon:'🏢', module:'report_sub_batches', section:'tools', parent:'reports', reportGroup:'subcontractor', perm:'report_sub_batches' },
+  { id:'rpt-sub-performance', label:'Subcontractor & Vendor Scorecard', icon:'🏢', module:'report_sub_performance', section:'tools', parent:'reports', reportGroup:'subcontractor', perm:'report_sub_performance' },
+
+  // ── Functional Group: Raw Material (RM) Tracking (5) ──
+  { id:'rpt-rm-inventory', label:'RM Inventory & Stock Tracking', icon:'🧪', module:'report_rm_inventory', section:'tools', parent:'reports', reportGroup:'raw_material', perm:'report_rm_inventory' },
+  { id:'rpt-rm-sub-balance', label:'Subcontractor RM Balance', icon:'🏢', module:'report_rm_sub_balance', section:'tools', parent:'reports', reportGroup:'raw_material', perm:'report_rm_sub_balance' },
+  { id:'rpt-rm-consumption', label:'RM Consumption & Traceability', icon:'🔥', module:'report_rm_consumption', section:'tools', parent:'reports', reportGroup:'raw_material', perm:'report_rm_consumption' },
+  { id:'rpt-rm-inward-register', label:'RM GRN Inward Register', icon:'📥', module:'report_rm_inward_register', section:'tools', parent:'reports', reportGroup:'raw_material', perm:'report_rm_inward_register' },
+  { id:'rpt-rm-stock-ledger', label:'RM Stock Movement Ledger', icon:'🔄', module:'report_rm_stock_ledger', section:'tools', parent:'reports', reportGroup:'raw_material', perm:'report_rm_stock_ledger' },
+
+  // ── Functional Group: Physical Stock Taking & Audit (2) ──
+  { id:'rpt-stock-audit', label:'Stock Audit Discrepancy & Reconciliation', icon:'📊', module:'report_stock_audit', section:'tools', parent:'reports', reportGroup:'stock_audit' },
+  { id:'rpt-audit-missing', label:'Missing Batches Cross-Session Audit', icon:'🚨', module:'report_audit_missing', section:'tools', parent:'reports', reportGroup:'stock_audit' },
+
+  // ── Functional Group: Sales & Executive Analytics (2) ──
+  { id:'rpt-sales',     label:'Sales Report',      icon:'💰', module:'report_sales',     section:'tools', parent:'reports', reportGroup:'sales_analytics', perm:'report_sales' },
+  { id:'rpt-analytics', label:'Production & Quality Analytics', icon:'📈', module:'report_analytics', section:'tools', parent:'reports', reportGroup:'sales_analytics', perm:'report_analytics' },
 
   { id:'print-batch',  label:'Print Label',        icon:'🖨️', module:'print-batch',  section:'tools', perm:'print-batch' },
   { id:'ai-agent',   label:'AI Assistant',        icon:'🤖', module:'ai-agent',  section:'tools', perm:'ai-agent' },
@@ -665,8 +699,11 @@ const App = (() => {
   const MODULE_MAP = {
     dashboard:  () => renderDashboard(),
     master:     () => MasterModule?.render(),
+    'rm-master': () => RmMasterModule?.render(),
+    suppliers:  () => SuppliersModule?.render(),
+    'raw-material': () => RawMaterialModule?.render(),
     'mould-tracking': () => MouldTrackingModule?.render(),
-    production: () => ProductionModule?.render(),
+    production: (opt) => ProductionModule?.render(opt),
     cryogenic:  () => CryogenicModule?.render(),
     deflashing: () => DeflashingModule?.render(),
     'waiting-trimming': () => WaitingTrimmingModule?.render(),
@@ -674,6 +711,7 @@ const App = (() => {
     'post-curing': () => PostCuringModule?.render(),
     'waiting-visual': () => WaitingVisualModule?.render(),
     visual:     () => VisualModule?.render(),
+    'visual-loss-reprocess': () => VisualLossReprocessModule?.render(),
     gauge:      () => GaugeModule?.render(),
     quality:    () => QualityModule?.render(),
     store:      () => StoreModule?.render(),
@@ -684,8 +722,10 @@ const App = (() => {
     replenishment:  () => ReplenishmentModule?.render(),
     'task-tracking': () => TaskTrackingModule?.render(),
     'stock-audit':   () => StockAuditModule?.render(),
-    'delivery-challan': () => DeliveryChallanModule?.render(),
-    reports:    () => ReportsModule?.render('inventory'),
+    'delivery-challan': () => DeliveryChallanModule?.render('jobwork'),
+    'dc-jobwork':       () => DeliveryChallanModule?.render('jobwork'),
+    'dc-rm-processing': () => DeliveryChallanModule?.render('rm-processing'),
+    reports:    () => ReportsModule?.render('hub'),
     admin:      () => AdminModule?.render(),
     'ai-agent': () => AIAgentModule?.render(),
     report_inventory:  () => ReportsModule?.render('inventory'),
@@ -723,22 +763,29 @@ const App = (() => {
     report_audit_missing:() => ReportsModule?.render('audit-missing-batches'),
     report_cryo_deflash_trim: () => ReportsModule?.render('cryo-deflash-trim'),
     report_process_leakage: () => ReportsModule?.render('process-leakage'),
+    report_rm_inventory:    () => ReportsModule?.render('rm-inventory'),
+    report_rm_sub_balance:  () => ReportsModule?.render('rm-sub-balance'),
+    report_rm_consumption:  () => ReportsModule?.render('rm-consumption'),
+    report_rm_inward_register: () => ReportsModule?.render('rm-inward-register'),
+    report_rm_stock_ledger: () => ReportsModule?.render('rm-stock-ledger'),
     'print-batch':     () => PrintBatchModule?.render(),
   };
 
   const PAGE_TITLES = {
-    dashboard:'Dashboard', master:'Inventory Master', 'mould-tracking':'Mould Tracking', production:'Production',
+    dashboard:'Dashboard', master:'Inventory Master', 'rm-master':'Raw Material Master', suppliers:'Suppliers & Vendors', 'raw-material':'Raw Material (GRN)', 'mould-tracking':'Mould Tracking', production:'Production',
     cryogenic:'Cryogenic', deflashing:'Flash Removal', 'waiting-trimming':'Waiting for Trimming', trimming:'Trimming',
-    visual:'Visual Inspection', gauge:'Gauge Inspection', quality:'Quality Final',
+    visual:'Visual Inspection', 'visual-loss-reprocess':'Visual Loss to Reprocess', gauge:'Gauge Inspection', quality:'Quality Final',
     'post-curing':'Post Curing',
     'waiting-visual':'Waiting for Visual inspection',
-    store:'Store & Sales', stock:'Stock Upload', 'daily-analysis':'Daily Requirement Feasibility', reports:'Reports', admin:'Admin Panel',
+    store:'Store & Sales', stock:'Stock Upload', 'daily-analysis':'Daily Requirement Feasibility', reports:'Reports Hub & Functional Catalog', admin:'Admin Panel',
     'print-batch':'Print Label',
     'ai-agent':'AI Assistant',
     'monthly-plan':'Monthly Plan',
     'prod-sched':'Production Schedule',
     replenishment:'Replenishment Planner',
     'delivery-challan': 'Delivery Challan',
+    'dc-jobwork': 'Job Work Delivery Challan',
+    'dc-rm-processing': 'RM Processing & Reprocessing Delivery Challan',
     'task-tracking':'Task Tracking',
     'stock-audit':'Monthly Physical Stock Taking & Audit',
     report_inventory:'Inventory Report',
@@ -775,9 +822,14 @@ const App = (() => {
     report_stock_audit:'Stock Audit Discrepancy & Reconciliation Report',
     report_audit_missing:'Missing Batches Cross-Session Audit Report',
     report_cryo_deflash_trim:'Cryo, De-Flash & Trim JMREFs Report',
+    report_rm_inventory:'RM Inventory & 3-State Stock Tracking',
+    report_rm_sub_balance:'Subcontractor RM Balance & Holding Report',
+    report_rm_consumption:'RM Consumption & Batch Traceability Report',
+    report_rm_inward_register:'RM GRN Inward & Supplier Receipt Register',
+    report_rm_stock_ledger:'RM Stock Ledger & Movement Audit Trail',
   };
 
-  function navigate(moduleId) {
+  function navigate(moduleId, opt = null) {
     const nav = NAV.find(n => n.module === moduleId);
     if (!nav) return;
 
@@ -811,9 +863,44 @@ const App = (() => {
       }).catch(console.warn);
     }
 
+    // If navigating to delivery-challan or its branches, expand the DC branch menu
+    if (moduleId === 'delivery-challan' || moduleId === 'dc-jobwork' || moduleId === 'dc-rm-processing') {
+      const subDc = document.querySelectorAll('.sub-nav-dc');
+      subDc.forEach(el => el.style.display = 'flex');
+      localStorage.setItem('jmpl_dc_expanded', 'true');
+      const arrow = document.getElementById('dc-menu-arrow');
+      if (arrow) arrow.textContent = '▼';
+    }
+
+    // If navigating to reports or any sub-report, auto-expand reports menu and the report's functional category
+    if (moduleId === 'reports' || (nav && nav.parent === 'reports')) {
+      reportsExpanded = true;
+      localStorage.setItem('jmpl_reports_expanded', 'true');
+      const rptArrow = document.getElementById('reports-menu-arrow');
+      if (rptArrow) rptArrow.textContent = '▼';
+      document.querySelectorAll('.sub-nav-group-header, #nav-rpt-hub').forEach(el => {
+        el.style.display = 'flex';
+      });
+
+      if (nav && nav.reportGroup) {
+        const grpId = nav.reportGroup;
+        localStorage.setItem('jmpl_rpt_grp_' + grpId, 'true');
+        const itemsEl = document.getElementById('rpt-grp-items-' + grpId);
+        if (itemsEl) itemsEl.style.display = 'block';
+        const arrowEl = document.getElementById('rpt-grp-arrow-' + grpId);
+        if (arrowEl) arrowEl.textContent = '▾';
+      }
+
+      // Highlight active group header
+      document.querySelectorAll('.sub-nav-group-header').forEach(el => {
+        el.classList.toggle('active-group', nav && el.dataset.group === nav.reportGroup);
+      });
+    }
+
     // Update active nav
     document.querySelectorAll('.nav-item[data-module]').forEach(el => {
-      el.classList.toggle('active', el.dataset.module === moduleId);
+      const isTarget = el.dataset.module === moduleId || (moduleId === 'delivery-challan' && el.dataset.module === 'dc-jobwork');
+      el.classList.toggle('active', isTarget);
     });
 
     // Update top bar title
@@ -836,7 +923,7 @@ const App = (() => {
     const fn = MODULE_MAP[moduleId];
     if (fn) {
       try { 
-        fn(); 
+        fn(opt); 
         applyBatchTagsToContainer(document.getElementById('content'));
       }
       catch(e) {
@@ -908,6 +995,10 @@ const App = (() => {
         if (typeof DeliveryChallanModule !== 'undefined' && typeof DeliveryChallanModule.render === 'function') {
           DeliveryChallanModule.render();
         }
+      } else if (table === 'rawMaterials' && currentModule === 'rm-master') {
+        if (typeof RmMasterModule !== 'undefined' && typeof RmMasterModule.render === 'function') {
+          RmMasterModule.render();
+        }
       } else if (table === 'moulds' && currentModule === 'mould-tracking') {
         if (typeof MouldTrackingModule !== 'undefined' && typeof MouldTrackingModule.render === 'function') {
           MouldTrackingModule.render();
@@ -919,8 +1010,28 @@ const App = (() => {
       }
     });
 
-    window.addEventListener('online', triggerSyncStatusUpdate);
-    window.addEventListener('offline', triggerSyncStatusUpdate);
+    let offlineDebounceTimer = null;
+    window.addEventListener('online', () => {
+      if (offlineDebounceTimer) {
+        clearTimeout(offlineDebounceTimer);
+        offlineDebounceTimer = null;
+      }
+      if (typeof DB !== 'undefined' && typeof DB.ping === 'function') {
+        DB.ping(4000).catch(() => {});
+      }
+      triggerSyncStatusUpdate();
+    });
+
+    window.addEventListener('offline', () => {
+      // Debounce transient network hiccups (e.g. Wi-Fi AP handover / DHCP renewal) for 3 seconds
+      if (offlineDebounceTimer) clearTimeout(offlineDebounceTimer);
+      offlineDebounceTimer = setTimeout(() => {
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          triggerSyncStatusUpdate();
+        }
+      }, 3000);
+    });
+    window.triggerSyncStatusUpdate = triggerSyncStatusUpdate;
     triggerSyncStatusUpdate(); // initial call
 
     // Route to module from hash or default IMMEDIATELY
@@ -946,14 +1057,54 @@ const App = (() => {
   }
 
   function toggleReportsMenu() {
-    const subItems = document.querySelectorAll('.sub-nav-item');
+    reportsExpanded = !reportsExpanded;
+    localStorage.setItem('jmpl_reports_expanded', reportsExpanded);
+
+    const arrow = document.getElementById('reports-menu-arrow');
+    if (arrow) arrow.textContent = reportsExpanded ? '▼' : '▶';
+
+    // Toggle hub link and group headers
+    document.querySelectorAll('.sub-nav-group-header, #nav-rpt-hub').forEach(el => {
+      el.style.display = reportsExpanded ? 'flex' : 'none';
+    });
+
+    // For group items containers, only show if reportsExpanded AND the group is open
+    REPORT_GROUPS.forEach(grp => {
+      const itemsEl = document.getElementById('rpt-grp-items-' + grp.id);
+      if (itemsEl) {
+        const isGroupOpen = localStorage.getItem('jmpl_rpt_grp_' + grp.id) === 'true';
+        itemsEl.style.display = (reportsExpanded && isGroupOpen) ? 'block' : 'none';
+      }
+    });
+  }
+
+  function toggleReportGroup(groupId) {
+    const itemsEl = document.getElementById('rpt-grp-items-' + groupId);
+    const arrowEl = document.getElementById('rpt-grp-arrow-' + groupId);
+    if (!itemsEl) return;
+
+    const isCurrentlyOpen = itemsEl.style.display !== 'none';
+    const willOpen = !isCurrentlyOpen;
+
+    itemsEl.style.display = willOpen ? 'block' : 'none';
+    if (arrowEl) arrowEl.textContent = willOpen ? '▾' : '▸';
+    localStorage.setItem('jmpl_rpt_grp_' + groupId, willOpen ? 'true' : 'false');
+  }
+
+  function toggleDcMenu() {
+    const subItems = document.querySelectorAll('.sub-nav-dc');
     if (subItems.length === 0) return;
     const isHidden = subItems[0].style.display === 'none';
     subItems.forEach(el => {
       el.style.display = isHidden ? 'flex' : 'none';
     });
-    reportsExpanded = isHidden;
-    localStorage.setItem('jmpl_reports_expanded', reportsExpanded);
+    const dcExpanded = isHidden;
+    localStorage.setItem('jmpl_dc_expanded', dcExpanded);
+    const arrow = document.getElementById('dc-menu-arrow');
+    if (arrow) arrow.textContent = isHidden ? '▼' : '▶';
+    if (isHidden && currentModule !== 'dc-jobwork' && currentModule !== 'dc-rm-processing') {
+      navigate('dc-jobwork');
+    }
   }
 
   function openChangePasswordModal() {
@@ -1581,9 +1732,9 @@ const App = (() => {
       }
     }
 
-    // 4. BatchNo naming pattern (e.g. BATCH-REP-1 or BATCH-REP)
-    if (b.batchNo && b.batchNo.includes('-REP')) {
-      const baseNo = b.batchNo.split('-REP')[0].trim();
+    // 4. BatchNo naming pattern (e.g. BATCH-REP-1 or BATCH-LREP or BATCH-REP)
+    if (b.batchNo && (b.batchNo.includes('-REP') || b.batchNo.includes('-LREP'))) {
+      const baseNo = b.batchNo.split(/-REP|-LREP/)[0].trim();
       if (baseNo && baseNo !== b.batchNo) {
         let parent = allBatches.find(x => x.batchNo && x.batchNo.trim().toUpperCase() === baseNo.toUpperCase());
         if (!parent && DB.Batches.fetchRemoteByNo) {
@@ -1637,7 +1788,7 @@ const App = (() => {
         childMap.set(cb.id, cb);
         return;
       }
-      if (parent.batchNo && cb.batchNo && cb.batchNo.startsWith(parent.batchNo + '-REP')) {
+      if (parent.batchNo && cb.batchNo && (cb.batchNo.startsWith(parent.batchNo + '-REP') || cb.batchNo.startsWith(parent.batchNo + '-LREP'))) {
         childMap.set(cb.id, cb);
         return;
       }
@@ -2084,6 +2235,59 @@ const App = (() => {
       `;
     }
 
+    const bQc = b.qcParams || (filteredRecs.find(r => r.qcParams)?.qcParams);
+    let idBadge = '—';
+    if (bQc) {
+      const idVal = bQc.id_status || (bQc.id_d1 != null ? String(bQc.id_d1) : '');
+      if (idVal === 'Ok' || idVal === 'OK') {
+        idBadge = '<span class="badge badge-green" style="font-size:11px;">Ok</span>';
+      } else if (idVal === 'Not Ok' || idVal === 'NOT OK') {
+        idBadge = '<span class="badge badge-red" style="font-size:11px;">Not Ok</span>';
+      } else if (idVal) {
+        idBadge = `<span class="font-bold">${idVal}${!isNaN(idVal) ? ' mm' : ''}</span>`;
+      }
+    }
+    const qcSectionHtml = bQc ? `
+      <div style="background:var(--bg-glass-hover); border:1px solid var(--border); border-radius:10px; padding:14px; margin-bottom:20px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:6px;">
+          <h4 style="font-size:13px; font-weight:700; color:var(--primary); margin:0; display:flex; align-items:center; gap:6px;">
+            <span>🔬 Quality Final Inspection Parameters (QA Verified)</span>
+          </h4>
+          ${bQc.inspectorName ? `<span class="badge badge-teal text-xs">Inspector: ${bQc.inspectorName}</span>` : ''}
+        </div>
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap:10px; font-size:12px;">
+          <div style="background:var(--bg-card); padding:8px 10px; border-radius:6px; border:1px solid var(--border);">
+            <div class="text-xs text-muted">ID</div>
+            <div style="margin-top:2px;">${idBadge}</div>
+          </div>
+          <div style="background:var(--bg-card); padding:8px 10px; border-radius:6px; border:1px solid var(--border);">
+            <div class="text-xs text-muted">CSD A (Axial)</div>
+            <div class="font-bold">${bQc.csd_a != null ? bQc.csd_a + ' mm' : '—'}</div>
+          </div>
+          <div style="background:var(--bg-card); padding:8px 10px; border-radius:6px; border:1px solid var(--border);">
+            <div class="text-xs text-muted">CSD R (Radial)</div>
+            <div class="font-bold">${bQc.csd_r != null ? bQc.csd_r + ' mm' : '—'}</div>
+          </div>
+          <div style="background:var(--bg-card); padding:8px 10px; border-radius:6px; border:1px solid var(--border);">
+            <div class="text-xs text-muted">Profile</div>
+            <div class="font-bold">${(bQc.profile != null || bQc.profile_delta != null) ? (bQc.profile ?? bQc.profile_delta) + (!isNaN(bQc.profile ?? bQc.profile_delta) ? ' mm' : '') : '—'}</div>
+          </div>
+          <div style="background:var(--bg-card); padding:8px 10px; border-radius:6px; border:1px solid var(--border);">
+            <div class="text-xs text-muted">Shift (Offset)</div>
+            <div class="font-bold">${bQc.shift_offset != null ? bQc.shift_offset + ' mm' : '—'}</div>
+          </div>
+          <div style="background:var(--bg-card); padding:8px 10px; border-radius:6px; border:1px solid var(--border);">
+            <div class="text-xs text-muted">Flash (ID/OD)</div>
+            <div class="font-bold">${bQc.flash_projection || '—'}</div>
+          </div>
+          <div style="background:var(--bg-card); padding:8px 10px; border-radius:6px; border:1px solid var(--border);">
+            <div class="text-xs text-muted">Visual Defect</div>
+            <div><span class="badge ${bQc.visual_defect === 'OK' ? 'badge-green' : 'badge-amber'}" style="font-size:11px;">${bQc.visual_defect || 'OK'}</span></div>
+          </div>
+        </div>
+      </div>
+    ` : '';
+
     modal.innerHTML = `
       <div class="modal modal-md" style="max-width: 960px; border-radius:16px;">
         <div class="modal-header">
@@ -2130,6 +2334,23 @@ const App = (() => {
             </div>
           </div>
 
+          ${(b.sourceRmDcNo || b.sourceRmCode) ? `
+            <div style="background:rgba(139,92,246,0.06); border:1px solid rgba(139,92,246,0.25); border-radius:10px; padding:12px 16px; margin-bottom:20px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
+              <div>
+                <div style="font-size:11px; font-weight:700; text-transform:uppercase; color:var(--accent-purple); display:flex; align-items:center; gap:6px;">
+                  <span>🧪 Raw Material &amp; Delivery Challan Origin</span>
+                  <span class="badge badge-purple" style="font-size:10px;">BOM Traced</span>
+                </div>
+                <div style="font-size:13px; font-weight:700; color:var(--text-main); margin-top:4px;">
+                  Source RM DC: <strong style="color:var(--primary);">${b.sourceRmDcNo || '—'}</strong> &bull; RM Code: <strong style="color:var(--accent-teal);">${b.sourceRmCode || '—'}</strong> ${b.rmConsumedQty ? `&bull; Material Consumed: <strong>${b.rmConsumedQty} ${b.sourceRmUom || 'Kg'}</strong>` : ''}
+                </div>
+              </div>
+              <div class="text-xs text-muted">
+                Deducted from Subcontractor "Under Process" balance
+              </div>
+            </div>
+          ` : ''}
+
           <div style="border-top:1px solid var(--border); margin-bottom:20px; padding-top:16px;">
             <h4 style="font-size:14px; font-weight:700; margin-bottom:12px;">🌳 Family Lineage Tree</h4>
             ${lineageHtml}
@@ -2159,6 +2380,7 @@ const App = (() => {
             </div>
           </div>
 
+          ${qcSectionHtml}
           ${lossSectionHtml}
           ${recheckSectionHtml}
         </div>
@@ -2305,7 +2527,7 @@ const App = (() => {
     }
   }
 
-  return { navigate, init, toggleReportsMenu, openChangePasswordModal, changePassword, runQuickScan, showBatchGenealogy, openBatchDetailsModal: showBatchGenealogy, formatBatchCell, applyBatchTagsToContainer, getStageAgingChip, get current() { return currentModule; }, changeDashboardMonth: (val) => { dashboardMonth = val; renderDashboard(); }, toggleAllStageChecks, bulkPrintStageSelected, onGlobalSearchFocus, onGlobalSearchInput, selectBatchFromSearch, closeGlobalSearch, debounce };
+  return { navigate, init, toggleReportsMenu, toggleDcMenu, toggleReportGroup, REPORT_GROUPS, openChangePasswordModal, changePassword, runQuickScan, showBatchGenealogy, openBatchDetailsModal: showBatchGenealogy, formatBatchCell, applyBatchTagsToContainer, getStageAgingChip, get current() { return currentModule; }, changeDashboardMonth: (val) => { dashboardMonth = val; renderDashboard(); }, toggleAllStageChecks, bulkPrintStageSelected, onGlobalSearchFocus, onGlobalSearchInput, selectBatchFromSearch, closeGlobalSearch, debounce };
 })();
 window.App = App;
 window.getStageAgingChip = App.getStageAgingChip;
@@ -2689,6 +2911,8 @@ function showLoginPage() {
 function showAppShell(session) {
   const reportsExpanded = localStorage.getItem('jmpl_reports_expanded') === 'true';
   const displayStyle = reportsExpanded ? 'flex' : 'none';
+  const dcExpanded = localStorage.getItem('jmpl_dc_expanded') !== 'false';
+  const dcDisplayStyle = dcExpanded ? 'flex' : 'none';
 
   // Build sidebar nav
   let lastSection = '';
@@ -2698,9 +2922,13 @@ function showAppShell(session) {
     
     // Parent 'reports' menu item: hide if user is not admin and has access to zero sub-reports
     if (n.module === 'reports' && !Auth.isAdmin()) {
-      const hasAnyReportPerm = NAV.some(item => item.parent === 'reports' && item.perm && Auth.hasPermission(item.perm));
+      const hasAnyReportPerm = NAV.some(item => item.parent === 'reports' && (!item.perm || Auth.hasPermission(item.perm)));
       if (!hasAnyReportPerm) return false;
     }
+
+    // Skip individual sub-reports in top-level loop; they are rendered grouped under 'reports'
+    if (n.parent === 'reports') return false;
+
     return true;
   }).map(n => {
     let html = '';
@@ -2709,13 +2937,58 @@ function showAppShell(session) {
       lastSection = n.section;
     }
     
-    if (n.parent) {
-      html += `<button class="nav-item sub-nav-item" data-module="${n.module}" id="nav-${n.id}" onclick="App.navigate('${n.module}')" style="padding-left: 36px; font-size: 12.5px; display: ${displayStyle};">
+    if (n.parent === 'delivery-challan') {
+      html += `<button class="nav-item sub-nav-item sub-nav-dc" data-module="${n.module}" id="nav-${n.id}" onclick="App.navigate('${n.module}')" style="padding-left: 36px; font-size: 12.5px; display: ${dcDisplayStyle};">
         <span class="nav-icon">${n.icon}</span>${n.label}
       </button>`;
     } else if (n.module === 'reports') {
+      const rptArrowIcon = reportsExpanded ? '▼' : '▶';
+      const permittedSubReports = NAV.filter(item => item.parent === 'reports' && (!item.perm || Auth.hasPermission(item.perm) || Auth.isAdmin()));
+
       html += `<button class="nav-item" data-module="${n.module}" id="nav-${n.id}" onclick="App.toggleReportsMenu()">
-        <span class="nav-icon">${n.icon}</span>${n.label} <span style="margin-left: auto; font-size: 10px; opacity: 0.7;">▼</span>
+        <span class="nav-icon">${n.icon}</span>${n.label} <span id="reports-menu-arrow" style="margin-left: auto; font-size: 10px; opacity: 0.7;">${rptArrowIcon}</span>
+      </button>`;
+
+      // All Reports Hub link
+      html += `<button class="nav-item sub-nav-item sub-nav-reports" data-module="reports" id="nav-rpt-hub" onclick="App.navigate('reports')" style="padding-left: 26px; font-size: 12px; font-weight: 600; display: ${displayStyle};">
+        <span class="nav-icon" style="font-size:12px; width:16px;">🧭</span>All Reports Hub <span class="report-group-count" style="margin-left:auto; font-size:9.5px;">${permittedSubReports.length}</span>
+      </button>`;
+
+      // Render Functional Groups
+      REPORT_GROUPS.forEach(grp => {
+        const reportsInGroup = permittedSubReports.filter(item => item.reportGroup === grp.id);
+        if (reportsInGroup.length === 0) return;
+
+        const isGroupOpen = localStorage.getItem('jmpl_rpt_grp_' + grp.id) === 'true';
+        const grpArrow = isGroupOpen ? '▾' : '▸';
+        const grpItemsDisplay = (reportsExpanded && isGroupOpen) ? 'block' : 'none';
+        const activeMod = typeof App !== 'undefined' ? App.current : null;
+        const hasActiveItem = reportsInGroup.some(item => item.module === activeMod);
+
+        html += `
+          <div class="sub-nav-group-header sub-nav-reports ${hasActiveItem ? 'active-group' : ''}" data-group="${grp.id}" onclick="App.toggleReportGroup('${grp.id}')" style="display: ${displayStyle};">
+            <div style="display:flex; align-items:center; gap:6px; min-width:0; overflow:hidden;">
+              <span class="report-group-icon" style="font-size:12px;">${grp.icon}</span>
+              <span class="report-group-title" style="white-space:nowrap; text-overflow:ellipsis; overflow:hidden;">${grp.label}</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:4px; margin-left:auto; flex-shrink:0;">
+              <span class="report-group-count">${reportsInGroup.length}</span>
+              <span class="report-group-arrow" id="rpt-grp-arrow-${grp.id}">${grpArrow}</span>
+            </div>
+          </div>
+          <div class="report-group-items sub-nav-reports" id="rpt-grp-items-${grp.id}" style="display: ${grpItemsDisplay};">
+            ${reportsInGroup.map(item => `
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="${grp.id}" data-module="${item.module}" id="nav-${item.id}" onclick="App.navigate('${item.module}')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">${item.icon}</span><span class="nav-label-text">${item.label}</span>
+              </button>
+            `).join('')}
+          </div>
+        `;
+      });
+    } else if (n.module === 'delivery-challan') {
+      const arrowIcon = dcExpanded ? '▼' : '▶';
+      html += `<button class="nav-item" data-module="${n.module}" id="nav-${n.id}" onclick="App.toggleDcMenu()">
+        <span class="nav-icon">${n.icon}</span>${n.label} <span id="dc-menu-arrow" style="margin-left: auto; font-size: 10px; opacity: 0.7;">${arrowIcon}</span>
       </button>`;
     } else {
       html += `<button class="nav-item" data-module="${n.module}" id="nav-${n.id}" onclick="App.navigate('${n.module}')">
@@ -3002,6 +3275,16 @@ function renderDashboard() {
     generalLossRates[stage] = totalIn > 0 ? (totalLoss / totalIn) : 0.05;
   });
 
+  // Pre-calculate cumulative survival rates from each stage to completion
+  const stageSurvivalRates = [];
+  for (let i = 0; i < STAGES.length; i++) {
+    let rate = 1.0;
+    for (let j = i; j < STAGES.length; j++) {
+      rate *= (1.0 - (generalLossRates[STAGES[j]] || 0.05));
+    }
+    stageSurvivalRates[i] = rate;
+  }
+
   // Pre-calculate available store stock map for all parts
   const storeStockByJmref = {};
   storeInv.forEach(p => {
@@ -3017,20 +3300,16 @@ function renderDashboard() {
     for (let i = 0; i < STAGES.length; i++) {
       const stage = STAGES[i];
       const activeList = activeBatchesByPartAndStage[`${p.id}_${stage}`] || [];
-      const wip = activeList.reduce((sum, b) => {
-        const inc = DB.StageRecords.byBatch ? DB.StageRecords.byBatch(b.id) : [];
-        const matchInc = inc.filter(r => r.movedTo === stage);
-        if (matchInc.length) return sum + (matchInc[matchInc.length - 1].outputQty || 0);
-        return sum + (b.initialQty || 0);
-      }, 0);
+      if (!activeList.length) continue;
+
+      let wip = 0;
+      for (let k = 0; k < activeList.length; k++) {
+        const b = activeList[k];
+        wip += (b.remainingQty != null ? Number(b.remainingQty) : (Number(b.initialQty) || 0));
+      }
 
       if (wip <= 0) continue;
-
-      let survivalRate = 1.0;
-      for (let j = i; j < STAGES.length; j++) {
-        survivalRate *= (1.0 - (generalLossRates[STAGES[j]] || 0.05));
-      }
-      wipYield += Math.round(wip * survivalRate);
+      wipYield += Math.round(wip * stageSurvivalRates[i]);
     }
 
     const netAvailable = storeStock + wipYield;
@@ -3340,15 +3619,286 @@ function renderDashboard() {
     </div>
   `;
 
+  // ── Advanced Dashboard Analytics & KPI Calculations ──────────────
+  // Target achievement & required daily run-rate
+  const planAchievementPct = planQtyThisMonth > 0 ? Math.round((producedQtyThisMonth / planQtyThisMonth) * 100) : 0;
+  const today = new Date();
+  const [curY, curM] = thisMonth.split('-').map(Number);
+  const daysInMonth = new Date(curY, curM, 0).getDate();
+  const isCurrentMonth = thisMonth === today.toISOString().slice(0, 7);
+  const currentDay = isCurrentMonth ? today.getDate() : daysInMonth;
+  const daysRemaining = Math.max(0, daysInMonth - currentDay);
+  const remainingTarget = Math.max(0, planQtyThisMonth - producedQtyThisMonth);
+  const reqDailyRunRate = daysRemaining > 0 ? Math.ceil(remainingTarget / daysRemaining) : 0;
+  const targetBarColor = planAchievementPct >= 80 ? 'var(--accent-green)' : (planAchievementPct >= 50 ? 'var(--accent-amber)' : 'var(--accent-red)');
+
+  // Scrap / Loss quality rating
+  const grandLossNum = grandIn > 0 ? parseFloat(((grandLoss / grandIn) * 100).toFixed(1)) : 0;
+  let scrapBadgeClass = 'badge-green';
+  let scrapStatusText = '🟢 Controlled (< 3%)';
+  if (grandLossNum > 5.0) {
+    scrapBadgeClass = 'badge-red';
+    scrapStatusText = '🔴 High Scrap Alert (> 5%)';
+  } else if (grandLossNum >= 3.0) {
+    scrapBadgeClass = 'badge-amber';
+    scrapStatusText = '🟡 Watch Threshold (3–5%)';
+  }
+
+  // Stagnant WIP batches (> 72 hours in current stage)
+  let stagnantBatchesCount = 0;
+  const nowMs = Date.now();
+  for (let i = 0; i < batches.length; i++) {
+    const b = batches[i];
+    if (b && b.status === 'active' && !b.isArchived) {
+      let entryMs = null;
+      if (b.stageMovementDate) entryMs = new Date(b.stageMovementDate).getTime();
+      else if (b.createdAt) entryMs = new Date(b.createdAt).getTime();
+      else if (b.productionDate) entryMs = new Date(b.productionDate).getTime();
+      if (entryMs && !isNaN(entryMs) && (nowMs - entryMs) > (72 * 60 * 60 * 1000)) {
+        stagnantBatchesCount++;
+      }
+    }
+  }
+
+  // Tooling & Mould PM Health
+  const allMoulds = (typeof DB !== 'undefined' && DB.Moulds && DB.Moulds.all) ? DB.Moulds.all() : [];
+  let mouldsNeedingPm = 0;
+  allMoulds.forEach(m => {
+    const threshold = Number(m.pmThreshold || m.maintenanceThreshold || 5000);
+    let lifts = 0;
+    if (typeof MouldTrackingModule !== 'undefined' && typeof MouldTrackingModule.getMouldLiftsSinceMaintenance === 'function') {
+      lifts = MouldTrackingModule.getMouldLiftsSinceMaintenance(m);
+    }
+    if (lifts >= threshold || m.status === 'maintenance' || m.status === 'repair') {
+      mouldsNeedingPm++;
+    }
+  });
+
+  // Raw Material (🧪 RM) 3-State Stock & Circulation Snapshot
+  const allRms = (typeof DB !== 'undefined' && DB.RawMaterials && DB.RawMaterials.all) ? DB.RawMaterials.all() : [];
+  const allGrns = (typeof DB !== 'undefined' && DB.GrnRecords && DB.GrnRecords.all) ? DB.GrnRecords.all() : [];
+  const allDcs = (typeof DB !== 'undefined' && DB.DeliveryChallans && DB.DeliveryChallans.all) ? DB.DeliveryChallans.all() : [];
+
+  const validRmCodes = new Set();
+  const jmrefToRmCode = new Map();
+  allRms.forEach(rm => {
+    const code = (rm.code || rm.itemCode || '').trim().toUpperCase();
+    if (code) {
+      validRmCodes.add(code);
+      if (rm.linkedJmref) jmrefToRmCode.set(rm.linkedJmref.trim().toUpperCase(), code);
+    }
+  });
+
+  const rmStockMap = new Map();
+  let rmInwardThisMonth = 0;
+  allGrns.forEach(grn => {
+    const gMonth = (grn.receivedDate || grn.date || grn.createdAt || '').slice(0, 7);
+    (grn.items || []).forEach(it => {
+      const code = (it.itemCode || '').trim().toUpperCase();
+      if (!code || (validRmCodes.size > 0 && !validRmCodes.has(code))) return;
+      let e = rmStockMap.get(code);
+      if (!e) {
+        e = { inward: 0, dispatched: 0, consumed: 0, uom: it.uom || 'Kg', rate: parseFloat(it.unitRate || it.rate) || 0 };
+        rmStockMap.set(code, e);
+      }
+      const q = parseFloat(it.receivedQty) || 0;
+      e.inward += q;
+      if (gMonth === thisMonth) rmInwardThisMonth += q;
+      if (it.unitRate || it.rate) e.rate = parseFloat(it.unitRate || it.rate);
+    });
+  });
+
+  let activeRmDcsCount = 0;
+  allDcs.forEach(dc => {
+    let hasRm = false;
+    (dc.rmItems || []).forEach(it => {
+      const code = (it.itemCode || '').trim().toUpperCase();
+      if (!code || (validRmCodes.size > 0 && !validRmCodes.has(code))) return;
+      let e = rmStockMap.get(code);
+      if (!e) {
+        e = { inward: 0, dispatched: 0, consumed: 0, uom: it.uom || 'Kg', rate: parseFloat(it.rate) || 0 };
+        rmStockMap.set(code, e);
+      }
+      e.dispatched += (parseFloat(it.qty) || 0);
+      hasRm = true;
+    });
+    if (hasRm && dc.status !== 'cancelled' && dc.status !== 'closed') {
+      activeRmDcsCount++;
+    }
+  });
+
+  batches.forEach(b => {
+    if (!b || !b.batchNo || b.status === 'missing' || (b.isArchived && b.status !== 'rejected')) return;
+    let code = (b.sourceRmCode || '').trim().toUpperCase();
+    const bJm = (b.jmrefNo || '').trim().toUpperCase();
+    if (!code || !validRmCodes.has(code)) {
+      if (bJm && jmrefToRmCode.has(bJm)) code = jmrefToRmCode.get(bJm);
+      else return;
+    }
+    const consumedKg = parseFloat(b.rmConsumedQty) > 0 ? parseFloat(b.rmConsumedQty) : 0;
+    if (consumedKg > 0) {
+      let e = rmStockMap.get(code);
+      if (!e) {
+        e = { inward: 0, dispatched: 0, consumed: 0, uom: 'Kg', rate: 0 };
+        rmStockMap.set(code, e);
+      }
+      e.consumed += consumedKg;
+    }
+  });
+
+  let totalWhRmQty = 0;
+  let totalWhRmVal = 0;
+  let totalSubRmQty = 0;
+  let totalSubRmVal = 0;
+  let rmLowStockCount = 0;
+
+  allRms.forEach(rm => {
+    const code = (rm.code || rm.itemCode || '').trim().toUpperCase();
+    const stk = rmStockMap.get(code) || { inward: 0, dispatched: 0, consumed: 0, rate: 0 };
+    const rate = parseFloat(rm.unitPrice || rm.rate) || stk.rate || 0;
+    const whBal = Math.max(0, (stk.inward || 0) - (stk.dispatched || 0));
+    const subBal = Math.max(0, (stk.dispatched || 0) - (stk.consumed || 0));
+    totalWhRmQty += whBal;
+    totalWhRmVal += whBal * rate;
+    totalSubRmQty += subBal;
+    totalSubRmVal += subBal * rate;
+    const reorder = parseFloat(rm.reorderLevel) || 0;
+    if (whBal <= 0 || (reorder > 0 && whBal <= reorder)) {
+      rmLowStockCount++;
+    }
+  });
+
+  // Build Operational Alerts Ribbon HTML
+  let alertsRibbonHtml = '';
+  const alertChips = [];
+  if (criticalCount > 0) {
+    alertChips.push(`<div class="dashboard-alert-chip danger" onclick="App.navigate('replenishment')" title="Click to view critical low stock finished parts requiring production replenishment">🚨 ${formatNum(criticalCount)} Critical Stock Parts</div>`);
+  }
+  if (stagnantBatchesCount > 0) {
+    alertChips.push(`<div class="dashboard-alert-chip warning" onclick="App.navigate('report_aging')" title="Click to view stagnant WIP batches in factory stages > 72 hours">⏳ ${formatNum(stagnantBatchesCount)} Stagnant Batches (>3 Days)</div>`);
+  }
+  if (mouldsNeedingPm > 0) {
+    alertChips.push(`<div class="dashboard-alert-chip purple" onclick="App.navigate('mould-tracking')" title="Click to view moulds due for preventive maintenance">🛠️ ${formatNum(mouldsNeedingPm)} Moulds Due for PM</div>`);
+  }
+  if (activeRechecks > 0) {
+    alertChips.push(`<div class="dashboard-alert-chip info" onclick="App.navigate('waiting-visual')" title="Click to inspect active rework & recheck batches">🔁 ${formatNum(activeRechecks)} Recheck Batches Pending</div>`);
+  }
+  if (rmLowStockCount > 0) {
+    alertChips.push(`<div class="dashboard-alert-chip warning" onclick="App.navigate('report_rm_inventory')" title="Click to view Raw Materials at or below reorder level">🧪 ${formatNum(rmLowStockCount)} RM Items Low/Reorder</div>`);
+  }
+  if (alertChips.length > 0) {
+    alertsRibbonHtml = `
+      <div class="dashboard-alert-ribbon">
+        <div style="font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:0.5px; color:#dc2626; display:flex; align-items:center; gap:6px;">
+          <span>⚠️</span> <span>Action Needed:</span>
+        </div>
+        ${alertChips.join('')}
+      </div>`;
+  }
+
+  // Quick Action Toolbar
+  const quickActionsHtml = `
+    <div class="dashboard-quick-actions">
+      <span style="font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-secondary); margin-right:4px; display:flex; align-items:center; gap:4px;">
+        ⚡ <span>Quick Actions:</span>
+      </span>
+      <button class="quick-action-btn" onclick="App.navigate('production', 'create')" title="Launch Create Batch in Production">+ 🏭 New Batch</button>
+      <button class="quick-action-btn" onclick="App.navigate('raw-material')" title="Inward Raw Materials via GRN">+ 🧪 Inward RM (GRN)</button>
+      <button class="quick-action-btn" onclick="App.navigate('dc-rm-processing')" title="Dispatch Raw Materials to Subcontractors">+ 🚚 Outward DC</button>
+      <button class="quick-action-btn" onclick="App.runQuickScan()" title="Scan Batch QR Code via camera">🔍 Scan Batch QR</button>
+      <button class="quick-action-btn" onclick="App.navigate('reports')" title="Open Analytics & Reports Hub">📊 Reports Hub</button>
+      <button class="quick-action-btn" onclick="App.navigate('store')" title="Manage Store Inventory & Sales">📦 Store Dispatch</button>
+    </div>`;
+
+  // Target Progress Card
+  const targetCardHtml = `
+    <div class="target-progress-card">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:6px;">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span style="font-size:20px;">🎯</span>
+          <div>
+            <div style="font-size:14px; font-weight:800; color:var(--text-primary);">
+              Monthly Production Target Progress (${monthYearStr})
+            </div>
+            <div style="font-size:11.5px; color:var(--text-secondary);">
+              Monthly Target: <strong>${formatNum(planQtyThisMonth)} pcs</strong> &nbsp;|&nbsp; Actual Launched: <strong style="color:${targetBarColor}">${formatNum(producedQtyThisMonth)} pcs</strong>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex; align-items:center; gap:12px;">
+          <div style="text-align:right;">
+            <div style="font-size:18px; font-weight:900; color:${targetBarColor};">
+              ${planAchievementPct}%
+            </div>
+            <div style="font-size:10.5px; color:var(--text-muted);">
+              ${planQtyThisMonth > 0 ? (producedQtyThisMonth >= planQtyThisMonth ? 'Target Reached 🎉' : `${formatNum(remainingTarget)} pcs remaining`) : 'No plan defined'}
+            </div>
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="App.navigate('monthly-plan')" style="padding:4px 10px; font-size:11.5px;">
+            Plan Details →
+          </button>
+        </div>
+      </div>
+      <div class="target-progress-track">
+        <div class="target-progress-bar" style="width: ${Math.min(100, Math.max(2, planAchievementPct))}%; background: ${targetBarColor};"></div>
+      </div>
+      <div style="display:flex; justify-content:space-between; align-items:center; font-size:11px; color:var(--text-muted); margin-top:4px; flex-wrap:wrap; gap:8px;">
+        <span>${isCurrentMonth && daysRemaining > 0 ? `⏳ <strong>${daysRemaining} days remaining</strong> in ${monthYearStr.split(' ')[0]}` : `🗓️ ${monthYearStr}`}</span>
+        <span>${isCurrentMonth && daysRemaining > 0 && remainingTarget > 0 ? `Required Run Rate: <strong>${formatNum(reqDailyRunRate)} pcs/day</strong>` : ''}</span>
+        <span class="badge ${scrapBadgeClass}" style="font-size:10.5px; padding:2px 8px;" title="Total monthly scrap rate across manufacturing stages">Scrap Rate: <strong>${grandLossPercent}</strong> (${scrapStatusText})</span>
+      </div>
+    </div>`;
+
+  // Raw Material Snapshot Section
+  const rmSnapshotHtml = `
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:24px; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
+      <h3 style="font-size:14px;font-weight:700;margin:0;text-transform:uppercase;letter-spacing:0.5px;color:var(--accent-purple); display:flex; align-items:center; gap:6px;">
+        <span>🧪</span> <span>Raw Material &amp; Subcontractor Pipeline</span>
+      </h3>
+      <button class="btn btn-ghost btn-sm" onclick="App.navigate('report_rm_inventory')" style="font-size:12px; padding:2px 8px;">
+        Open 3-State RM Tracking →
+      </button>
+    </div>
+    <div class="dashboard-stats-grid-4" style="margin-bottom:28px;">
+      <div class="stat-card green clickable" onclick="App.navigate('report_rm_inventory')" title="Click to view live warehouse raw material inventory & valuation">
+        <span class="stat-card-arrow">↗</span>
+        <div style="font-size:22px;margin-bottom:8px;">🧪</div>
+        <div class="stat-label">In-House RM Stock</div>
+        <div class="stat-value green" style="font-size:22px;">${formatNum(totalWhRmQty, 1)} <span style="font-size:13px; font-weight:600;">Kg/Units</span></div>
+        <div class="stat-sub">warehouse on-hand ${totalWhRmVal > 0 ? `(₹${formatNum(Math.round(totalWhRmVal))})` : ''}</div>
+      </div>
+      <div class="stat-card purple clickable" onclick="App.navigate('report_rm_sub_balance')" title="Click to view subcontractor holding balances of dispatched materials">
+        <span class="stat-card-arrow">↗</span>
+        <div style="font-size:22px;margin-bottom:8px;">🏢</div>
+        <div class="stat-label">Under-Process at Subcontractors</div>
+        <div class="stat-value purple" style="font-size:22px;">${formatNum(totalSubRmQty, 1)} <span style="font-size:13px; font-weight:600;">Kg/Units</span></div>
+        <div class="stat-sub">dispatched on DCs ${totalSubRmVal > 0 ? `(₹${formatNum(Math.round(totalSubRmVal))})` : ''}</div>
+      </div>
+      <div class="stat-card blue clickable" onclick="App.navigate('dc-rm-processing')" title="Click to manage Delivery Challans for RM processing & reprocessing">
+        <span class="stat-card-arrow">↗</span>
+        <div style="font-size:22px;margin-bottom:8px;">🚚</div>
+        <div class="stat-label">Active RM Delivery Challans</div>
+        <div class="stat-value blue" style="font-size:22px;">${formatNum(activeRmDcsCount)}</div>
+        <div class="stat-sub">open challans in circulation</div>
+      </div>
+      <div class="stat-card teal clickable" onclick="App.navigate('raw-material')" title="Click to view RM GRN receipts & inward register">
+        <span class="stat-card-arrow">↗</span>
+        <div style="font-size:22px;margin-bottom:8px;">📥</div>
+        <div class="stat-label">RM GRN Receipts (${monthYearStr.split(' ')[0]})</div>
+        <div class="stat-value teal" style="font-size:22px;">${formatNum(rmInwardThisMonth, 1)} <span style="font-size:13px; font-weight:600;">Kg/Units</span></div>
+        <div class="stat-sub">${validRmCodes.size} registered RM items</div>
+      </div>
+    </div>`;
+
   el.innerHTML = `
     <div class="animate-in">
       <!-- Welcome Header with Left-Aligned Logo & Month Selector -->
-      <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:16px; margin-bottom:28px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:16px; margin-bottom:20px;">
         <div style="display:flex; align-items:center; gap:16px;">
           <img src="./logo.png" alt="JMPL Logo" style="height: 64px; width: 64px; object-fit: contain; background: white; padding: 8px; border-radius: 12px; box-shadow: var(--shadow-sm); flex-shrink: 0;">
           <div>
             <h2 style="font-size:22px;font-weight:800;margin:0;">Good ${getGreeting()}, ${Auth.getSession()?.name?.split(' ')[0]} 👋</h2>
-            <p class="text-sm text-muted mt-1" style="margin:0;">Here's your JMPL inventory overview for today</p>
+            <p class="text-sm text-muted mt-1" style="margin:0;">Here's your JMPL manufacturing &amp; inventory overview for today</p>
           </div>
         </div>
         <div style="display:flex; align-items:center; gap:8px;">
@@ -3359,40 +3909,55 @@ function renderDashboard() {
         </div>
       </div>
 
+      <!-- Quick Actions Toolbar -->
+      ${quickActionsHtml}
+
+      <!-- Operational Alerts Ribbon -->
+      ${alertsRibbonHtml}
+
+      <!-- Target Progress Card -->
+      ${targetCardHtml}
+
       <!-- Top Stats Row 1: Production & Execution -->
       <h3 style="font-size:14px;font-weight:700;margin-bottom:12px;text-transform:uppercase;letter-spacing:0.5px;color:var(--accent-blue);">🏭 Production &amp; Execution</h3>
       <div class="dashboard-stats-grid-6">
-        <div class="stat-card blue" style="cursor:pointer;" onclick="App.navigate('report_aging')">
+        <div class="stat-card blue clickable" onclick="App.navigate('report_aging')" title="Click to view live batches in pipeline & WIP aging">
+          <span class="stat-card-arrow">↗</span>
           <div style="font-size:22px;margin-bottom:8px;">🔄</div>
           <div class="stat-label">Active Batches</div>
           <div class="stat-value blue" style="font-size:22px;">${formatNum(active)}</div>
           <div class="stat-sub">batches in pipeline</div>
         </div>
-        <div class="stat-card purple">
+        <div class="stat-card purple clickable" onclick="App.navigate('monthly-plan')" title="Click to manage Monthly Production Plan">
+          <span class="stat-card-arrow">↗</span>
           <div style="font-size:22px;margin-bottom:8px;">🎯</div>
           <div class="stat-label">Planned Target</div>
           <div class="stat-value purple" style="font-size:22px;">${formatNum(planQtyThisMonth)}</div>
           <div class="stat-sub">monthly plan target</div>
         </div>
-        <div class="stat-card teal">
+        <div class="stat-card teal clickable" onclick="App.navigate('production-schedule')" title="Click to manage Production Schedules & shifts">
+          <span class="stat-card-arrow">↗</span>
           <div style="font-size:22px;margin-bottom:8px;">🗓️</div>
           <div class="stat-label">Production Schedule</div>
           <div class="stat-value teal" style="font-size:22px;">${formatNum(scheduledQtyThisMonth)}</div>
           <div class="stat-sub">scheduled target</div>
         </div>
-        <div class="stat-card green">
+        <div class="stat-card green clickable" onclick="App.navigate('production')" title="Click to view Production batch creation & moulding log">
+          <span class="stat-card-arrow">↗</span>
           <div style="font-size:22px;margin-bottom:8px;">🏗️</div>
           <div class="stat-label">Actual Produced</div>
           <div class="stat-value green" style="font-size:22px;">${formatNum(producedQtyThisMonth)}</div>
           <div class="stat-sub">launched this month</div>
         </div>
-        <div class="stat-card amber">
+        <div class="stat-card amber clickable" onclick="App.navigate('waiting-visual')" title="Click to view batches undergoing recheck & rework">
+          <span class="stat-card-arrow">↗</span>
           <div style="font-size:22px;margin-bottom:8px;">🔁</div>
           <div class="stat-label">Rechecks Active</div>
           <div class="stat-value amber" style="font-size:22px;">${formatNum(activeRechecks)}</div>
           <div class="stat-sub">batches undergoing rework</div>
         </div>
-        <div class="stat-card purple">
+        <div class="stat-card purple clickable" onclick="App.navigate('report_rejections')" title="Click to view Production Rejection & Scrapped Batches Report">
+          <span class="stat-card-arrow">↗</span>
           <div style="font-size:22px;margin-bottom:8px;">🚫</div>
           <div class="stat-label">Rejected Batches</div>
           <div class="stat-value purple" style="font-size:22px;">${formatNum(rejectedCount)}</div>
@@ -3400,46 +3965,55 @@ function renderDashboard() {
         </div>
       </div>
 
-      <!-- Top Stats Row 2: Inventory, Sales & Health -->
-      <h3 style="font-size:14px;font-weight:700;margin-top:20px;margin-bottom:12px;text-transform:uppercase;letter-spacing:0.5px;color:var(--accent-teal);">📦 Stocks, Sales &amp; Health</h3>
+      <!-- Top Stats Row 2: Finished Goods, Inventory & Health -->
+      <h3 style="font-size:14px;font-weight:700;margin-top:20px;margin-bottom:12px;text-transform:uppercase;letter-spacing:0.5px;color:var(--accent-teal);">📦 Finished Goods, Inventory &amp; Health</h3>
       <div class="dashboard-stats-grid-6" style="margin-bottom:28px;">
-        <div class="stat-card green">
+        <div class="stat-card green clickable" onclick="App.navigate('store')" title="Click to view Store Inventory & Stock Management">
+          <span class="stat-card-arrow">↗</span>
           <div style="font-size:22px;margin-bottom:8px;">📦</div>
           <div class="stat-label">Total Store Stock</div>
           <div class="stat-value green" style="font-size:22px;">${formatNum(totalStock)}</div>
           <div class="stat-sub">units in store</div>
         </div>
-        <div class="stat-card teal">
+        <div class="stat-card teal clickable" onclick="App.navigate('master')" title="Click to view Finished Part Master Catalog">
+          <span class="stat-card-arrow">↗</span>
           <div style="font-size:22px;margin-bottom:8px;">🗂️</div>
           <div class="stat-label">Parts in Master</div>
           <div class="stat-value teal" style="font-size:22px;">${formatNum(master.length)}</div>
           <div class="stat-sub">registered products</div>
         </div>
-        <div class="stat-card amber">
+        <div class="stat-card amber clickable" onclick="App.navigate('store')" title="Click to view Sales & Outward Dispatches">
+          <span class="stat-card-arrow">↗</span>
           <div style="font-size:22px;margin-bottom:8px;">💰</div>
           <div class="stat-label">Sales This Month</div>
           <div class="stat-value amber" style="font-size:22px;">${formatNum(salesThisMonth)}</div>
           <div class="stat-sub">units sold this month</div>
         </div>
-        <div class="stat-card red">
+        <div class="stat-card red clickable" onclick="App.navigate('report_loss')" title="Click to view Stage Loss Analysis & Scrap Valuation Report">
+          <span class="stat-card-arrow">↗</span>
           <div style="font-size:22px;margin-bottom:8px;">📉</div>
           <div class="stat-label">Total Loss</div>
           <div class="stat-value red" style="font-size:22px;">${formatNum(totalLoss)}</div>
           <div class="stat-sub">loss across stages${totalLossValue > 0 ? ` (₹${formatNum(Math.round(totalLossValue))})` : ''}</div>
         </div>
-        <div class="stat-card red">
+        <div class="stat-card red clickable" onclick="App.navigate('replenishment')" title="Click to view Critical Low Stock Replenishment Priority">
+          <span class="stat-card-arrow">↗</span>
           <div style="font-size:22px;margin-bottom:8px;">🚨</div>
           <div class="stat-label">Critical Alerts</div>
           <div class="stat-value red" style="font-size:22px;">${formatNum(criticalCount)}</div>
           <div class="stat-sub">replenish priority</div>
         </div>
-        <div class="stat-card blue">
+        <div class="stat-card blue clickable" onclick="App.navigate('report_batch_genealogy')" title="Click to view Batch Genealogy & Traceability Report">
+          <span class="stat-card-arrow">↗</span>
           <div style="font-size:22px;margin-bottom:8px;">✅</div>
           <div class="stat-label">Completed Batches</div>
           <div class="stat-value blue" style="font-size:22px;">${formatNum(completed)}</div>
           <div class="stat-sub">total batches completed</div>
         </div>
       </div>
+
+      <!-- Raw Material & Subcontractor Pipeline -->
+      ${rmSnapshotHtml}
 
       ${chartsContainerHtml}
 
@@ -3499,7 +4073,7 @@ function renderDashboard() {
               <tbody>
                 ${recentBatches.length ? recentBatches.map(b => `
                   <tr>
-                    <td class="font-semibold text-blue">${b.batchNo}</td>
+                    <td><a href="javascript:void(0)" onclick="App.showBatchGenealogy('${b.id}')" class="font-semibold text-blue" title="Click to view batch genealogy and trace history" style="text-decoration:none;">${b.batchNo} 🔍</a></td>
                     <td>${b.jmrefNo || '—'}</td>
                     <td><span class="stage-chip ${b.currentStage}">${STAGE_NAMES[b.currentStage]||b.currentStage}</span></td>
                     <td><span class="badge badge-${b.status==='active'?'amber':b.status==='completed'?'green':'red'}"><span class="status-dot ${b.status}"></span>${b.status}</span></td>
@@ -3521,8 +4095,8 @@ function renderDashboard() {
               <thead><tr><th>JMREF</th><th>Part No</th><th>Available</th></tr></thead>
               <tbody>
                 ${storeInv.length ? storeInv.slice(0,10).map(p => `
-                  <tr>
-                    <td class="font-semibold">${p.jmrefNo}</td>
+                  <tr style="cursor:pointer;" onclick="App.navigate('store')" title="Click to view & manage store stock for this part">
+                    <td class="font-semibold text-blue">${p.jmrefNo}</td>
                     <td class="text-muted">${p.partNo}</td>
                     <td><span class="font-bold ${p.available===0?'text-danger':p.available<10?'text-amber':'text-success'}">${formatNum(p.available)}</span></td>
                   </tr>`).join('') : '<tr><td colspan="3" class="text-center text-muted" style="padding:24px;">No inventory yet</td></tr>'}
@@ -3542,6 +4116,10 @@ function getGreeting() {
 }
 
 // ── Boot ───────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => {
+    App.init();
+  });
+} else {
   App.init();
-});
+}

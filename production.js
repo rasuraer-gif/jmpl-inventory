@@ -12,7 +12,8 @@ const ProductionModule = (() => {
     return batch.initialQty || 0;
   }
 
-  function render() {
+  function render(initialTab = null) {
+    activeTab = initialTab || 'active';
     currentPage = 1;
     pendingSearch = '';
     const el = document.getElementById('content');
@@ -148,6 +149,43 @@ const ProductionModule = (() => {
       </div>`;
   }
 
+  function getRmSubcontractorList() {
+    const list = [];
+    const seen = new Set();
+
+    // Prioritize subcontractors/vendors that have actual RM Delivery Challans
+    if (typeof DB !== 'undefined' && DB.DeliveryChallans && DB.DeliveryChallans.all) {
+      DB.DeliveryChallans.all().forEach(dc => {
+        if (dc.vendorId && !seen.has(dc.vendorId)) {
+          seen.add(dc.vendorId);
+          list.push({ id: dc.vendorId, name: dc.vendorName || dc.vendorId });
+        }
+      });
+    }
+
+    // Add registered Subcontractors
+    if (typeof DB !== 'undefined' && DB.Subcontractors && DB.Subcontractors.all) {
+      DB.Subcontractors.all().filter(s => s.active !== false).forEach(s => {
+        if (!seen.has(s.id)) {
+          seen.add(s.id);
+          list.push({ id: s.id, name: s.name });
+        }
+      });
+    }
+
+    // Add registered Vendors
+    if (typeof DB !== 'undefined' && DB.Vendors && DB.Vendors.all) {
+      DB.Vendors.all().filter(v => v.active !== false && !v.name.toLowerCase().includes('in house')).forEach(v => {
+        if (!seen.has(v.id)) {
+          seen.add(v.id);
+          list.push({ id: v.id, name: v.name });
+        }
+      });
+    }
+
+    return list.sort((a,b) => (a.name || '').localeCompare(b.name || ''));
+  }
+
   function createBatchTab() {
     const d = new Date();
     d.setDate(d.getDate() - 1);
@@ -156,6 +194,8 @@ const ProductionModule = (() => {
     const ops    = DB.Operators.active();
     const subOpts  = subs.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
     const opOpts   = ops.map(o => `<option value="${o.id}">${o.name}</option>`).join('');
+    const rmSubs = getRmSubcontractorList();
+    const rmSubOpts = rmSubs.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
     return `
       <div class="card animate-in">
         <div class="card-header"><h3>Create New Batch</h3></div>
@@ -251,7 +291,7 @@ const ProductionModule = (() => {
             <div class="form-row">
               <div class="form-group" style="flex:1;">
                 <label class="form-label">Subcontractor <span class="required">*</span></label>
-                <select id="prod-sub" class="form-control"><option value="">Select subcontractor...</option>${subOpts}</select>
+                <select id="prod-sub" class="form-control" onchange="ProductionModule.onSubChange(this.value)"><option value="">Select subcontractor...</option>${subOpts}</select>
               </div>
             </div>
           </div>
@@ -262,6 +302,42 @@ const ProductionModule = (() => {
           </div>
 
           <div class="form-group"><label class="form-label">Notes</label><textarea id="prod-notes" class="form-control" rows="2" placeholder="Optional notes"></textarea></div>
+
+          <!-- Raw Material & Processing DC Linkage (BOM Traceability) -->
+          <div id="prod-bom-trace-section" class="hidden" style="margin-top: 18px; padding: 14px; background: rgba(99,102,241,0.04); border: 1px solid rgba(99,102,241,0.2); border-radius: 8px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-wrap:wrap; gap:6px;">
+              <h4 style="font-size: 13px; font-weight: 700; color: var(--primary); margin: 0; display:flex; align-items:center; gap:6px;">
+                <span>🧪 Raw Material &amp; Delivery Challan Origin</span>
+                <span class="badge badge-purple" style="font-size:10px;">BOM Traceability</span>
+              </h4>
+              <span id="prod-rm-dc-info"></span>
+            </div>
+            
+            <div class="form-row">
+              <div class="form-group" style="flex:1;">
+                <label class="form-label text-xs font-bold">Subcontractor (Holding / Processing RM) <span class="text-danger">*</span></label>
+                <select id="prod-source-rm-subcontractor" class="form-control font-semibold" onchange="ProductionModule.onSourceRmSubcontractorChange(this.value)">
+                  <option value="">Select Subcontractor / Vendor...</option>
+                  ${rmSubOpts}
+                </select>
+              </div>
+              <div class="form-group" style="flex:2;">
+                <label class="form-label text-xs font-bold">Source RM Delivery Challan / Lot (Under Process)</label>
+                <select id="prod-source-rm-dc" class="form-control" onchange="ProductionModule.onSourceRmDcChange(this.value)">
+                  <option value="">Select Subcontractor above first...</option>
+                </select>
+                <input type="hidden" id="prod-source-rm-code">
+              </div>
+              <div class="form-group" style="flex:1;">
+                <label class="form-label text-xs font-bold" id="prod-rm-consumed-label">Material Consumed</label>
+                <input type="number" id="prod-rm-consumed-qty" class="form-control" step="0.01" min="0" placeholder="e.g. 15.5" oninput="ProductionModule.onRmConsumedQtyInput(this.value)">
+                <div id="prod-rm-consumed-err" class="text-xs text-danger font-bold mt-1 hidden"></div>
+              </div>
+            </div>
+            <div class="text-xs text-muted" id="prod-rm-balance-hint">
+              Select the Subcontractor above to list open RM Delivery Challans currently Under Process with that subcontractor.
+            </div>
+          </div>
 
           <!-- Auto-filled / Auto-generated Read-only Fields -->
           <div style="margin-top: 24px; padding-top: 16px; border-top: 1px dashed var(--border); margin-bottom: 20px;">
@@ -856,6 +932,289 @@ const ProductionModule = (() => {
     if (flowInp) flowInp.value = '';
     
     updateDynamicBatchNo();
+
+    const currentSubId = document.getElementById('prod-source-rm-subcontractor')?.value || 
+      (document.querySelector('[name=prod-type]:checked')?.value === 'subcontractor' ? document.getElementById('prod-sub')?.value : '');
+    if (currentSubId && document.getElementById('prod-source-rm-subcontractor')) {
+      document.getElementById('prod-source-rm-subcontractor').value = currentSubId;
+    }
+    updateSourceRmOptions(jmref, currentSubId);
+  }
+
+  function getMatchingRmsForJmref(jmref) {
+    if (!jmref) return [];
+    const jmUpper = String(jmref).trim().toUpperCase();
+    const allRms = (typeof DB !== 'undefined' && DB.RawMaterials && DB.RawMaterials.all) ? DB.RawMaterials.all() : [];
+    const allParts = (typeof DB !== 'undefined' && DB.Master && DB.Master.all) ? DB.Master.all() : [];
+    const part = allParts.find(p => (p.jmrefNo || '').trim().toUpperCase() === jmUpper || (p.partNo || '').trim().toUpperCase() === jmUpper);
+
+    return allRms.filter(rm => {
+      if (rm.active === false) return false;
+      const code = (rm.code || rm.itemCode || '').trim().toUpperCase();
+      const linked = (rm.linkedJmref || '').trim().toUpperCase();
+      const name = (rm.name || rm.description || '').trim().toUpperCase();
+      if (linked && linked === jmUpper) return true;
+      if (part && part.compoundCode && (code === part.compoundCode.trim().toUpperCase())) return true;
+      if (code && code === jmUpper) return true;
+      if (code && code.includes(jmUpper)) return true;
+      if (name && name.includes(jmUpper)) return true;
+      return false;
+    });
+  }
+
+  function updateSourceRmOptions(jmref = null, selectedSubId = null) {
+    const traceSection = document.getElementById('prod-bom-trace-section');
+    const rmSubSelect = document.getElementById('prod-source-rm-subcontractor');
+    const rmDcSelect = document.getElementById('prod-source-rm-dc');
+    const rmCodeInp = document.getElementById('prod-source-rm-code');
+    const rmInfoDiv = document.getElementById('prod-rm-dc-info');
+    const consumedInput = document.getElementById('prod-rm-consumed-qty');
+    const consumedLabel = document.getElementById('prod-rm-consumed-label');
+    const consumedErr = document.getElementById('prod-rm-consumed-err');
+    const hint = document.getElementById('prod-rm-balance-hint');
+
+    if (!jmref && document.getElementById('prod-jmref')) {
+      jmref = document.getElementById('prod-jmref').value || '';
+    }
+
+    const matchingRms = getMatchingRmsForJmref(jmref);
+
+    // 1. CONDITIONAL DISPLAY: Show BOM Traceability section ONLY if JMREF is linked with an RM item
+    if (matchingRms.length === 0) {
+      if (traceSection) traceSection.classList.add('hidden');
+      if (rmCodeInp) rmCodeInp.value = '';
+      if (consumedInput) {
+        consumedInput.value = '';
+        consumedInput.removeAttribute('max');
+        consumedInput.placeholder = 'e.g. 15.5';
+      }
+      if (rmDcSelect) rmDcSelect.innerHTML = '<option value="">No linked RM for this part</option>';
+      if (rmInfoDiv) rmInfoDiv.innerHTML = '';
+      if (consumedErr) {
+        consumedErr.classList.add('hidden');
+        consumedErr.textContent = '';
+      }
+      return;
+    }
+
+    // JMREF has linked RM items -> show section!
+    if (traceSection) traceSection.classList.remove('hidden');
+
+    const primaryRm = matchingRms[0];
+    const rmUom = (primaryRm && (primaryRm.uom || primaryRm.unit)) ? (primaryRm.uom || primaryRm.unit) : 'Kg';
+
+    // Update label to Material Consumed (UOM based on RM config)
+    if (consumedLabel) {
+      consumedLabel.innerHTML = `Material Consumed <span class="badge badge-teal" style="font-size:10px; padding:1px 5px;">${rmUom}</span>`;
+    }
+
+    if (rmInfoDiv) {
+      rmInfoDiv.innerHTML = `
+        <span class="badge badge-teal" style="font-size:11px;">Linked RM: ${matchingRms.map(r=>r.code||r.itemCode).join(', ')} (${rmUom})</span>
+      `;
+    }
+
+    if (!selectedSubId && rmSubSelect) {
+      selectedSubId = rmSubSelect.value || '';
+    }
+
+    if (!rmDcSelect) return;
+    rmDcSelect.innerHTML = '';
+    if (rmCodeInp) rmCodeInp.value = '';
+    if (consumedInput) {
+      consumedInput.value = '';
+      consumedInput.removeAttribute('max');
+      consumedInput.placeholder = `e.g. 15.5 (${rmUom})`;
+    }
+    if (consumedErr) {
+      consumedErr.classList.add('hidden');
+      consumedErr.textContent = '';
+    }
+
+    if (!selectedSubId) {
+      rmDcSelect.innerHTML = '<option value="">Select Subcontractor above first...</option>';
+      if (hint) {
+        hint.innerHTML = `Select the Subcontractor holding <strong class="text-primary">${matchingRms.map(r=>r.code||r.itemCode).join(', ')}</strong> to list open Delivery Challans.`;
+      }
+      return;
+    }
+
+    // 2. FILTER DELIVERY CHALLANS: Subcontractor & JMREF specific
+    const matchingCodes = new Set(matchingRms.map(rm => (rm.code || rm.itemCode || '').trim().toUpperCase()));
+    const matchingCodesText = Array.from(matchingCodes).join(', ');
+
+    const allDcs = (typeof DB !== 'undefined' && DB.DeliveryChallans && DB.DeliveryChallans.all) ? DB.DeliveryChallans.all() : [];
+    const allBatches = (typeof DB !== 'undefined' && DB.Batches && DB.Batches.all) ? DB.Batches.all() : [];
+
+    // Calculate consumption per DC & RM code
+    const dcConsumedMap = {};
+    allBatches.forEach(b => {
+      if (b.sourceRmDcNo && b.sourceRmCode && b.rmConsumedQty && b.status !== 'rejected') {
+        const key = `${b.sourceRmDcNo}|${(b.sourceRmCode || '').trim().toUpperCase()}`;
+        dcConsumedMap[key] = (dcConsumedMap[key] || 0) + (parseFloat(b.rmConsumedQty) || 0);
+      }
+    });
+
+    // Match Subcontractor by ID or Name
+    const targetSub = String(selectedSubId).trim().toLowerCase();
+    const subDcs = allDcs.filter(dc => {
+      if (dc.status === 'cancelled') return false;
+      const isRmDc = dc.type === 'rm-processing' || (dc.rmItems && dc.rmItems.length > 0);
+      if (!isRmDc) return false;
+      const vId = String(dc.vendorId || '').trim().toLowerCase();
+      const vName = String(dc.vendorName || '').trim().toLowerCase();
+      return vId === targetSub || vName === targetSub;
+    });
+
+    if (subDcs.length === 0) {
+      rmDcSelect.innerHTML = `<option value="">No RM Delivery Challans found for this Subcontractor</option>`;
+      if (hint) {
+        hint.innerHTML = `<span class="text-amber">⚠️ No RM Delivery Challans found for the selected Subcontractor.</span>`;
+      }
+      return;
+    }
+
+    rmDcSelect.innerHTML = '<option value="">Select Source RM DC / Lot...</option>';
+
+    let autoSelectedValue = '';
+    let foundItemsCount = 0;
+
+    subDcs.forEach(dc => {
+      (dc.rmItems || []).forEach(it => {
+        const itCode = (it.itemCode || '').trim().toUpperCase();
+        // ONLY include specific RM items that are linked to this JMREF
+        if (!matchingCodes.has(itCode)) return;
+
+        const key = `${dc.dcNo}|${itCode}`;
+        const totalDispatched = parseFloat(it.qty) || 0;
+        const alreadyConsumed = dcConsumedMap[key] || 0;
+        const availableBalance = Math.max(0, totalDispatched - alreadyConsumed);
+        const itemUom = it.uom || (matchingRms.find(r => (r.code||r.itemCode||'').toUpperCase() === itCode)?.uom) || rmUom;
+
+        foundItemsCount++;
+        const opt = document.createElement('option');
+        opt.value = `${dc.dcNo}|${it.itemCode}|${availableBalance}|${itemUom}`;
+
+        if (availableBalance > 0) {
+          opt.textContent = `${dc.dcNo} — ${it.itemCode} (${it.name || ''}) [Balance: ${availableBalance.toFixed(2)} ${itemUom}]`;
+          if (!autoSelectedValue) {
+            autoSelectedValue = opt.value;
+          }
+        } else {
+          opt.textContent = `${dc.dcNo} — ${it.itemCode} [Balance: 0.00 ${itemUom} - Fully Consumed]`;
+          opt.disabled = true;
+        }
+        rmDcSelect.appendChild(opt);
+      });
+    });
+
+    if (foundItemsCount === 0) {
+      rmDcSelect.innerHTML = `<option value="">No Delivery Challans for ${matchingCodesText} with this Subcontractor</option>`;
+      if (hint) {
+        hint.innerHTML = `<span class="text-amber">⚠️ No Delivery Challans containing the linked material (<strong>${matchingCodesText}</strong>) were dispatched to this Subcontractor.</span>`;
+      }
+    } else {
+      if (hint) {
+        hint.innerHTML = `Showing specific Delivery Challans containing <strong>${matchingCodesText}</strong> for this Subcontractor.`;
+      }
+      if (autoSelectedValue) {
+        rmDcSelect.value = autoSelectedValue;
+        onSourceRmDcChange(autoSelectedValue);
+      }
+    }
+  }
+
+  function onSourceRmSubcontractorChange(subId) {
+    const jmref = document.getElementById('prod-jmref')?.value || '';
+    updateSourceRmOptions(jmref, subId);
+  }
+
+  function onSubChange(subId) {
+    const rmSubSelect = document.getElementById('prod-source-rm-subcontractor');
+    if (rmSubSelect && subId) {
+      rmSubSelect.value = subId;
+      const jmref = document.getElementById('prod-jmref')?.value || '';
+      updateSourceRmOptions(jmref, subId);
+    }
+  }
+
+  function onSourceRmDcChange(val) {
+    const hint = document.getElementById('prod-rm-balance-hint');
+    const rmCodeInp = document.getElementById('prod-source-rm-code');
+    const consumedInput = document.getElementById('prod-rm-consumed-qty');
+    const consumedLabel = document.getElementById('prod-rm-consumed-label');
+    const consumedErr = document.getElementById('prod-rm-consumed-err');
+
+    if (consumedErr) {
+      consumedErr.classList.add('hidden');
+      consumedErr.textContent = '';
+    }
+
+    if (!val) {
+      if (rmCodeInp) rmCodeInp.value = '';
+      if (consumedInput) {
+        consumedInput.removeAttribute('max');
+        consumedInput.style.borderColor = '';
+      }
+      if (hint) hint.innerHTML = 'Select a Delivery Challan to link raw material and enforce maximum consumable balance.';
+      return;
+    }
+
+    const parts = val.split('|');
+    const dcNo = parts[0] || '';
+    const rmCode = parts[1] || '';
+    const availableBalance = parseFloat(parts[2]) || 0;
+    const uom = parts[3] || 'Kg';
+
+    if (rmCodeInp) rmCodeInp.value = rmCode;
+
+    // Update label with RM config UOM
+    if (consumedLabel) {
+      consumedLabel.innerHTML = `Material Consumed <span class="badge badge-teal" style="font-size:10px; padding:1px 5px;">${uom}</span>`;
+    }
+
+    // Set MAX quantity based on balance
+    if (consumedInput) {
+      consumedInput.max = availableBalance;
+      consumedInput.placeholder = `Max ${availableBalance.toFixed(2)} ${uom}`;
+      consumedInput.style.borderColor = '';
+
+      // Auto-suggest quantity based on batch qty * stdShotWeightGrams if empty
+      const batchQty = parseInt(document.getElementById('prod-qty')?.value, 10) || 0;
+      const allRms = (typeof DB !== 'undefined' && DB.RawMaterials && DB.RawMaterials.all) ? DB.RawMaterials.all() : [];
+      const rm = allRms.find(r => (r.code || r.itemCode || '').toUpperCase() === rmCode.toUpperCase());
+      if (rm && rm.stdShotWeightGrams && batchQty > 0 && (!consumedInput.value || parseFloat(consumedInput.value) === 0)) {
+        const estQty = Math.min(availableBalance, (batchQty * parseFloat(rm.stdShotWeightGrams)) / (uom.toLowerCase() === 'grams' ? 1 : 1000));
+        consumedInput.value = estQty.toFixed(2);
+      }
+    }
+
+    if (hint) {
+      hint.innerHTML = `Selected DC: <strong>${dcNo}</strong> &bull; RM Code: <strong class="text-primary">${rmCode}</strong> &bull; Max Consumable Balance: <strong class="text-success">${availableBalance.toFixed(2)} ${uom}</strong>`;
+    }
+  }
+
+  function onRmConsumedQtyInput(val) {
+    const consumedInput = document.getElementById('prod-rm-consumed-qty');
+    const errDiv = document.getElementById('prod-rm-consumed-err');
+    if (!consumedInput) return;
+
+    const maxVal = parseFloat(consumedInput.max);
+    const entered = parseFloat(val);
+
+    if (!isNaN(maxVal) && !isNaN(entered) && entered > maxVal) {
+      consumedInput.style.borderColor = 'var(--danger)';
+      if (errDiv) {
+        errDiv.classList.remove('hidden');
+        errDiv.textContent = `⚠️ Quantity exceeds maximum available balance (${maxVal.toFixed(2)}) on this Delivery Challan!`;
+      }
+    } else {
+      consumedInput.style.borderColor = '';
+      if (errDiv) {
+        errDiv.classList.add('hidden');
+        errDiv.textContent = '';
+      }
+    }
   }
 
   function showJmrefDropdown() {
@@ -1176,6 +1535,42 @@ const ProductionModule = (() => {
         showToast(`Duplicate Batch Blocked: Batch No "${batchNo}" already exists in cloud database!`, 'error');
         return;
       }
+
+      const traceSection = document.getElementById('prod-bom-trace-section');
+      const isTraceVisible = traceSection && !traceSection.classList.contains('hidden');
+
+      let sourceRmDcNo = '';
+      let sourceRmCode = '';
+      let maxAvailable = Infinity;
+      let rmUom = 'Kg';
+
+      if (isTraceVisible) {
+        const sourceRmDcVal = document.getElementById('prod-source-rm-dc')?.value || '';
+        if (sourceRmDcVal) {
+          const parts = sourceRmDcVal.split('|');
+          sourceRmDcNo = parts[0] || '';
+          sourceRmCode = parts[1] || '';
+          if (parts[2] !== undefined && !isNaN(parseFloat(parts[2]))) {
+            maxAvailable = parseFloat(parts[2]);
+          }
+          if (parts[3]) {
+            rmUom = parts[3];
+          }
+        }
+      }
+
+      const rmConsumedQty = isTraceVisible ? (parseFloat(document.getElementById('prod-rm-consumed-qty')?.value) || 0) : 0;
+
+      // Enforce max quantity validation based on balance of RM
+      if (isTraceVisible && sourceRmDcNo && rmConsumedQty > maxAvailable) {
+        showToast(`Cannot consume ${rmConsumedQty} ${rmUom}. Maximum available balance on DC "${sourceRmDcNo}" is ${maxAvailable.toFixed(2)} ${rmUom}.`, 'error');
+        document.getElementById('prod-rm-consumed-qty')?.focus();
+        return;
+      }
+
+      if (sourceRmDcNo) {
+        defaultNotes += ` | Material: ${sourceRmCode} via ${sourceRmDcNo}${rmConsumedQty > 0 ? ` (${rmConsumedQty} ${rmUom})` : ''}`;
+      }
       
       const batch = await DB.Batches.insertAsync({ 
         batchNo,
@@ -1197,7 +1592,11 @@ const ProductionModule = (() => {
         mouldNo,
         vendorId: vendorId || '',
         notes: notes || defaultNotes,
-        internalBatchNo: DB.Batches.nextInternalBatchNo()
+        internalBatchNo: DB.Batches.nextInternalBatchNo(),
+        sourceRmDcNo: sourceRmDcNo || '',
+        sourceRmCode: sourceRmCode || '',
+        sourceRmUom: rmUom || 'Kg',
+        rmConsumedQty: rmConsumedQty || 0
       });
       
       if (type === 'subcontractor' || dest !== 'production') {
@@ -1707,6 +2106,6 @@ const ProductionModule = (() => {
     renderTab(activeTab);
   }
 
-  return { render, openMove, calcLoss, moveBatch, openReject, rejectBatch, onTypeChange, createBatch, resetForm, showPartDropdown, filterParts, selectPart, updateDynamicBatchNo, updateMoveDynamicBatchNo, printBarcode, filterPending, showJmrefDropdown, filterJmrefs, onDestinationChange, onMouldChange, onSubDestinationChange, openEditBatch, onEditTypeChange, saveBatchEdit, calculateInhouseQty, calculateEditInhouseQty, toggleAllActive, toggleAllCompleted, bulkPrintBarcodes, changePage, get activeTab() { return activeTab; } };
+  return { render, openMove, calcLoss, moveBatch, openReject, rejectBatch, onTypeChange, createBatch, resetForm, showPartDropdown, filterParts, selectPart, updateDynamicBatchNo, updateMoveDynamicBatchNo, printBarcode, filterPending, showJmrefDropdown, filterJmrefs, onDestinationChange, onMouldChange, onSubDestinationChange, openEditBatch, onEditTypeChange, saveBatchEdit, calculateInhouseQty, calculateEditInhouseQty, toggleAllActive, toggleAllCompleted, bulkPrintBarcodes, changePage, onSourceRmDcChange, onSourceRmSubcontractorChange, onSubChange, updateSourceRmOptions, onRmConsumedQtyInput, getMatchingRmsForJmref, get activeTab() { return activeTab; } };
 })();
 window.ProductionModule = ProductionModule;

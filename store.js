@@ -44,6 +44,7 @@ const StoreModule = (() => {
     const batchesByJmref = {};
     for (let i = 0; i < allBatches.length; i++) {
       const b = allBatches[i];
+      if (b.status === 'missing' || b.isArchived) continue;
       if (b.status !== 'completed' && b.currentStage !== 'store') continue;
       if (b.notes && (b.notes.includes('Closed via stock') || b.notes.includes('Zeroed via stock') || b.notes.includes('zeroing'))) continue;
 
@@ -145,6 +146,7 @@ const StoreModule = (() => {
       
       batches = allBatches
         .filter(b => {
+          if (b.status === 'missing' || b.isArchived) return false;
           if (b.status !== 'completed' && b.currentStage !== 'store') return false;
           if (b.notes && (b.notes.includes('Closed via stock') || b.notes.includes('Zeroed via stock') || b.notes.includes('zeroing'))) return false;
           if (partId && b.partId === partId) return true;
@@ -821,7 +823,7 @@ const StoreModule = (() => {
       }
     }
     const sales = DB.Sales.all();
-    let batches = DB.Batches.all().filter(b => b.status === 'completed' || b.currentStage === 'store');
+    let batches = DB.Batches.all().filter(b => (b.status === 'completed' || b.currentStage === 'store') && b.status !== 'missing' && !b.isArchived);
     
     if (completedBatchSearch) {
       const q = completedBatchSearch.toLowerCase();
