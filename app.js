@@ -138,7 +138,7 @@ function formatNum(n) { return n == null ? '0' : Number(n).toLocaleString('en-IN
 function today() { return new Date().toISOString().slice(0,10); }
 function nowISO() { return new Date().toISOString(); }
 
-const STAGE_LABELS = {
+var STAGE_LABELS = window.STAGE_LABELS = window.STAGE_LABELS || {
   production: 'Production',
   cryogenic: 'Cryogenic',
   deflashing: 'Manual DE Flashing',
@@ -151,7 +151,6 @@ const STAGE_LABELS = {
   quality: 'QC Final',
   store: 'Store'
 };
-window.STAGE_LABELS = STAGE_LABELS;
 
 function printBarcode(batchId, isDuplicate = false) {
   const batch = DB.Batches.find(batchId);
