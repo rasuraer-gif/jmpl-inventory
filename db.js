@@ -2696,20 +2696,23 @@ const DB = (() => {
       const VALID_STAGES = new Set(['production', 'cryogenic', 'deflashing', 'waiting-trimming', 'trimming', 'post-curing', 'waiting-visual', 'visual', 'gauge', 'quality', 'store']);
       const recs = StageRecords.byBatch(batchId);
       if (!recs || recs.length === 0) return null;
-      const sorted = [...recs].sort((x, y) => {
-        const tX = x.createdAt || (x.date ? (x.time ? `${x.date}T${x.time}` : x.date) : '');
-        const tY = y.createdAt || (y.date ? (y.time ? `${y.date}T${y.time}` : y.date) : '');
-        return tX.localeCompare(tY);
-      });
-      for (let i = sorted.length - 1; i >= 0; i--) {
-        const r = sorted[i];
+      let latestRec = null;
+      let latestTime = '';
+      for (let i = 0; i < recs.length; i++) {
+        const r = recs[i];
         if (!r) continue;
         const candidate = r.movedTo || r.toStage || r.stage;
         if (candidate && VALID_STAGES.has(candidate)) {
-          return { expectedStage: candidate, lastRecord: r, recsCount: recs.length };
+          const t = r.createdAt || (r.date ? (r.time ? `${r.date}T${r.time}` : r.date) : '');
+          if (t >= latestTime) {
+            latestTime = t;
+            latestRec = r;
+          }
         }
       }
-      return null;
+      if (!latestRec) return null;
+      const expectedStage = latestRec.movedTo || latestRec.toStage || latestRec.stage;
+      return { expectedStage, lastRecord: latestRec, recsCount: recs.length };
     },
     findStageMismatches: () => {
       const batches = getAll('batches');
@@ -2827,10 +2830,12 @@ const DB = (() => {
           const cutoff = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
           const snap = await db.collection('stageRecords').where('date', '>=', cutoff).get();
           let changed = false;
+          const idMap = new Map(cache.stageRecords.map((r, i) => [r.id, i]));
           snap.forEach(doc => {
             const data = { id: doc.id, ...doc.data() };
-            const existingIdx = cache.stageRecords.findIndex(r => r.id === doc.id);
+            const existingIdx = idMap.has(doc.id) ? idMap.get(doc.id) : -1;
             if (existingIdx === -1) {
+              idMap.set(doc.id, cache.stageRecords.length);
               cache.stageRecords.push(data);
               changed = true;
             } else {

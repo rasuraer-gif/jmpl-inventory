@@ -2,6 +2,20 @@
 // trimming.js — Trimming Department Module
 // ============================================================
 const TrimmingModule = (() => {
+  const STAGE_LABELS = window.STAGE_LABELS || {
+    production: 'Moulding',
+    cryogenic: 'Cryogenic',
+    deflashing: 'Flash Removal',
+    'waiting-trimming': 'Waiting for Trimming',
+    trimming: 'Trimming',
+    'post-curing': 'Post Curing',
+    'waiting-visual': 'Waiting for Visual inspection',
+    visual: 'Visual Inspection',
+    gauge: 'Gauge Inspection',
+    quality: 'QC Final',
+    store: 'Store'
+  };
+
   let _activeBatch = null;
   let historySearch = '';
   let pendingSearch = '';
@@ -335,7 +349,7 @@ const TrimmingModule = (() => {
           <div class="form-group"><label class="form-label">Output Quantity <span class="required">*</span></label><input type="number" id="trim-output-qty" class="form-control" min="0" oninput="TrimmingModule.calcLoss()"></div>
           <div class="form-group"><label class="form-label">Loss Quantity (Auto)</label><input type="text" id="trim-loss-qty" class="form-control" readonly style="color:var(--accent-red);font-weight:700;"></div>
           <div class="form-group"><label class="form-label">Destination <span class="required">*</span></label>
-            <select id="trim-destination" class="form-control">
+            <select id="trim-destination" class="form-control" onchange="TrimmingModule.onDestinationChange()">
               <option value="waiting-visual">Waiting for Visual inspection</option>
               <option value="visual">Visual Inspection</option>
               <option value="post-curing">Post Curing</option>
@@ -387,10 +401,18 @@ const TrimmingModule = (() => {
         </div>
         <div class="modal-footer">
           <button class="btn btn-secondary" onclick="document.getElementById('trim-process-modal').classList.add('hidden')">Cancel</button>
-          <button class="btn btn-teal" onclick="TrimmingModule.process()">Move to Visual</button>
+          <button id="trim-move-btn" class="btn btn-teal" onclick="TrimmingModule.process()">Move to Waiting for Visual inspection</button>
         </div>
       </div>
     </div>`;
+  }
+
+  function onDestinationChange() {
+    const dest = document.getElementById('trim-destination')?.value || 'waiting-visual';
+    const btn = document.getElementById('trim-move-btn');
+    if (btn) {
+      btn.textContent = `Move to ${STAGE_LABELS[dest] || dest}`;
+    }
   }
   function rejectModal() {
     return `<div class="modal-overlay hidden" id="trim-reject-modal">
@@ -457,12 +479,20 @@ const TrimmingModule = (() => {
     } else if (vendors.length === 1) {
       document.getElementById('trim-vendor').value = vendors[0].id;
     } else {
-      document.getElementById('trim-vendor').value = '';
+      const inHouse = vendors.find(v => v.name && v.name.toLowerCase().includes('in house'));
+      if (inHouse) {
+        document.getElementById('trim-vendor').value = inHouse.id;
+      } else if (vendors.length > 0) {
+        document.getElementById('trim-vendor').value = vendors[0].id;
+      } else {
+        document.getElementById('trim-vendor').value = '';
+      }
     }
-    document.getElementById('trim-output-qty').value = '';
-    document.getElementById('trim-loss-qty').value = '';
+    document.getElementById('trim-output-qty').value = inputQty;
+    document.getElementById('trim-loss-qty').value = '0';
     document.getElementById('trim-notes').value = '';
     document.getElementById('trim-destination').value = 'waiting-visual';
+    onDestinationChange();
     document.getElementById('trim-process-modal').classList.remove('hidden');
   }
 
@@ -511,7 +541,12 @@ const TrimmingModule = (() => {
     const outputQty = parseInt(document.getElementById('trim-output-qty').value);
     const destination = document.getElementById('trim-destination').value;
     const notes = document.getElementById('trim-notes').value.trim();
-    if (!vendorId) { showToast('Please select a vendor', 'error'); return; }
+    const batch = DB.Batches.find(batchId) || checkBatch;
+    const effectiveVendorId = vendorId || batch.vendorId || '';
+    if (!effectiveVendorId && (destination !== 'waiting-visual' && destination !== 'visual' && destination !== 'post-curing')) {
+      showToast('Please select a vendor', 'error');
+      return;
+    }
     if (isNaN(outputQty) || outputQty < 0) { showToast('Enter a valid output quantity', 'error'); return; }
     
     const lossQty = Math.max(0, _trimInputQty - outputQty);
@@ -521,7 +556,6 @@ const TrimmingModule = (() => {
       }
     }
     const session = Auth.getSession();
-    const batch = DB.Batches.find(batchId);
     const dateStr = new Date().toISOString().slice(0,10);
 
     const isStock = _activeBatch && _activeBatch.batchNo && _activeBatch.batchNo.includes('-REC-');
@@ -570,11 +604,14 @@ const TrimmingModule = (() => {
         currentStage: destination,
         status: 'active',
         initialQty: outputQty,
+        remainingQty: outputQty,
+        currentQty: outputQty,
         trNo,
         shift,
         productionType: typeVal,
         pressNo,
         productionDate: dateVal,
+        vendorId: effectiveVendorId,
         createdAt: new Date().toISOString(),
         notes: 'Sub-batch created from Stock Upload pool batch: ' + _activeBatch.batchNo
       });
@@ -593,7 +630,7 @@ const TrimmingModule = (() => {
         inputQty: totalDeducted,
         outputQty: outputQty,
         lossQty: lossQty,
-        vendorId,
+        vendorId: effectiveVendorId,
         movedTo: destination,
         movedFrom: 'trimming',
         date: dateStr,
@@ -616,16 +653,22 @@ const TrimmingModule = (() => {
 
       document.getElementById('trim-process-modal').classList.add('hidden');
       showToast('Sub-batch created and moved to ' + (STAGE_LABELS[destination] || destination), 'success');
-      App.navigate(App.current);
+      render();
+      if (window.App && typeof App.navigate === 'function' && App.current) {
+        App.navigate(App.current);
+      }
       return;
     }
 
-    DB.StageRecords.insert({ batchId, stage:'trimming', inputQty:_trimInputQty, outputQty, lossQty, vendorId, movedTo:destination, movedFrom:'trimming', date:dateStr, recordedBy:session?.userId, notes:notes, iterationNo: batch?.recheckIteration||null });
+    DB.StageRecords.insert({ batchId, stage:'trimming', inputQty:_trimInputQty, outputQty, lossQty, vendorId: effectiveVendorId, movedTo:destination, movedFrom:'trimming', date:dateStr, recordedBy:session?.userId, notes:notes, iterationNo: batch?.recheckIteration||null });
     if (lossQty > 0) DB.LossTracker.insert({ batchId, stage:'trimming', lossQty, date:dateStr, jmrefNo:batch?.jmrefNo, partNo:batch?.partNo, iterationNo:batch?.recheckIteration||null });
-    DB.Batches.update(batchId, { currentStage:destination });
+    DB.Batches.update(batchId, { currentStage:destination, initialQty: outputQty, currentQty: outputQty, remainingQty: outputQty, vendorId: effectiveVendorId });
     document.getElementById('trim-process-modal').classList.add('hidden');
     showToast('Batch moved to ' + (STAGE_LABELS[destination] || destination), 'success');
-    App.navigate(App.current);
+    render();
+    if (window.App && typeof App.navigate === 'function' && App.current) {
+      App.navigate(App.current);
+    }
   } catch (err) {
     console.error("Trimming process error:", err);
     showToast("Could not process batch: " + (err.message || err), "error");
@@ -677,6 +720,6 @@ const TrimmingModule = (() => {
     document.getElementById('trim-content').innerHTML = tabType === 'pending' ? pendingTab(batches) : historyTab();
   }
 
-  return { render, openProcess, calcLoss, process, openReject, rejectBatch, filterHistory, filterPending, updateDynamicBatchNo, filterByVendor, changePage };
+  return { render, openProcess, calcLoss, process, onDestinationChange, openReject, rejectBatch, filterHistory, filterPending, updateDynamicBatchNo, filterByVendor, changePage };
 })();
 window.TrimmingModule = TrimmingModule;

@@ -2,6 +2,20 @@
 // visual.js — Visual Inspection Department Module
 // ============================================================
 const VisualModule = (() => {
+  const STAGE_LABELS = window.STAGE_LABELS || {
+    production: 'Moulding',
+    cryogenic: 'Cryogenic',
+    deflashing: 'Flash Removal',
+    'waiting-trimming': 'Waiting for Trimming',
+    trimming: 'Trimming',
+    'post-curing': 'Post Curing',
+    'waiting-visual': 'Waiting for Visual inspection',
+    visual: 'Visual Inspection',
+    gauge: 'Gauge Inspection',
+    quality: 'QC Final',
+    store: 'Store'
+  };
+
   let _activeBatch = null;
   function getInputQty(batchId) {
     const recs = DB.StageRecords.byBatch(batchId).filter(r => r.movedTo === 'visual');
@@ -724,6 +738,17 @@ const VisualModule = (() => {
           currentStage: reprocessDestination,
           status: 'active',
           initialQty: finalReprocessQty,
+          currentQty: finalReprocessQty,
+          remainingQty: finalReprocessQty,
+          mouldNo: _activeBatch.mouldNo ?? null,
+          internalBatchNo: _activeBatch.internalBatchNo || '',
+          productionDate: _activeBatch.productionDate || '',
+          compoundCode: _activeBatch.compoundCode || '',
+          rawMaterialBatchNo: _activeBatch.rawMaterialBatchNo || '',
+          pressNo: _activeBatch.pressNo || '',
+          shift: _activeBatch.shift || '',
+          trNo: _activeBatch.trNo || '',
+          productionType: _activeBatch.productionType || 'inhouse',
           isReprocess: true,
           reprocessDestination: reprocessDestination,
           vendorId: finalVendorId || '',
@@ -846,6 +871,17 @@ const VisualModule = (() => {
         currentStage: reprocessDestination,
         status: 'active',
         initialQty: finalReprocessQty,
+        currentQty: finalReprocessQty,
+        remainingQty: finalReprocessQty,
+        mouldNo: batch.mouldNo ?? null,
+        internalBatchNo: batch.internalBatchNo || '',
+        productionDate: batch.productionDate || '',
+        compoundCode: batch.compoundCode || '',
+        rawMaterialBatchNo: batch.rawMaterialBatchNo || '',
+        pressNo: batch.pressNo || '',
+        shift: batch.shift || '',
+        trNo: batch.trNo || '',
+        productionType: batch.productionType || 'inhouse',
         isReprocess: true,
         reprocessDestination: reprocessDestination,
         vendorId: finalVendorId || '',
@@ -881,16 +917,21 @@ const VisualModule = (() => {
       DB.Batches.update(batchId, { 
         status: 'completed', 
         initialQty: 0,
+        currentQty: 0,
+        remainingQty: 0,
         completedAt: new Date().toISOString()
       });
       document.getElementById('vis-process-modal').classList.add('hidden');
       showToast('Batch fully depleted and reprocess batch created', 'success');
     } else {
-      DB.Batches.update(batchId, { currentStage:destination, initialQty: outputQty });
+      DB.Batches.update(batchId, { currentStage:destination, initialQty: outputQty, currentQty: outputQty, remainingQty: outputQty });
       document.getElementById('vis-process-modal').classList.add('hidden');
       showToast('Batch moved to ' + (STAGE_LABELS[destination] || destination), 'success');
     }
-    App.navigate(App.current);
+    render();
+    if (window.App && typeof App.navigate === 'function' && App.current) {
+      App.navigate(App.current);
+    }
   } catch (err) {
     console.error("Visual process error:", err);
     showToast("Could not process batch: " + (err.message || err), "error");

@@ -17,6 +17,7 @@ const filesToCopy = [
   'db.js',
   'auth.js',
   'html5-qrcode.min.js',
+  'qrcode.min.js',
   'scanner.js',
   'app.js',
   'admin.js',

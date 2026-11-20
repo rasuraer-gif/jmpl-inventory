@@ -151,6 +151,7 @@ const STAGE_LABELS = {
   quality: 'QC Final',
   store: 'Store'
 };
+window.STAGE_LABELS = STAGE_LABELS;
 
 function printBarcode(batchId, isDuplicate = false) {
   const batch = DB.Batches.find(batchId);
@@ -162,18 +163,93 @@ function printBarcode(batchId, isDuplicate = false) {
     return;
   }
 
-  const formattedDate = batch.productionDate ? formatDate(batch.productionDate) : formatDate(batch.createdAt);
+  const isReprocess = !!(batch.isReprocess || batch.isLossReprocess || (batch.batchNo && (batch.batchNo.includes('-REP') || batch.batchNo.includes('-LREP'))));
+  const parent = batch.parentBatchId ? (DB.Batches.find(batch.parentBatchId) || {}) : {};
+  const effectiveMouldNo = batch.mouldNo != null ? batch.mouldNo : (parent.mouldNo != null ? parent.mouldNo : null);
+  const effectiveInternalBatchNo = batch.internalBatchNo || parent.internalBatchNo || '—';
+  const effectiveProdDate = batch.productionDate || parent.productionDate || batch.createdAt;
+  const formattedDate = effectiveProdDate ? formatDate(effectiveProdDate) : formatDate(batch.createdAt);
 
-  const part = DB.Master.find(batch.partId) || DB.Master.all().find(p => p.partNo === batch.partNo || p.jmrefNo === batch.jmrefNo) || {};
+  const part = DB.Master.find(batch.partId) || (parent.partId ? DB.Master.find(parent.partId) : null) || DB.Master.all().find(p => p.partNo === batch.partNo || p.jmrefNo === batch.jmrefNo || p.partNo === parent.partNo || p.jmrefNo === parent.jmrefNo) || {};
   let mouldType = '—';
   let processFlow = '—';
-  if (batch.mouldNo && part.moulds) {
-    const m = part.moulds.find(x => Number(x.mouldNo) === Number(batch.mouldNo));
+  if (effectiveMouldNo != null && part.moulds) {
+    const m = part.moulds.find(x => Number(x.mouldNo) === Number(effectiveMouldNo));
     if (m) {
       mouldType = m.mouldType || '—';
       processFlow = m.processFlow || '—';
     }
   }
+
+  const reprocessTarget = batch.reprocessDestination || batch.currentStage || 'visual';
+  const reprocessBannerHtml = isReprocess
+    ? `<div class="duplicate-tag" style="background:#fee2e2; border-color:#ef4444; color:#b91c1c; font-weight:900;">*** REPROCESS (${(STAGE_LABELS[reprocessTarget] || reprocessTarget).toUpperCase()}) ***</div>`
+    : '';
+
+  const detailRowsHtml = batch.isStockUpload ? `
+    <div class="detail-row">
+      <span class="label">JMREF:</span>
+      <span class="value">${batch.jmrefNo || '—'}</span>
+    </div>
+    <div class="detail-row">
+      <span class="label">Part No:</span>
+      <span class="value">${batch.partNo || '—'}</span>
+    </div>
+    <div class="detail-row">
+      <span class="label">Stage:</span>
+      <span class="value">${STAGE_LABELS[batch.currentStage] || batch.currentStage} (Stock)</span>
+    </div>
+    <div class="detail-row">
+      <span class="label">Qty:</span>
+      <span class="value">${Number(batch.initialQty).toLocaleString('en-IN')}</span>
+    </div>
+    <div class="detail-row">
+      <span class="label">Date:</span>
+      <span class="value">${formattedDate}</span>
+    </div>
+  ` : isReprocess ? `
+    <div class="detail-row">
+      <span class="label">JMREF:</span>
+      <span class="value">${batch.jmrefNo || parent.jmrefNo || '—'}</span>
+    </div>
+    <div class="detail-row">
+      <span class="label">Part No:</span>
+      <span class="value">${batch.partNo || parent.partNo || '—'}</span>
+    </div>
+    <div class="detail-row">
+      <span class="label">Reprocess Qty:</span>
+      <span class="value">${formatNum(batch.initialQty || batch.currentQty || 0)} pcs</span>
+    </div>
+    <div class="detail-row">
+      <span class="label">Parent Batch:</span>
+      <span class="value">${batch.parentBatchNo || parent.batchNo || '—'}</span>
+    </div>
+    <div class="detail-row">
+      <span class="label">Mould No:</span>
+      <span class="value">${effectiveMouldNo != null ? effectiveMouldNo : '—'} (${mouldType})</span>
+    </div>
+  ` : `
+    <div class="detail-row">
+      <span class="label">JMREF:</span>
+      <span class="value">${batch.jmrefNo || '—'}</span>
+    </div>
+    <div class="detail-row">
+      <span class="label">Part No:</span>
+      <span class="value">${batch.partNo || '—'}</span>
+    </div>
+    <div class="detail-row">
+      <span class="label">Prod Date:</span>
+      <span class="value">${formattedDate}</span>
+    </div>
+    <div class="detail-row">
+      <span class="label">Mould No:</span>
+      <span class="value">${batch.mouldNo != null ? batch.mouldNo : '—'}</span>
+    </div>
+    <div class="detail-row">
+      <span class="label">Mould Type:</span>
+      <span class="value">${mouldType}</span>
+    </div>
+  `;
 
   printWindow.document.write(`
     <html>
@@ -247,9 +323,18 @@ function printBarcode(batchId, isDuplicate = false) {
           height: 20mm;
           margin: 1mm 0;
         }
-        .qr-image {
-          width: 19mm;
-          height: 19mm;
+        #qrcode-box {
+          width: 19mm !important;
+          height: 19mm !important;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        #qrcode-box canvas, #qrcode-box img, .qr-image {
+          width: 19mm !important;
+          height: 19mm !important;
+          image-rendering: pixelated;
+          image-rendering: -moz-crisp-edges;
           display: block;
         }
         .flow-text-left {
@@ -350,68 +435,65 @@ function printBarcode(batchId, isDuplicate = false) {
       <div class="label-container">
         <div class="company-title">JANANI MOULDINGS PVT. LTD.</div>
         ${isDuplicate ? `<div class="duplicate-tag">*** DUPLICATE ***</div>` : ''}
+        ${reprocessBannerHtml}
         <div class="qr-wrapper">
           <div class="flow-text-left">${processFlow}</div>
           <div id="qrcode-box" data-batch="${batch.batchNo}" style="width: 19mm; height: 19mm; display: flex; align-items: center; justify-content: center;"></div>
-          <div class="flow-text-right">IB: ${batch.internalBatchNo || '—'}</div>
+          <div class="flow-text-right">IB: ${effectiveInternalBatchNo}</div>
         </div>
         <div class="batch-no-display">${batch.batchNo}</div>
         <div class="details">
-          <div class="detail-row">
-            <span class="label">JMREF:</span>
-            <span class="value">${batch.jmrefNo}</span>
-          </div>
-          <div class="detail-row">
-            <span class="label">Part No:</span>
-            <span class="value">${batch.partNo || '—'}</span>
-          </div>
-          <div class="detail-row">
-            <span class="label">Prod Date:</span>
-            <span class="value">${formattedDate}</span>
-          </div>
-          <div class="detail-row">
-            <span class="label">Mould No:</span>
-            <span class="value">${batch.mouldNo != null ? batch.mouldNo : '—'}</span>
-          </div>
-          <div class="detail-row">
-            <span class="label">Mould Type:</span>
-            <span class="value">${mouldType}</span>
-          </div>
+          ${detailRowsHtml}
         </div>
       </div>
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+      <script src="qrcode.min.js"></script>
       <script>
         let printed = false;
         function triggerPrint() {
           if (printed) return;
           printed = true;
           setTimeout(function() {
+            window.focus();
             window.print();
-            window.close();
-          }, 300);
+          }, 200);
         }
+        window.onafterprint = function() {
+          try { window.close(); } catch(e) {}
+        };
         function renderQR() {
           const box = document.getElementById('qrcode-box');
           if (!box) { triggerPrint(); return; }
           const batchNo = box.getAttribute('data-batch');
-          try {
-            new QRCode(box, { text: batchNo, width: 72, height: 72, correctLevel: QRCode.CorrectLevel.M });
-            setTimeout(triggerPrint, 250);
-          } catch(e) {
-            const img = document.createElement('img');
-            img.className = 'qr-image';
-            img.style.width = '19mm';
-            img.style.height = '19mm';
-            img.src = 'https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=' + encodeURIComponent(batchNo);
-            img.onload = triggerPrint;
-            img.onerror = triggerPrint;
-            box.appendChild(img);
-            setTimeout(triggerPrint, 1500);
+          const QRCodeLib = window.QRCode || (window.opener && window.opener.QRCode);
+          if (QRCodeLib) {
+            try {
+              new QRCodeLib(box, {
+                text: batchNo,
+                width: 240,
+                height: 240,
+                correctLevel: QRCodeLib.CorrectLevel ? QRCodeLib.CorrectLevel.M : 0
+              });
+              setTimeout(triggerPrint, 250);
+              return;
+            } catch (e) {
+              console.warn("Local QRCode render failed, falling back to image", e);
+            }
           }
+          const img = document.createElement('img');
+          img.className = 'qr-image';
+          img.style.width = '19mm';
+          img.style.height = '19mm';
+          img.src = 'https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=' + encodeURIComponent(batchNo);
+          img.onload = triggerPrint;
+          img.onerror = triggerPrint;
+          box.appendChild(img);
+          setTimeout(triggerPrint, 1500);
         }
-        window.onload = function() {
+        if (document.readyState === 'complete') {
           renderQR();
-        };
+        } else {
+          window.onload = renderQR;
+        }
       </script>
     </body>
     </html>
@@ -432,34 +514,33 @@ function bulkPrintBarcodes(ids) {
     return;
   }
 
-  const STAGE_LABELS = {
-    production: 'Moulding',
-    cryogenic: 'Cryogenic',
-    deflashing: 'Manual DE Flashing',
-    trimming: 'Trimming',
-    'post-curing': 'Post Curing',
-    'waiting-visual': 'Waiting for Visual',
-    visual: 'Visual Inspection',
-    gauge: 'Gauge Inspection',
-    quality: 'QC Final',
-    store: 'Store'
-  };
-
   let labelsHtml = '';
   ids.forEach((batchId, idx) => {
     const batch = DB.Batches.find(batchId);
     if (!batch) return;
-    const formattedDate = batch.productionDate ? formatDate(batch.productionDate) : formatDate(batch.createdAt);
-    const part = DB.Master.find(batch.partId) || DB.Master.all().find(p => p.partNo === batch.partNo || p.jmrefNo === batch.jmrefNo) || {};
+
+    const isReprocess = !!(batch.isReprocess || batch.isLossReprocess || (batch.batchNo && (batch.batchNo.includes('-REP') || batch.batchNo.includes('-LREP'))));
+    const parent = batch.parentBatchId ? (DB.Batches.find(batch.parentBatchId) || {}) : {};
+    const effectiveMouldNo = batch.mouldNo != null ? batch.mouldNo : (parent.mouldNo != null ? parent.mouldNo : null);
+    const effectiveInternalBatchNo = batch.internalBatchNo || parent.internalBatchNo || '—';
+    const effectiveProdDate = batch.productionDate || parent.productionDate || batch.createdAt;
+    const formattedDate = effectiveProdDate ? formatDate(effectiveProdDate) : formatDate(batch.createdAt);
+
+    const part = DB.Master.find(batch.partId) || (parent.partId ? DB.Master.find(parent.partId) : null) || DB.Master.all().find(p => p.partNo === batch.partNo || p.jmrefNo === batch.jmrefNo || p.partNo === parent.partNo || p.jmrefNo === parent.jmrefNo) || {};
     let mouldType = '—';
     let processFlow = '—';
-    if (batch.mouldNo && part.moulds) {
-      const m = part.moulds.find(x => Number(x.mouldNo) === Number(batch.mouldNo));
+    if (effectiveMouldNo != null && part.moulds) {
+      const m = part.moulds.find(x => Number(x.mouldNo) === Number(effectiveMouldNo));
       if (m) {
         mouldType = m.mouldType || '—';
         processFlow = m.processFlow || '—';
       }
     }
+
+    const reprocessTarget = batch.reprocessDestination || batch.currentStage || 'visual';
+    const reprocessBannerHtml = isReprocess
+      ? `<div class="duplicate-tag" style="background:#fee2e2; border-color:#ef4444; color:#b91c1c; font-weight:900;">*** REPROCESS (${(STAGE_LABELS[reprocessTarget] || reprocessTarget).toUpperCase()}) ***</div>`
+      : '';
 
     const detailRowsHtml = batch.isStockUpload ? `
       <div class="detail-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 7px; line-height: 1.25; border-bottom: 0.5px dashed #ccc; padding-bottom: 0.5px; margin-bottom: 0.5px;">
@@ -481,6 +562,27 @@ function bulkPrintBarcodes(ids) {
       <div class="detail-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 7px; line-height: 1.25; border-bottom: none; padding-bottom: 0; margin-bottom: 0;">
         <span class="label" style="font-weight: bold; text-transform: uppercase; font-size: 7px; color: #333;">Date:</span>
         <span class="value" style="font-weight: bold; font-size: 7.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #000;">${formattedDate}</span>
+      </div>
+    ` : isReprocess ? `
+      <div class="detail-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 7px; line-height: 1.25; border-bottom: 0.5px dashed #ccc; padding-bottom: 0.5px; margin-bottom: 0.5px;">
+        <span class="label" style="font-weight: bold; text-transform: uppercase; font-size: 7px; color: #333;">JMREF:</span>
+        <span class="value" style="font-weight: bold; font-size: 7.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #000;">${batch.jmrefNo || parent.jmrefNo || '—'}</span>
+      </div>
+      <div class="detail-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 7px; line-height: 1.25; border-bottom: 0.5px dashed #ccc; padding-bottom: 0.5px; margin-bottom: 0.5px;">
+        <span class="label" style="font-weight: bold; text-transform: uppercase; font-size: 7px; color: #333;">Part No:</span>
+        <span class="value" style="font-weight: bold; font-size: 7.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #000;">${batch.partNo || parent.partNo || '—'}</span>
+      </div>
+      <div class="detail-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 7px; line-height: 1.25; border-bottom: 0.5px dashed #ccc; padding-bottom: 0.5px; margin-bottom: 0.5px;">
+        <span class="label" style="font-weight: bold; text-transform: uppercase; font-size: 7px; color: #333;">Reprocess Qty:</span>
+        <span class="value" style="font-weight: bold; font-size: 7.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #000;">${formatNum(batch.initialQty || batch.currentQty || 0)} pcs</span>
+      </div>
+      <div class="detail-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 7px; line-height: 1.25; border-bottom: 0.5px dashed #ccc; padding-bottom: 0.5px; margin-bottom: 0.5px;">
+        <span class="label" style="font-weight: bold; text-transform: uppercase; font-size: 7px; color: #333;">Parent Batch:</span>
+        <span class="value" style="font-weight: bold; font-size: 7.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #000;">${batch.parentBatchNo || parent.batchNo || '—'}</span>
+      </div>
+      <div class="detail-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 7px; line-height: 1.25; border-bottom: none; padding-bottom: 0; margin-bottom: 0;">
+        <span class="label" style="font-weight: bold; text-transform: uppercase; font-size: 7px; color: #333;">Mould No:</span>
+        <span class="value" style="font-weight: bold; font-size: 7.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #000;">${effectiveMouldNo != null ? effectiveMouldNo : '—'} (${mouldType})</span>
       </div>
     ` : `
       <div class="detail-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 7px; line-height: 1.25; border-bottom: 0.5px dashed #ccc; padding-bottom: 0.5px; margin-bottom: 0.5px;">
@@ -508,10 +610,11 @@ function bulkPrintBarcodes(ids) {
     labelsHtml += `
       <div class="label-container" style="${idx > 0 ? 'page-break-before: always;' : ''} width: 40mm; height: 60mm; padding: 1.5mm; border: 1.5px solid #000; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: space-between; overflow: hidden; background: #fff; color: #000;">
         <div class="company-title" style="font-size: 8px; font-weight: bold; letter-spacing: 0.2px; border-bottom: 1.5px solid #000; padding-bottom: 1.5px; width: 100%; text-align: center; text-transform: uppercase; white-space: nowrap; margin-bottom: 1px;">JANANI MOULDINGS PVT. LTD.</div>
+        ${reprocessBannerHtml}
         <div class="qr-wrapper" style="position: relative; display: flex; align-items: center; justify-content: center; width: 100%; height: 20mm; margin: 1mm 0;">
           <div class="flow-text-left" style="position: absolute; left: 0; top: 50%; transform: translateY(-50%); writing-mode: vertical-rl; font-size: 6.5px; font-weight: bold; text-transform: uppercase; color: #000; letter-spacing: 0.2px; white-space: nowrap; height: 18mm; display: flex; align-items: center; justify-content: center; text-align: center; border-right: 0.5px dashed #000; padding-right: 2px;">${processFlow}</div>
           <div class="qr-box" data-batch="${batch.batchNo}" style="width: 19mm; height: 19mm; display: flex; align-items: center; justify-content: center;"></div>
-          <div class="flow-text-right" style="position: absolute; right: 0; top: 50%; transform: translateY(-50%); writing-mode: vertical-rl; font-size: 6.5px; font-weight: bold; text-transform: uppercase; color: #000; letter-spacing: 0.2px; white-space: nowrap; height: 18mm; display: flex; align-items: center; justify-content: center; text-align: center; border-left: 0.5px dashed #000; padding-left: 2px;">IB: ${batch.internalBatchNo || '—'}</div>
+          <div class="flow-text-right" style="position: absolute; right: 0; top: 50%; transform: translateY(-50%); writing-mode: vertical-rl; font-size: 6.5px; font-weight: bold; text-transform: uppercase; color: #000; letter-spacing: 0.2px; white-space: nowrap; height: 18mm; display: flex; align-items: center; justify-content: center; text-align: center; border-left: 0.5px dashed #000; padding-left: 2px;">IB: ${effectiveInternalBatchNo}</div>
         </div>
         <div class="batch-no-display" style="font-size: 7.5px; font-weight: bold; letter-spacing: 0.2px; margin-bottom: 1.5px; border: 1px solid #000; padding: 1px 3px; border-radius: 2px; background: #f3f4f6; text-align: center; white-space: nowrap; max-width: 100%; box-sizing: border-box; overflow: hidden; text-overflow: ellipsis;">${batch.batchNo}</div>
         <div class="details" style="width: 100%; border-top: 1.5px solid #000; padding-top: 2px; font-size: 7px; display: flex; flex-direction: column; gap: 1px;">
@@ -528,42 +631,59 @@ function bulkPrintBarcodes(ids) {
       <style>
         @page { size: 40mm 60mm; margin: 0; }
         body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #fff; color: #000; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        .qr-box { width: 19mm !important; height: 19mm !important; display: flex; align-items: center; justify-content: center; }
+        .qr-box canvas, .qr-box img, .qr-image { width: 19mm !important; height: 19mm !important; image-rendering: pixelated; image-rendering: -moz-crisp-edges; display: block; }
       </style>
     </head>
     <body>
       ${labelsHtml}
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+      <script src="qrcode.min.js"></script>
       <script>
         let printed = false;
         function triggerPrint() {
           if (printed) return;
           printed = true;
           setTimeout(function() {
+            window.focus();
             window.print();
-            window.close();
-          }, 400);
+          }, 250);
         }
+        window.onafterprint = function() {
+          try { window.close(); } catch(e) {}
+        };
         function renderAllQRs() {
           const boxes = document.querySelectorAll('.qr-box');
+          const QRCodeLib = window.QRCode || (window.opener && window.opener.QRCode);
           boxes.forEach(function(box) {
             const batchNo = box.getAttribute('data-batch');
             if (!batchNo) return;
-            try {
-              new QRCode(box, { text: batchNo, width: 72, height: 72, correctLevel: QRCode.CorrectLevel.M });
-            } catch(e) {
-              const img = document.createElement('img');
-              img.className = 'qr-image';
-              img.style.width = '19mm';
-              img.style.height = '19mm';
-              img.src = 'https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=' + encodeURIComponent(batchNo);
-              box.appendChild(img);
+            if (QRCodeLib) {
+              try {
+                new QRCodeLib(box, {
+                  text: batchNo,
+                  width: 240,
+                  height: 240,
+                  correctLevel: QRCodeLib.CorrectLevel ? QRCodeLib.CorrectLevel.M : 0
+                });
+                return;
+              } catch(e) {
+                console.warn("QRCodeLib failed for " + batchNo, e);
+              }
             }
+            const img = document.createElement('img');
+            img.className = 'qr-image';
+            img.style.width = '19mm';
+            img.style.height = '19mm';
+            img.src = 'https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=' + encodeURIComponent(batchNo);
+            box.appendChild(img);
           });
           setTimeout(triggerPrint, 350);
         }
-        window.onload = function() {
+        if (document.readyState === 'complete') {
           renderAllQRs();
-        };
+        } else {
+          window.onload = renderAllQRs;
+        }
       </script>
     </body>
     </html>

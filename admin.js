@@ -1487,13 +1487,10 @@ const AdminModule = (() => {
   }
 
   function batchesTab() {
-    _cachedMismatches = null;
-    setTimeout(() => {
-      deepScanStageMismatches(true);
-    }, 50);
+    _cachedMismatches = DB.Batches.findStageMismatches ? DB.Batches.findStageMismatches() : [];
     return `
       <div id="admin-stage-mismatch-container">
-        ${renderStageMismatchCard()}
+        ${renderStageMismatchCard(_cachedMismatches)}
       </div>
       <div class="card animate-in">
         <div class="card-header">
@@ -1540,14 +1537,30 @@ const AdminModule = (() => {
     `;
   }
 
+  const ADMIN_STAGES = {
+    production: 'Moulding',
+    cryogenic: 'Cryogenic',
+    deflashing: 'Manual DE Flashing',
+    'waiting-trimming': 'Waiting for Trimming',
+    trimming: 'Trimming',
+    'post-curing': 'Post Curing',
+    'waiting-visual': 'Waiting for Visual',
+    visual: 'Visual Inspection',
+    gauge: 'Gauge Inspection',
+    quality: 'QC Final',
+    store: 'Store'
+  };
+  const ADMIN_STAGE_ENTRIES = Object.entries(ADMIN_STAGES);
+
   function renderAdminBatchRows(query) {
     const batches = DB.Batches.all();
     const statusFilter = document.getElementById('admin-batch-status-filter')?.value || '';
-    let filtered = query
+    const qLower = (query || '').toLowerCase().trim();
+    let filtered = qLower
       ? batches.filter(b => 
-          (b.batchNo && b.batchNo.toLowerCase().includes(query.toLowerCase())) ||
-          (b.jmrefNo && b.jmrefNo.toLowerCase().includes(query.toLowerCase())) ||
-          (b.partNo && b.partNo.toLowerCase().includes(query.toLowerCase()))
+          (b.batchNo && b.batchNo.toLowerCase().includes(qLower)) ||
+          (b.jmrefNo && b.jmrefNo.toLowerCase().includes(qLower)) ||
+          (b.partNo && b.partNo.toLowerCase().includes(qLower))
         )
       : batches;
 
@@ -1558,7 +1571,7 @@ const AdminModule = (() => {
     filtered.sort((a, b) => {
       const dateA = a.createdAt || '';
       const dateB = b.createdAt || '';
-      return dateB.localeCompare(dateA);
+      return dateB > dateA ? 1 : (dateB < dateA ? -1 : 0);
     });
 
     const totalItems = filtered.length;
@@ -1596,22 +1609,8 @@ const AdminModule = (() => {
       return `<tr><td colspan="6" style="text-align:center;" class="text-muted">No batches found</td></tr>`;
     }
 
-    const ADMIN_STAGES = {
-      production: 'Moulding',
-      cryogenic: 'Cryogenic',
-      deflashing: 'Manual DE Flashing',
-      'waiting-trimming': 'Waiting for Trimming',
-      trimming: 'Trimming',
-      'post-curing': 'Post Curing',
-      'waiting-visual': 'Waiting for Visual',
-      visual: 'Visual Inspection',
-      gauge: 'Gauge Inspection',
-      quality: 'QC Final',
-      store: 'Store'
-    };
-
     return pageItems.map(b => {
-      const options = Object.entries(ADMIN_STAGES).map(([val, label]) => {
+      const options = ADMIN_STAGE_ENTRIES.map(([val, label]) => {
         const selected = b.currentStage === val ? 'selected' : '';
         return `<option value="${val}" ${selected}>${label}</option>`;
       }).join('');
@@ -1644,11 +1643,22 @@ const AdminModule = (() => {
     }).join('');
   }
 
+  let _batchFilterTimer = null;
   function filterAdminBatches(query, resetPage = true) {
-    if (resetPage) batchCurrentPage = 1;
-    const tbody = document.getElementById('admin-batch-table-body');
-    if (tbody) {
-      tbody.innerHTML = renderAdminBatchRows(query);
+    if (resetPage) {
+      batchCurrentPage = 1;
+      if (_batchFilterTimer) clearTimeout(_batchFilterTimer);
+      _batchFilterTimer = setTimeout(() => {
+        const tbody = document.getElementById('admin-batch-table-body');
+        if (tbody) {
+          tbody.innerHTML = renderAdminBatchRows(query);
+        }
+      }, 150);
+    } else {
+      const tbody = document.getElementById('admin-batch-table-body');
+      if (tbody) {
+        tbody.innerHTML = renderAdminBatchRows(query);
+      }
     }
   }
 

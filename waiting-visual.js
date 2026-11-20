@@ -2,6 +2,20 @@
 // waiting-visual.js — Waiting for Visual inspection Stage Module
 // ============================================================
 const WaitingVisualModule = (() => {
+  const STAGE_LABELS = window.STAGE_LABELS || {
+    production: 'Moulding',
+    cryogenic: 'Cryogenic',
+    deflashing: 'Flash Removal',
+    'waiting-trimming': 'Waiting for Trimming',
+    trimming: 'Trimming',
+    'post-curing': 'Post Curing',
+    'waiting-visual': 'Waiting for Visual inspection',
+    visual: 'Visual Inspection',
+    gauge: 'Gauge Inspection',
+    quality: 'QC Final',
+    store: 'Store'
+  };
+
   let historySearch = '';
   let pendingSearch = '';
   let _activeBatch = null;
@@ -842,10 +856,13 @@ const WaitingVisualModule = (() => {
 
     DB.StageRecords.insert({ batchId, stage:'waiting-visual', inputQty:_wvInputQty, outputQty, lossQty, movedTo:'visual', movedFrom:'waiting-visual', date:dateStr, recordedBy:session&&session.userId, notes:notes });
     if (lossQty > 0) DB.LossTracker.insert({ batchId, stage:'waiting-visual', lossQty, date:dateStr, jmrefNo:batch&&batch.jmrefNo, partNo:batch&&batch.partNo });
-    DB.Batches.update(batchId, { currentStage:'visual' });
+    DB.Batches.update(batchId, { currentStage:'visual', initialQty: outputQty, currentQty: outputQty, remainingQty: outputQty });
     document.getElementById('wv-process-modal').classList.add('hidden');
     showToast('Batch moved to Visual Inspection', 'success');
-    App.navigate(App.current);
+    render();
+    if (window.App && typeof App.navigate === 'function' && App.current) {
+      App.navigate(App.current);
+    }
   } catch (err) {
     console.error("Waiting visual process error:", err);
     showToast("Could not process batch: " + (err.message || err), "error");

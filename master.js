@@ -1328,6 +1328,20 @@ const MasterModule = (() => {
 })();
 
 // ── Global Quick Movement Execution Handler ─────────────────
+const STAGE_LABELS = window.STAGE_LABELS || {
+  production: 'Production',
+  cryogenic: 'Cryogenic',
+  deflashing: 'Manual DE Flashing',
+  'waiting-trimming': 'Waiting for Trimming',
+  trimming: 'Trimming',
+  'post-curing': 'Post Curing',
+  'waiting-visual': 'Waiting for Visual',
+  visual: 'Visual Inspection',
+  gauge: 'Gauge Inspection',
+  quality: 'QC Final',
+  store: 'Store'
+};
+
 window.QuickMovementHandler = {
   redirectToDeliveryChallan: function(batchId, vendorId) {
     const modalEl = document.getElementById('quick-move-scanner-modal');
