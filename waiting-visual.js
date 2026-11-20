@@ -850,7 +850,7 @@ const WaitingVisualModule = (() => {
 
       document.getElementById('wv-process-modal').classList.add('hidden');
       showToast('Sub-batch created and moved to Visual Inspection', 'success');
-      App.navigate(App.current);
+      render();
       return;
     }
 
@@ -860,9 +860,6 @@ const WaitingVisualModule = (() => {
     document.getElementById('wv-process-modal').classList.add('hidden');
     showToast('Batch moved to Visual Inspection', 'success');
     render();
-    if (window.App && typeof App.navigate === 'function' && App.current) {
-      App.navigate(App.current);
-    }
   } catch (err) {
     console.error("Waiting visual process error:", err);
     showToast("Could not process batch: " + (err.message || err), "error");

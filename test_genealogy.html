@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Genealogy Test Runner</title>
+</head>
+<body>
+  <div id="content"></div>
+  <div id="toast-container"></div>
+
+  <script>
+    // Setup localStorage BEFORE db.js and app.js load
+    const now = Date.now();
+    localStorage.setItem('jmpl_session', JSON.stringify({
+      id: 'user_admin_01',
+      name: 'Admin User',
+      username: 'admin',
+      role: 'admin',
+      permissions: ['*'],
+      loginAt: now,
+      lastActive: now
+    }));
+
+    localStorage.setItem('jmpl_batches', JSON.stringify([
+      {
+        id: 'batch-rep-7040',
+        batchNo: '7040-1411261-10-D-I-13-REP',
+        internalBatchNo: 1045,
+        partNo: 'PART-7040',
+        jmrefNo: 'JMREF-7040',
+        description: 'Cryogenic Reprocess Test Part',
+        currentStage: 'cryogenic',
+        status: 'active',
+        initialQty: 1008,
+        parentBatchNo: '7040-1411261-10-D-I-13',
+        createdAt: '2026-11-18T10:00:00Z',
+        productionDate: '2026-11-18'
+      },
+      {
+        id: 'batch-parent-7040',
+        batchNo: '7040-1411261-10-D-I-13',
+        internalBatchNo: 1000,
+        partNo: 'PART-7040',
+        jmrefNo: 'JMREF-7040',
+        currentStage: 'store',
+        status: 'completed',
+        initialQty: 1200,
+        createdAt: '2026-11-15T08:00:00Z',
+        productionDate: '2026-11-15'
+      }
+    ]));
+  </script>
+
+  <!-- Load dependencies in order -->
+  <script src="./auth.js"></script>
+  <script src="./db.js"></script>
+  <script src="./reports.js"></script>
+  <script src="./app.js"></script>
+
+  <script>
+    (async function runTests() {
+      const results = {
+        suite: "Batch Genealogy Verification",
+        tests: [],
+        allPassed: false
+      };
+
+      function assert(name, condition, details = "") {
+        results.tests.push({
+          name,
+          passed: !!condition,
+          details: String(details)
+        });
+      }
+
+      try {
+        // Test 1: Window GenealogyModule exists
+        assert("GenealogyModule global defined", typeof window.GenealogyModule !== 'undefined' && typeof window.GenealogyModule.openBatchModal === 'function');
+
+        // Test 2: App showBatchGenealogy exists
+        assert("App.showBatchGenealogy defined", typeof App !== 'undefined' && typeof App.showBatchGenealogy === 'function');
+
+        // Test 3: Navigation includes report_batch_genealogy
+        assert("NAV has report_batch_genealogy", typeof NAV !== 'undefined' && NAV.some(n => n.module === 'report_batch_genealogy'));
+
+        // Test 4: REPORTS has batch-genealogy
+        assert("REPORTS has batch-genealogy", typeof ReportsModule !== 'undefined' && ReportsModule.REPORTS.some(r => r.key === 'batch-genealogy'));
+
+        // Test 5: Navigate to report_batch_genealogy
+        App.navigate('report_batch_genealogy');
+        const contentHtml = document.getElementById('content')?.innerHTML || '';
+        assert("report_batch_genealogy renders heading", contentHtml.includes('Batch Genealogy &amp; Traceability Report') || contentHtml.includes('Batch Genealogy & Traceability'));
+
+        // Test 6: Report generation & Quick Trace box
+        const runBtn = document.getElementById('rpt-run-btn');
+        if (runBtn) runBtn.click();
+        await new Promise(r => setTimeout(r, 200));
+        const outHtml = document.getElementById('report-output')?.innerHTML || '';
+        assert("Report has Quick Trace input", outHtml.includes('rpt-genealogy-quick-input') || outHtml.includes('Fast Batch Genealogy'));
+        assert("Report renders batch table rows", outHtml.includes('7040-1411261-10-D-I-13-REP'));
+
+        // Test 7: Direct showBatchGenealogy modal render
+        await App.showBatchGenealogy('7040-1411261-10-D-I-13-REP');
+        const modal = document.getElementById('genealogy-modal-overlay');
+        const modalText = modal ? modal.textContent : '';
+        assert("Genealogy modal is visible", modal && !modal.classList.contains('hidden'));
+        assert("Genealogy modal shows batch number", modalText.includes('7040-1411261-10-D-I-13-REP'));
+        assert("Genealogy modal shows Parent Batch tree node", modalText.includes('Parent Batch') && modalText.includes('7040-1411261-10-D-I-13'));
+        assert("Genealogy modal has no spinner stuck", !modalText.includes('Loading full genealogy & stage history'));
+
+        // Test 8: GenealogyModule.openBatchModal works
+        await window.GenealogyModule.openBatchModal('7040-1411261-10-D-I-13');
+        const modalText2 = modal ? modal.textContent : '';
+        assert("GenealogyModule.openBatchModal opens parent", modalText2.includes('7040-1411261-10-D-I-13'));
+
+        results.allPassed = results.tests.every(t => t.passed);
+      } catch (e) {
+        results.tests.push({
+          name: "Unhandled Exception",
+          passed: false,
+          details: e.stack || String(e)
+        });
+        results.allPassed = false;
+      }
+
+      document.documentElement.setAttribute('data-test-results', JSON.stringify(results));
+      console.log("TEST_RESULTS:", JSON.stringify(results, null, 2));
+    })();
+  </script>
+</body>
+</html>

@@ -180,9 +180,10 @@ function printBarcode(batchId, isDuplicate = false) {
     }
   }
 
-  const reprocessTarget = batch.reprocessDestination || batch.currentStage || 'visual';
+  const reprocessTarget = batch.reprocessDestination || batch.currentStage || 'cryogenic';
+  const targetStageName = STAGE_LABELS[reprocessTarget] || (reprocessTarget ? (reprocessTarget.charAt(0).toUpperCase() + reprocessTarget.slice(1)) : 'Cryogenic');
   const reprocessBannerHtml = isReprocess
-    ? `<div class="duplicate-tag" style="background:#fee2e2; border-color:#ef4444; color:#b91c1c; font-weight:900;">*** REPROCESS (${(STAGE_LABELS[reprocessTarget] || reprocessTarget).toUpperCase()}) ***</div>`
+    ? `<div class="duplicate-tag reprocess-tag" style="font-size: 4pt !important; line-height: 1.1; font-weight: 900; letter-spacing: 0.2px; border: 1px solid #000; background: #fff; color: #000; padding: 0.5px 1px; width: 100%; box-sizing: border-box; text-align: center; margin: 0.5px 0;">****Reprocess(${targetStageName})***</div>`
     : '';
 
   const detailRowsHtml = batch.isStockUpload ? `
@@ -440,7 +441,7 @@ function printBarcode(batchId, isDuplicate = false) {
           <div id="qrcode-box" data-batch="${batch.batchNo}" style="width: 19mm; height: 19mm; display: flex; align-items: center; justify-content: center;"></div>
           <div class="flow-text-right">IB: ${effectiveInternalBatchNo}</div>
         </div>
-        <div class="batch-no-display">${batch.batchNo}</div>
+        <div class="batch-no-display" style="font-size: 7.5px; font-weight: bold; letter-spacing: 0.2px; margin-bottom: 1.5px; border: 1px solid #000; padding: 1px 2px; border-radius: 2px; background: #f3f4f6; text-align: center; white-space: nowrap; max-width: 100%; box-sizing: border-box; overflow: hidden;">${batch.batchNo}</div>
         <div class="details">
           ${detailRowsHtml}
         </div>
@@ -448,9 +449,23 @@ function printBarcode(batchId, isDuplicate = false) {
       <script src="qrcode.min.js"></script>
       <script>
         let printed = false;
+        function autoFitBatchNumbers() {
+          document.querySelectorAll('.batch-no-display').forEach(function(el) {
+            var maxW = el.clientWidth || el.offsetWidth;
+            if (!maxW) return;
+            var computed = window.getComputedStyle(el);
+            var fs = parseFloat(computed.fontSize) || 10;
+            while (el.scrollWidth > maxW && fs > 3.5) {
+              fs -= 0.2;
+              el.style.fontSize = fs.toFixed(1) + 'px';
+              el.style.letterSpacing = '-0.15px';
+            }
+          });
+        }
         function triggerPrint() {
           if (printed) return;
           printed = true;
+          autoFitBatchNumbers();
           setTimeout(function() {
             window.focus();
             window.print();
@@ -536,9 +551,10 @@ function bulkPrintBarcodes(ids) {
       }
     }
 
-    const reprocessTarget = batch.reprocessDestination || batch.currentStage || 'visual';
+    const reprocessTarget = batch.reprocessDestination || batch.currentStage || 'cryogenic';
+    const targetStageName = STAGE_LABELS[reprocessTarget] || (reprocessTarget ? (reprocessTarget.charAt(0).toUpperCase() + reprocessTarget.slice(1)) : 'Cryogenic');
     const reprocessBannerHtml = isReprocess
-      ? `<div class="duplicate-tag" style="background:#fee2e2; border-color:#ef4444; color:#b91c1c; font-weight:900;">*** REPROCESS (${(STAGE_LABELS[reprocessTarget] || reprocessTarget).toUpperCase()}) ***</div>`
+      ? `<div class="duplicate-tag reprocess-tag" style="font-size: 4pt !important; line-height: 1.1; font-weight: 900; letter-spacing: 0.2px; border: 1px solid #000; background: #fff; color: #000; padding: 0.5px 1px; width: 100%; box-sizing: border-box; text-align: center; margin: 0.5px 0;">****Reprocess(${targetStageName})***</div>`
       : '';
 
     const detailRowsHtml = batch.isStockUpload ? `
@@ -615,7 +631,7 @@ function bulkPrintBarcodes(ids) {
           <div class="qr-box" data-batch="${batch.batchNo}" style="width: 19mm; height: 19mm; display: flex; align-items: center; justify-content: center;"></div>
           <div class="flow-text-right" style="position: absolute; right: 0; top: 50%; transform: translateY(-50%); writing-mode: vertical-rl; font-size: 6.5px; font-weight: bold; text-transform: uppercase; color: #000; letter-spacing: 0.2px; white-space: nowrap; height: 18mm; display: flex; align-items: center; justify-content: center; text-align: center; border-left: 0.5px dashed #000; padding-left: 2px;">IB: ${effectiveInternalBatchNo}</div>
         </div>
-        <div class="batch-no-display" style="font-size: 7.5px; font-weight: bold; letter-spacing: 0.2px; margin-bottom: 1.5px; border: 1px solid #000; padding: 1px 3px; border-radius: 2px; background: #f3f4f6; text-align: center; white-space: nowrap; max-width: 100%; box-sizing: border-box; overflow: hidden; text-overflow: ellipsis;">${batch.batchNo}</div>
+        <div class="batch-no-display" style="font-size: 7.5px; font-weight: bold; letter-spacing: 0.2px; margin-bottom: 1.5px; border: 1px solid #000; padding: 1px 2px; border-radius: 2px; background: #f3f4f6; text-align: center; white-space: nowrap; max-width: 100%; box-sizing: border-box; overflow: hidden;">${batch.batchNo}</div>
         <div class="details" style="width: 100%; border-top: 1.5px solid #000; padding-top: 2px; font-size: 7px; display: flex; flex-direction: column; gap: 1px;">
           ${detailRowsHtml}
         </div>
@@ -639,9 +655,23 @@ function bulkPrintBarcodes(ids) {
       <script src="qrcode.min.js"></script>
       <script>
         let printed = false;
+        function autoFitBatchNumbers() {
+          document.querySelectorAll('.batch-no-display').forEach(function(el) {
+            var maxW = el.clientWidth || el.offsetWidth;
+            if (!maxW) return;
+            var computed = window.getComputedStyle(el);
+            var fs = parseFloat(computed.fontSize) || 10;
+            while (el.scrollWidth > maxW && fs > 3.5) {
+              fs -= 0.2;
+              el.style.fontSize = fs.toFixed(1) + 'px';
+              el.style.letterSpacing = '-0.15px';
+            }
+          });
+        }
         function triggerPrint() {
           if (printed) return;
           printed = true;
+          autoFitBatchNumbers();
           setTimeout(function() {
             window.focus();
             window.print();
@@ -762,6 +792,7 @@ const NAV = [
   { id:'rpt-mould-lifecycle', label:'Mould Lifecycle & Performance', icon:'⚙️', module:'report_mould_lifecycle', section:'tools', parent:'reports', reportGroup:'prod_ops', perm:'report_mould_lifecycle' },
   { id:'rpt-cryo-deflash-trim', label:'Cryo, De-Flash & Trim JMREFs', icon:'❄️', module:'report_cryo_deflash_trim', section:'tools', parent:'reports', reportGroup:'prod_ops', perm:'report_cryo_deflash_trim' },
   { id:'rpt-process-leakage', label:'JMREF Process Leakage & Route Deviation', icon:'🔀', module:'report_process_leakage', section:'tools', parent:'reports', reportGroup:'prod_ops', perm:'report_process_leakage' },
+  { id:'rpt-batch-genealogy', label:'Batch Genealogy & Traceability', icon:'🧬', module:'report_batch_genealogy', section:'tools', parent:'reports', reportGroup:'prod_ops', perm:'report_production' },
 
   // ── Functional Group: Quality, Inspection & Stage Losses (12) ──
   { id:'rpt-quality',   label:'Quality Final Report', icon:'⭐', module:'report_quality', section:'tools', parent:'reports', reportGroup:'quality_loss', perm:'report_quality' },
@@ -887,6 +918,8 @@ const App = (() => {
     report_rm_consumption:  () => ReportsModule?.render('rm-consumption'),
     report_rm_inward_register: () => ReportsModule?.render('rm-inward-register'),
     report_rm_stock_ledger: () => ReportsModule?.render('rm-stock-ledger'),
+    report_batch_genealogy: () => ReportsModule?.render('batch-genealogy'),
+    report_loss:       () => ReportsModule?.render('qty-loss'),
     'print-batch':     () => PrintBatchModule?.render(),
   };
 
@@ -946,6 +979,8 @@ const App = (() => {
     report_rm_consumption:'RM Consumption & Batch Traceability Report',
     report_rm_inward_register:'RM GRN Inward & Supplier Receipt Register',
     report_rm_stock_ledger:'RM Stock Ledger & Movement Audit Trail',
+    report_batch_genealogy:'Batch Genealogy & Traceability Report',
+    report_loss:'Stage Loss Analysis & Scrap Valuation Report',
   };
 
   function navigate(moduleId, opt = null) {
@@ -1333,6 +1368,10 @@ const App = (() => {
   let pendingSyncCollections = new Set();
   let syncTimeoutMap = {};
   function updateTableSyncState(table, hasPendingWrites) {
+    if (table === 'connection') {
+      triggerSyncStatusUpdate();
+      return;
+    }
     if (hasPendingWrites) {
       pendingSyncCollections.add(table);
       if (syncTimeoutMap[table]) clearTimeout(syncTimeoutMap[table]);
@@ -1805,27 +1844,32 @@ const App = (() => {
     return Number(batch.remainingQty != null && !isNaN(Number(batch.remainingQty)) && Number(batch.remainingQty) > 0 ? batch.remainingQty : (batch.initialQty || 0));
   }
 
-  async function getParentBatch(b) {
-    if (!b) return null;
+  function withTimeout(promise, ms = 2500, fallback = null) {
+    if (!promise || typeof promise.then !== 'function') return Promise.resolve(fallback);
+    return Promise.race([
+      promise,
+      new Promise(resolve => setTimeout(() => resolve(fallback), ms))
+    ]).catch(err => {
+      console.warn('[Genealogy] Async operation timed out or failed:', err);
+      return fallback;
+    });
+  }
+
+  function getParentBatchSync(b) {
+    if (!b || typeof DB === 'undefined' || !DB.Batches) return null;
     const allBatches = DB.Batches.allIncludeArchived ? DB.Batches.allIncludeArchived() : DB.Batches.all();
 
     // 1. Explicit parentBatchId
     if (b.parentBatchId) {
-      let parent = allBatches.find(x => x.id === b.parentBatchId);
-      if (!parent && DB.Batches.fetchRemoteByNo) {
-        parent = await DB.Batches.fetchRemoteByNo(b.parentBatchId);
-      }
-      if (parent) return parent;
+      const p = allBatches.find(x => x.id === b.parentBatchId);
+      if (p) return p;
     }
 
     // 2. Explicit parentBatchNo
     if (b.parentBatchNo) {
-      const pNo = String(b.parentBatchNo).trim();
-      let parent = allBatches.find(x => x.batchNo && x.batchNo.trim().toUpperCase() === pNo.toUpperCase());
-      if (!parent && DB.Batches.fetchRemoteByNo) {
-        parent = await DB.Batches.fetchRemoteByNo(pNo);
-      }
-      if (parent) return parent;
+      const pNo = String(b.parentBatchNo).trim().toUpperCase();
+      const p = allBatches.find(x => x.batchNo && x.batchNo.trim().toUpperCase() === pNo);
+      if (p) return p;
     }
 
     // 3. Notes regex
@@ -1841,77 +1885,45 @@ const App = (() => {
       for (const regex of regexes) {
         const match = b.notes.match(regex);
         if (match) {
-          const parentNo = match[1].trim();
-          let parent = allBatches.find(x => x.batchNo && x.batchNo.trim().toUpperCase() === parentNo.toUpperCase());
-          if (!parent && DB.Batches.fetchRemoteByNo) {
-            parent = await DB.Batches.fetchRemoteByNo(parentNo);
-          }
-          if (parent) return parent;
+          const parentNo = match[1].trim().toUpperCase();
+          const p = allBatches.find(x => x.batchNo && x.batchNo.trim().toUpperCase() === parentNo);
+          if (p) return p;
         }
       }
     }
 
     // 4. BatchNo naming pattern (e.g. BATCH-REP-1 or BATCH-LREP or BATCH-REP)
     if (b.batchNo && (b.batchNo.includes('-REP') || b.batchNo.includes('-LREP'))) {
-      const baseNo = b.batchNo.split(/-REP|-LREP/)[0].trim();
-      if (baseNo && baseNo !== b.batchNo) {
-        let parent = allBatches.find(x => x.batchNo && x.batchNo.trim().toUpperCase() === baseNo.toUpperCase());
-        if (!parent && DB.Batches.fetchRemoteByNo) {
-          parent = await DB.Batches.fetchRemoteByNo(baseNo);
-        }
-        if (parent) return parent;
+      const baseNo = b.batchNo.split(/-REP|-LREP/)[0].trim().toUpperCase();
+      if (baseNo && baseNo !== b.batchNo.trim().toUpperCase()) {
+        const p = allBatches.find(x => x.batchNo && x.batchNo.trim().toUpperCase() === baseNo);
+        if (p) return p;
       }
     }
 
     return null;
   }
 
-  async function getChildBatches(parent) {
-    if (!parent) return [];
+  function getChildBatchesSync(parent) {
+    if (!parent || typeof DB === 'undefined' || !DB.Batches) return [];
     const allBatches = DB.Batches.allIncludeArchived ? DB.Batches.allIncludeArchived() : DB.Batches.all();
-
-    // Query Firestore for remote children if firebase is available
-    if (typeof firebase !== 'undefined' && firebase.firestore) {
-      try {
-        const firestore = firebase.firestore();
-        const promises = [
-          firestore.collection('batches').where('parentBatchId', '==', parent.id).get()
-        ];
-        if (parent.batchNo) {
-          promises.push(firestore.collection('batches').where('parentBatchNo', '==', parent.batchNo).get());
-        }
-        const snapshots = await Promise.all(promises);
-        snapshots.forEach(snap => {
-          if (snap) {
-            snap.forEach(doc => {
-              const data = { id: doc.id, ...doc.data() };
-              const existingIdx = allBatches.findIndex(x => x.id === data.id);
-              if (existingIdx === -1) {
-                allBatches.push(data);
-                if (DB.cache && DB.cache.batches) {
-                  DB.cache.batches.push(data);
-                }
-              }
-            });
-          }
-        });
-      } catch (err) {
-        console.warn("getChildBatches cloud query error:", err);
-      }
-    }
-
     const childMap = new Map();
+    const parentNoUpper = parent.batchNo ? String(parent.batchNo).trim().toUpperCase() : '';
+
     allBatches.forEach(cb => {
       if (!cb || cb.id === parent.id) return;
       if (cb.parentBatchId === parent.id || (parent.batchNo && cb.parentBatchNo === parent.batchNo)) {
         childMap.set(cb.id, cb);
         return;
       }
-      if (parent.batchNo && cb.batchNo && (cb.batchNo.startsWith(parent.batchNo + '-REP') || cb.batchNo.startsWith(parent.batchNo + '-LREP'))) {
-        childMap.set(cb.id, cb);
-        return;
+      if (parentNoUpper && cb.batchNo) {
+        const cbUpper = String(cb.batchNo).trim().toUpperCase();
+        if (cbUpper.startsWith(parentNoUpper + '-REP') || cbUpper.startsWith(parentNoUpper + '-LREP') || cbUpper.startsWith(parentNoUpper + '-')) {
+          childMap.set(cb.id, cb);
+          return;
+        }
       }
-      if (cb.notes && parent.batchNo) {
+      if (cb.notes && parentNoUpper) {
         const regexes = [
           /pool batch:\s*([^\s\.,;]+)/i,
           /created from batch\s*([^\s\.,;]+)/i,
@@ -1922,7 +1934,7 @@ const App = (() => {
         ];
         for (const regex of regexes) {
           const match = cb.notes.match(regex);
-          if (match && match[1].trim().toUpperCase() === parent.batchNo.trim().toUpperCase()) {
+          if (match && match[1].trim().toUpperCase() === parentNoUpper) {
             childMap.set(cb.id, cb);
             break;
           }
@@ -1933,9 +1945,72 @@ const App = (() => {
     return Array.from(childMap.values());
   }
 
-  async function showBatchGenealogy(batchIdOrNo) {
-    if (!batchIdOrNo) return;
+  async function getParentBatch(b) {
+    if (!b) return null;
+    const localParent = getParentBatchSync(b);
+    if (localParent) return localParent;
 
+    if (DB.Batches && DB.Batches.fetchRemoteByNo) {
+      if (b.parentBatchId) {
+        const p = await withTimeout(DB.Batches.fetchRemoteByNo(b.parentBatchId), 2000);
+        if (p) return p;
+      }
+      if (b.parentBatchNo) {
+        const p = await withTimeout(DB.Batches.fetchRemoteByNo(String(b.parentBatchNo).trim()), 2000);
+        if (p) return p;
+      }
+      if (b.batchNo && (b.batchNo.includes('-REP') || b.batchNo.includes('-LREP'))) {
+        const baseNo = b.batchNo.split(/-REP|-LREP/)[0].trim();
+        if (baseNo && baseNo !== b.batchNo) {
+          const p = await withTimeout(DB.Batches.fetchRemoteByNo(baseNo), 2000);
+          if (p) return p;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  async function getChildBatches(parent) {
+    if (!parent) return [];
+
+    // Query Firestore for remote children if firebase is available (with timeout)
+    if (typeof firebase !== 'undefined' && firebase.firestore) {
+      try {
+        const firestore = firebase.firestore();
+        const promises = [
+          firestore.collection('batches').where('parentBatchId', '==', parent.id).get()
+        ];
+        if (parent.batchNo) {
+          promises.push(firestore.collection('batches').where('parentBatchNo', '==', parent.batchNo).get());
+        }
+        const snapshots = await withTimeout(Promise.all(promises), 2500, []);
+        if (Array.isArray(snapshots)) {
+          snapshots.forEach(snap => {
+            if (snap && snap.forEach) {
+              snap.forEach(doc => {
+                const data = { id: doc.id, ...doc.data() };
+                if (DB.cache && DB.cache.batches) {
+                  const existingIdx = DB.cache.batches.findIndex(x => x.id === data.id);
+                  if (existingIdx === -1) {
+                    DB.cache.batches.push(data);
+                  } else {
+                    DB.cache.batches[existingIdx] = data;
+                  }
+                }
+              });
+            }
+          });
+        }
+      } catch (err) {
+        console.warn("getChildBatches cloud query error:", err);
+      }
+    }
+
+    return getChildBatchesSync(parent);
+  }
+
+  function renderGenealogyModalContent(b, parent, children) {
     let modal = document.getElementById('genealogy-modal-overlay');
     if (!modal) {
       modal = document.createElement('div');
@@ -1945,61 +2020,7 @@ const App = (() => {
     }
     modal.style.zIndex = '3000';
 
-    // Immediate feedback: loading spinner
-    modal.innerHTML = `
-      <div class="modal modal-md" style="max-width: 940px; border-radius:16px;">
-        <div class="modal-header">
-          <h3>🔍 Batch Genealogy & Details</h3>
-          <button class="modal-close" onclick="document.getElementById('genealogy-modal-overlay').classList.add('hidden')">&#x2715;</button>
-        </div>
-        <div class="modal-body" style="padding:40px; text-align:center;">
-          <div class="spinner" style="margin: 0 auto 16px auto; width:36px; height:36px; border:3px solid rgba(0,0,0,0.1); border-top-color:var(--primary); border-radius:50%; animation: spin 1s linear infinite;"></div>
-          <div style="font-size:15px; font-weight:600; color:var(--text-main);">Loading full genealogy & stage history for ${batchIdOrNo}...</div>
-          <div class="text-xs text-muted" style="margin-top:6px;">Fetching complete stage trail, loss tracking, and family lineage</div>
-        </div>
-      </div>
-    `;
-    modal.classList.remove('hidden');
-
-    let b = DB.Batches.find(batchIdOrNo);
-    if (!b && DB.Batches.allIncludeArchived) {
-      b = DB.Batches.allIncludeArchived().find(x => x.batchNo === batchIdOrNo || x.batchNo === batchIdOrNo.split(' ')[0] || x.id === batchIdOrNo);
-    }
-    if (!b && DB.Batches.fetchRemoteByNo) {
-      b = await DB.Batches.fetchRemoteByNo(batchIdOrNo);
-    }
-    if (!b) {
-      modal.innerHTML = `
-        <div class="modal modal-md" style="max-width: 500px; border-radius:16px;">
-          <div class="modal-header">
-            <h3>Batch Not Found</h3>
-            <button class="modal-close" onclick="document.getElementById('genealogy-modal-overlay').classList.add('hidden')">&#x2715;</button>
-          </div>
-          <div class="modal-body" style="padding:24px; text-align:center;">
-            <p>Could not locate batch <b>${batchIdOrNo}</b> in local records or cloud database.</p>
-          </div>
-          <div class="modal-footer">
-            <button class="btn btn-secondary" onclick="document.getElementById('genealogy-modal-overlay').classList.add('hidden')">Close</button>
-          </div>
-        </div>
-      `;
-      return;
-    }
-
-    // Fetch on-demand stage records, loss tracker, recheck tracker for this batch
-    if (typeof DB !== 'undefined') {
-      await Promise.all([
-        DB.StageRecords?.fetchByBatch ? DB.StageRecords.fetchByBatch(b.id) : null,
-        DB.LossTracker?.fetchByBatch ? DB.LossTracker.fetchByBatch(b.id) : null,
-        DB.RecheckTracker?.fetchByBatch ? DB.RecheckTracker.fetchByBatch(b.id) : null,
-        DB.RejectionTracker?.fetchByBatch ? DB.RejectionTracker.fetchByBatch(b.id) : null
-      ]);
-    }
-
-    const parent = await getParentBatch(b);
-    const children = await getChildBatches(b);
-
-    const allBatchRecs = (DB.StageRecords.byBatch ? DB.StageRecords.byBatch(b.id) : []).slice();
+    const allBatchRecs = (DB.StageRecords?.byBatch ? DB.StageRecords.byBatch(b.id) : []).slice();
     const prodRecord = allBatchRecs.find(sr => sr.stage === 'production');
     const originalBatchQty = prodRecord && (Number(prodRecord.inputQty) || Number(prodRecord.outputQty))
       ? (Number(prodRecord.inputQty) || Number(prodRecord.outputQty))
@@ -2015,8 +2036,9 @@ const App = (() => {
       }
     }
 
+    const safeChildren = Array.isArray(children) ? children : [];
     let lineageHtml = '';
-    if (!parent && !children.length) {
+    if (!parent && !safeChildren.length) {
       lineageHtml = `<p class="text-sm text-muted">No lineage tracing available (this batch was not split or reprocessed).</p>`;
     } else {
       lineageHtml += `<div class="genealogy-tree" style="background:var(--bg-input); padding:16px; border-radius:12px; border:1px solid var(--border);">`;
@@ -2028,7 +2050,7 @@ const App = (() => {
             <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
               <span style="font-size:16px;">🌳</span>
               <button class="btn btn-ghost btn-xs text-blue" onclick="App.showBatchGenealogy('${parent.id}')" style="font-weight:700;padding:2px 6px;">
-                ${parent.batchNo} (IB: ${parent.internalBatchNo})
+                ${parent.batchNo} ${parent.internalBatchNo != null ? `(IB: ${parent.internalBatchNo})` : ''}
               </button>
               <span class="stage-chip ${parent.currentStage}">${(parent.currentStage||'').toUpperCase()}</span>
             </div>
@@ -2040,22 +2062,22 @@ const App = (() => {
       lineageHtml += `
         <div class="tree-node active-node" style="padding:8px 12px; background:var(--accent-blue-light); border-left:4px solid var(--accent-blue); border-radius:4px;">
           <span style="font-size:11px;color:var(--accent-blue);font-weight:700;text-transform:uppercase;">Current Batch</span>
-          <div style="font-weight:700;margin-top:2px;">${b.batchNo} (IB: ${b.internalBatchNo})</div>
+          <div style="font-weight:700;margin-top:2px;">${b.batchNo} ${b.internalBatchNo != null ? `(IB: ${b.internalBatchNo})` : ''}</div>
           <div class="text-sm text-muted">${currentQtyDisplay} | Stage: ${(b.currentStage||'').toUpperCase()} | Status: ${b.status}</div>
         </div>
       `;
 
-      if (children.length) {
+      if (safeChildren.length) {
         lineageHtml += `
           <div style="padding-left:12px; border-left:2px dashed var(--border); margin:4px 0 4px 10px; height:16px;"></div>
           <div class="tree-node children" style="margin-top:8px; padding-left:12px;">
-            <span style="font-size:12px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Split Sub-Batches / Reprocessed</span>
+            <span style="font-size:12px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Split Sub-Batches / Reprocessed (${safeChildren.length})</span>
             <div style="display:flex; flex-direction:column; gap:8px; margin-top:6px;">
-              ${children.map(child => `
+              ${safeChildren.map(child => `
                 <div style="display:flex;align-items:center;gap:8px;">
                   <span style="font-size:14px;">🌱</span>
                   <button class="btn btn-ghost btn-xs text-blue" onclick="App.showBatchGenealogy('${child.id}')" style="font-weight:600;padding:2px 6px;">
-                    ${child.batchNo} (IB: ${child.internalBatchNo})
+                    ${child.batchNo} ${child.internalBatchNo != null ? `(IB: ${child.internalBatchNo})` : ''}
                   </button>
                   <span class="text-sm text-muted">Qty: ${formatNum(child.initialQty)}</span>
                   <span class="stage-chip ${child.currentStage}">${(child.currentStage||'').toUpperCase()}</span>
@@ -2070,8 +2092,8 @@ const App = (() => {
       lineageHtml += `</div>`;
     }
 
-    const operator = b.operatorId ? DB.Operators.find(b.operatorId) : null;
-    const subcontractor = b.subcontractorId ? DB.Subcontractors.find(b.subcontractorId) : null;
+    const operator = b.operatorId && DB.Operators ? DB.Operators.find(b.operatorId) : null;
+    const subcontractor = b.subcontractorId && DB.Subcontractors ? DB.Subcontractors.find(b.subcontractorId) : null;
     const operatorName = operator ? operator.name : (b.operatorName || '—');
     const subcontractorName = subcontractor ? subcontractor.name : '—';
     const visualStageRec = allBatchRecs.find(sr => (sr.stage === 'visual' || sr.movedFrom === 'visual') && sr.inspectorName);
@@ -2096,7 +2118,7 @@ const App = (() => {
       filteredRecs.push(r);
     });
 
-    const allUsers = DB.Users.all();
+    const allUsers = (typeof DB !== 'undefined' && DB.Users) ? DB.Users.all() : [];
     const stageRowsHtml = filteredRecs.map(r => {
       const repQty = Number(r.reprocessQty || 0);
       const displayLoss = (r.stage === 'store') 
@@ -2135,7 +2157,7 @@ const App = (() => {
         r.lossPercent !== undefined
       );
 
-      const part = DB.Master.find(b.partId) || DB.Master.all().find(p => p.jmrefNo === b.jmrefNo) || {};
+      const part = (DB.Master?.find ? DB.Master.find(b.partId) : null) || (DB.Master?.all ? DB.Master.all().find(p => p.jmrefNo === b.jmrefNo) : {}) || {};
       const isQuickMoveBatch = isQuickMoveRecord || !!(
         part.quickMovementEnabled ||
         (window.QuickMovementHandler && typeof QuickMovementHandler.isQuickMoveConfigured === 'function' && QuickMovementHandler.isQuickMoveConfigured(b))
@@ -2144,7 +2166,7 @@ const App = (() => {
       let changedBy = '—';
       const uid = r.recordedBy || r.userId || r.createdBy || r.movedBy || r.uploadedBy;
       if (uid && uid !== 'unknown' && uid !== '—' && uid !== '-') {
-        const u = DB.Users.find(uid) || allUsers.find(usr => usr.id === uid || usr.username === uid || usr.name === uid);
+        const u = (DB.Users?.find ? DB.Users.find(uid) : null) || allUsers.find(usr => usr.id === uid || usr.username === uid || usr.name === uid);
         if (u) {
           changedBy = u.name || u.username || uid;
         } else {
@@ -2158,19 +2180,17 @@ const App = (() => {
         changedBy = r.operatorName;
       }
 
-      // Fallback for Quick Movement batches where recordedBy was not previously saved
       if (changedBy === '—' || changedBy === 'unknown') {
         if (isQuickMoveRecord || (isQuickMoveBatch && r.stage !== 'production')) {
           const otherRecWithUser = allBatchRecs.find(sr => sr.recordedBy && sr.recordedBy !== 'unknown' && sr.recordedBy !== '—');
           if (otherRecWithUser) {
-            const u = DB.Users.find(otherRecWithUser.recordedBy) || allUsers.find(usr => usr.id === otherRecWithUser.recordedBy || usr.username === otherRecWithUser.recordedBy || usr.name === otherRecWithUser.recordedBy);
+            const u = (DB.Users?.find ? DB.Users.find(otherRecWithUser.recordedBy) : null) || allUsers.find(usr => usr.id === otherRecWithUser.recordedBy || usr.username === otherRecWithUser.recordedBy || usr.name === otherRecWithUser.recordedBy);
             changedBy = u ? (u.name || u.username) : otherRecWithUser.recordedBy;
           } else if (operatorName && operatorName !== '—') {
             changedBy = operatorName;
           } else {
             const activeSession = (typeof Auth !== 'undefined' && Auth.getSession) ? Auth.getSession() : null;
-            const fallback = activeSession ? (activeSession.name || activeSession.username) : 'Admin';
-            changedBy = fallback;
+            changedBy = activeSession ? (activeSession.name || activeSession.username) : 'Admin';
           }
         } else if (operatorName && operatorName !== '—') {
           changedBy = operatorName;
@@ -2206,14 +2226,14 @@ const App = (() => {
           `;
         }
       } else if (r.vendorId) {
-        const v = DB.Vendors.find(r.vendorId);
+        const v = DB.Vendors?.find ? DB.Vendors.find(r.vendorId) : null;
         const vName = v ? v.name : r.vendorId;
         inspectorOrOpDisplay = `
           <div style="font-weight:600; color:var(--accent-amber);">🏢 ${vName} <span class="badge badge-amber" style="font-size:10px; font-weight:normal;">Vendor</span></div>
           ${(operatorName && operatorName !== '—') ? `<div class="text-xs text-muted" style="margin-top:2px;">⚙️ Op: ${operatorName}</div>` : ''}
         `;
       } else if (r.operatorName || r.operatorId) {
-        const op = r.operatorName || DB.Operators.find(r.operatorId)?.name;
+        const op = r.operatorName || (DB.Operators?.find ? DB.Operators.find(r.operatorId)?.name : null);
         if (op) {
           inspectorOrOpDisplay = `
             <div style="font-weight:600; color:var(--primary);">⚙️ ${op} <span class="badge badge-blue" style="font-size:10px; font-weight:normal;">Operator</span></div>
@@ -2258,7 +2278,7 @@ const App = (() => {
     }).join('') || '<tr><td colspan="9" class="text-center text-muted">No stage history recorded</td></tr>';
 
     // Loss Tracker Records breakdown
-    const lossRecs = DB.LossTracker ? DB.LossTracker.byBatch(b.id) : [];
+    const lossRecs = DB.LossTracker?.byBatch ? DB.LossTracker.byBatch(b.id) : [];
     let lossSectionHtml = '';
     if (lossRecs.length > 0) {
       lossSectionHtml = `
@@ -2283,13 +2303,13 @@ const App = (() => {
                   const lUid = l.recordedBy || l.userId;
                   let recorder = l.inspectorName || l.operatorName || '—';
                   if (lUid && lUid !== 'unknown' && lUid !== '—' && lUid !== '-') {
-                    const u = DB.Users.find(lUid) || allUsers.find(usr => usr.id === lUid || usr.username === lUid || usr.name === lUid);
+                    const u = (DB.Users?.find ? DB.Users.find(lUid) : null) || allUsers.find(usr => usr.id === lUid || usr.username === lUid || usr.name === lUid);
                     recorder = u ? (u.name || u.username) : lUid;
                   } else if (l.recordedByName || l.userName) {
                     recorder = l.recordedByName || l.userName;
                   } else if (recorder === '—') {
                     const otherRecWithUser = allBatchRecs.find(sr => sr.recordedBy && sr.recordedBy !== 'unknown' && sr.recordedBy !== '—');
-                    const u = otherRecWithUser ? (DB.Users.find(otherRecWithUser.recordedBy) || allUsers.find(usr => usr.id === otherRecWithUser.recordedBy)) : null;
+                    const u = otherRecWithUser ? ((DB.Users?.find ? DB.Users.find(otherRecWithUser.recordedBy) : null) || allUsers.find(usr => usr.id === otherRecWithUser.recordedBy)) : null;
                     const resolved = u ? (u.name || u.username) : (operatorName !== '—' ? operatorName : 'Admin');
                     recorder = `${resolved} (⚡ Quick Move)`;
                   }
@@ -2313,7 +2333,7 @@ const App = (() => {
     }
 
     // Recheck Tracker Records
-    const recheckRecs = DB.RecheckTracker ? DB.RecheckTracker.byBatch(b.id) : [];
+    const recheckRecs = DB.RecheckTracker?.byBatch ? DB.RecheckTracker.byBatch(b.id) : [];
     let recheckSectionHtml = '';
     if (recheckRecs.length > 0) {
       recheckSectionHtml = `
@@ -2512,6 +2532,126 @@ const App = (() => {
     modal.classList.remove('hidden');
   }
 
+  async function showBatchGenealogy(batchIdOrNo) {
+    if (!batchIdOrNo) return;
+
+    let modal = document.getElementById('genealogy-modal-overlay');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.className = 'modal-overlay hidden';
+      modal.id = 'genealogy-modal-overlay';
+      document.body.appendChild(modal);
+    }
+    modal.style.zIndex = '3000';
+
+    try {
+      const cleanIdOrNo = String(batchIdOrNo).trim();
+      let b = DB.Batches ? DB.Batches.find(cleanIdOrNo) : null;
+      if (!b && DB.Batches && DB.Batches.allIncludeArchived) {
+        const cleanUpper = cleanIdOrNo.toUpperCase();
+        b = DB.Batches.allIncludeArchived().find(x => 
+          x && (x.id === cleanIdOrNo || 
+               (x.batchNo && x.batchNo.trim().toUpperCase() === cleanUpper) ||
+               (x.batchNo && x.batchNo.trim().toUpperCase().split(' ')[0] === cleanUpper))
+        );
+      }
+
+      // ── If batch is cached locally, render IMMEDIATELY in < 5ms ──
+      if (b) {
+        const localParent = getParentBatchSync(b);
+        const localChildren = getChildBatchesSync(b);
+        renderGenealogyModalContent(b, localParent, localChildren);
+
+        // Background asynchronous cloud sync with short timeout to catch any new records
+        if (typeof DB !== 'undefined') {
+          Promise.all([
+            withTimeout(DB.StageRecords?.fetchByBatch ? DB.StageRecords.fetchByBatch(b.id) : null, 2500),
+            withTimeout(DB.LossTracker?.fetchByBatch ? DB.LossTracker.fetchByBatch(b.id) : null, 2500),
+            withTimeout(DB.RecheckTracker?.fetchByBatch ? DB.RecheckTracker.fetchByBatch(b.id) : null, 2500),
+            withTimeout(DB.RejectionTracker?.fetchByBatch ? DB.RejectionTracker.fetchByBatch(b.id) : null, 2500),
+            withTimeout(getParentBatch(b), 2500),
+            withTimeout(getChildBatches(b), 2500)
+          ]).then(([sRecs, lRecs, rcRecs, rjRecs, remoteParent, remoteChildren]) => {
+            if (modal && !modal.classList.contains('hidden')) {
+              const updatedParent = remoteParent || localParent;
+              const updatedChildren = (remoteChildren && remoteChildren.length) ? remoteChildren : localChildren;
+              renderGenealogyModalContent(b, updatedParent, updatedChildren);
+            }
+          }).catch(console.warn);
+        }
+        return;
+      }
+
+      // ── If NOT in local cache, show spinner and fetch from remote with timeout ──
+      modal.innerHTML = `
+        <div class="modal modal-md" style="max-width: 940px; border-radius:16px;">
+          <div class="modal-header">
+            <h3>🔍 Batch Genealogy & Details</h3>
+            <button class="modal-close" onclick="document.getElementById('genealogy-modal-overlay').classList.add('hidden')">&#x2715;</button>
+          </div>
+          <div class="modal-body" style="padding:40px; text-align:center;">
+            <div class="spinner" style="margin: 0 auto 16px auto; width:36px; height:36px; border:3px solid rgba(0,0,0,0.1); border-top-color:var(--primary); border-radius:50%; animation: spin 1s linear infinite;"></div>
+            <div style="font-size:15px; font-weight:600; color:var(--text-main);">Loading full genealogy & stage history for ${cleanIdOrNo}...</div>
+            <div class="text-xs text-muted" style="margin-top:6px;">Fetching complete stage trail, loss tracking, and family lineage</div>
+          </div>
+        </div>
+      `;
+      modal.classList.remove('hidden');
+
+      if (DB.Batches && DB.Batches.fetchRemoteByNo) {
+        b = await withTimeout(DB.Batches.fetchRemoteByNo(cleanIdOrNo), 3000);
+      }
+
+      if (!b) {
+        modal.innerHTML = `
+          <div class="modal modal-md" style="max-width: 500px; border-radius:16px;">
+            <div class="modal-header">
+              <h3>Batch Not Found</h3>
+              <button class="modal-close" onclick="document.getElementById('genealogy-modal-overlay').classList.add('hidden')">&#x2715;</button>
+            </div>
+            <div class="modal-body" style="padding:24px; text-align:center;">
+              <p>Could not locate batch <b>${cleanIdOrNo}</b> in local records or cloud database.</p>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-secondary" onclick="document.getElementById('genealogy-modal-overlay').classList.add('hidden')">Close</button>
+            </div>
+          </div>
+        `;
+        return;
+      }
+
+      const [sRecs, lRecs, rcRecs, rjRecs, parent, children] = await Promise.all([
+        withTimeout(DB.StageRecords?.fetchByBatch ? DB.StageRecords.fetchByBatch(b.id) : null, 2500),
+        withTimeout(DB.LossTracker?.fetchByBatch ? DB.LossTracker.fetchByBatch(b.id) : null, 2500),
+        withTimeout(DB.RecheckTracker?.fetchByBatch ? DB.RecheckTracker.fetchByBatch(b.id) : null, 2500),
+        withTimeout(DB.RejectionTracker?.fetchByBatch ? DB.RejectionTracker.fetchByBatch(b.id) : null, 2500),
+        withTimeout(getParentBatch(b), 2500),
+        withTimeout(getChildBatches(b), 2500)
+      ]);
+
+      renderGenealogyModalContent(b, parent, children || []);
+    } catch (err) {
+      console.error("showBatchGenealogy error:", err);
+      modal.innerHTML = `
+        <div class="modal modal-md" style="max-width: 540px; border-radius:16px;">
+          <div class="modal-header">
+            <h3>⚠️ Error Loading Batch Genealogy</h3>
+            <button class="modal-close" onclick="document.getElementById('genealogy-modal-overlay').classList.add('hidden')">&#x2715;</button>
+          </div>
+          <div class="modal-body" style="padding:24px;">
+            <p style="color:var(--text-main);">An unexpected error occurred while loading genealogy for <b>${batchIdOrNo}</b>:</p>
+            <div style="background:rgba(239,68,68,0.08); color:#b91c1c; padding:12px; border-radius:8px; font-family:monospace; font-size:12px; margin-top:8px;">
+              ${err?.message || String(err)}
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="document.getElementById('genealogy-modal-overlay').classList.add('hidden')">Close</button>
+          </div>
+        </div>
+      `;
+    }
+  }
+
   function toggleAllStageChecks(chk) {
     const list = document.querySelectorAll('.bulk-stage-check');
     list.forEach(el => {
@@ -2650,6 +2790,10 @@ const App = (() => {
 })();
 window.App = App;
 window.getStageAgingChip = App.getStageAgingChip;
+window.GenealogyModule = {
+  openBatchModal: (batchIdOrNo) => App.showBatchGenealogy(batchIdOrNo),
+  showBatchGenealogy: (batchIdOrNo) => App.showBatchGenealogy(batchIdOrNo)
+};
 
 // ── Login Page ─────────────────────────────────────────────
 function showLoginPage() {

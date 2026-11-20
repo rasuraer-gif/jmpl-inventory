@@ -144,9 +144,16 @@ const VisualModule = (() => {
       });
     }
 
+    const batchLookupMap = new Map();
+    recs.forEach(r => {
+      if (r.batchId && !batchLookupMap.has(r.batchId)) {
+        batchLookupMap.set(r.batchId, DB.Batches.find(r.batchId) || {});
+      }
+    });
+
     recs.sort((a, b) => {
-      const bObj = DB.Batches.find(b.batchId) || {};
-      const aObj = DB.Batches.find(a.batchId) || {};
+      const aObj = batchLookupMap.get(a.batchId) || {};
+      const bObj = batchLookupMap.get(b.batchId) || {};
       const dateA = a.timestamp || a.date || aObj.receivedAt || aObj.createdAt || '';
       const dateB = b.timestamp || b.date || bObj.receivedAt || bObj.createdAt || '';
       const dateCompare = dateB.localeCompare(dateA);
@@ -741,7 +748,7 @@ const VisualModule = (() => {
           currentQty: finalReprocessQty,
           remainingQty: finalReprocessQty,
           mouldNo: _activeBatch.mouldNo ?? null,
-          internalBatchNo: _activeBatch.internalBatchNo || '',
+          internalBatchNo: (typeof DB !== 'undefined' && DB.Batches?.nextInternalBatchNo) ? DB.Batches.nextInternalBatchNo() : undefined,
           productionDate: _activeBatch.productionDate || '',
           compoundCode: _activeBatch.compoundCode || '',
           rawMaterialBatchNo: _activeBatch.rawMaterialBatchNo || '',
@@ -874,7 +881,7 @@ const VisualModule = (() => {
         currentQty: finalReprocessQty,
         remainingQty: finalReprocessQty,
         mouldNo: batch.mouldNo ?? null,
-        internalBatchNo: batch.internalBatchNo || '',
+        internalBatchNo: (typeof DB !== 'undefined' && DB.Batches?.nextInternalBatchNo) ? DB.Batches.nextInternalBatchNo() : undefined,
         productionDate: batch.productionDate || '',
         compoundCode: batch.compoundCode || '',
         rawMaterialBatchNo: batch.rawMaterialBatchNo || '',

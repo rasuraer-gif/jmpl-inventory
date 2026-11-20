@@ -106,9 +106,6 @@ const DB = (() => {
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
       return false;
     }
-    if (!db) {
-      return false;
-    }
     // Only report offline if multiple consecutive network probes have explicitly failed
     if (!_connectionHealthy && _consecutiveFailures >= 2) {
       return false;
@@ -933,7 +930,13 @@ const DB = (() => {
                       item.status = 'missing';
                       item.isArchived = true;
                     } else {
-                      item.status = 'completed';
+                      // CRITICAL: A newly created batch or pending sync item MUST remain active!
+                      const ageMs = Date.now() - new Date(item.createdAt || 0).getTime();
+                      const isRecent = ageMs < 2 * 60 * 60 * 1000;
+                      const hasPending = typeof getPendingSyncQueue === 'function' && getPendingSyncQueue().some(q => q.table === 'batches' && q.id === item.id);
+                      if (!isRecent && !hasPending) {
+                        item.status = 'completed';
+                      }
                     }
                   }
                   merged.push(item);
@@ -1026,9 +1029,8 @@ const DB = (() => {
             }
           }, backoff);
 
-          // Only flag connection unhealthy if navigator is explicitly offline or multiple listeners failed
-          _consecutiveFailures++;
-          if (_consecutiveFailures >= 3 || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+          // Only flag connection unhealthy if navigator is explicitly offline
+          if (typeof navigator !== 'undefined' && !navigator.onLine) {
             _connectionHealthy = false;
             triggerSyncStateChange('connection', true);
           }
@@ -1054,7 +1056,18 @@ const DB = (() => {
         Batches.fetchRejectedBatchesFromCloud();
       }
 
+      if (typeof window !== 'undefined') {
+        window.addEventListener('online', () => {
+          processPendingSyncQueue();
+        });
+        setInterval(processPendingSyncQueue, 15000);
+        setTimeout(processPendingSyncQueue, 2000);
+      }
+
       isCloudSyncComplete = true;
+      _connectionHealthy = true;
+      _consecutiveFailures = 0;
+      triggerSyncStateChange('connection', false);
       localStorage.setItem('jmpl_archival_migration_run_v1', 'true');
       runRecheckPatch();
     } catch (e) {
@@ -1062,6 +1075,9 @@ const DB = (() => {
     }
 
     isInitialized = true;
+    _connectionHealthy = true;
+    _consecutiveFailures = 0;
+    triggerSyncStateChange('connection', false);
     runRecheckPatch();
   }
 
@@ -1696,6 +1712,79 @@ const DB = (() => {
     return clean;
   }
 
+  // Persistent Offline/Pending Sync Queue for Non-Destructive Mutations
+  const PENDING_SYNC_KEY = 'jmpl_pending_sync_queue';
+  function getPendingSyncQueue() {
+    try {
+      const q = localStorage.getItem(PENDING_SYNC_KEY);
+      return q ? JSON.parse(q) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+  function savePendingSyncQueue(queue) {
+    try {
+      localStorage.setItem(PENDING_SYNC_KEY, JSON.stringify(queue));
+    } catch (e) {}
+  }
+  function enqueuePendingSync(table, id, operation = 'set', docData = null) {
+    const queue = getPendingSyncQueue();
+    const existingIdx = queue.findIndex(item => item.table === table && item.id === id);
+    const item = { table, id, operation, docData, timestamp: Date.now() };
+    if (existingIdx !== -1) {
+      queue[existingIdx] = item;
+    } else {
+      queue.push(item);
+    }
+    savePendingSyncQueue(queue);
+  }
+  function dequeuePendingSync(table, id) {
+    const queue = getPendingSyncQueue();
+    const filtered = queue.filter(item => !(item.table === table && item.id === id));
+    if (filtered.length !== queue.length) {
+      savePendingSyncQueue(filtered);
+    }
+  }
+
+  let _isProcessingSyncQueue = false;
+  async function processPendingSyncQueue() {
+    if (!db || _isProcessingSyncQueue) return;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+    const queue = getPendingSyncQueue();
+    if (!queue.length) return;
+
+    _isProcessingSyncQueue = true;
+    try {
+      const remaining = [];
+      for (const item of queue) {
+        try {
+          if (item.operation === 'delete') {
+            await db.collection(item.table).doc(item.id).delete();
+          } else {
+            let payload = item.docData;
+            if (!payload && cache[item.table]) {
+              const latest = cache[item.table].find(r => r && r.id === item.id);
+              if (latest) {
+                payload = sanitizeFirestoreDoc({ ...latest });
+                delete payload.id;
+              }
+            }
+            if (payload) {
+              await db.collection(item.table).doc(item.id).set(payload, { merge: true });
+            }
+          }
+          console.log(`[DB Queue] Successfully synchronized item: ${item.table}/${item.id}`);
+        } catch (err) {
+          console.warn(`[DB Queue] Retry pending for ${item.table}/${item.id}:`, err.message);
+          remaining.push(item);
+        }
+      }
+      savePendingSyncQueue(remaining);
+    } finally {
+      _isProcessingSyncQueue = false;
+    }
+  }
+
   // Resilient Cloud Writer with Timeout & Auto-Recovery
   function syncDocToCloud(table, id, docData, operation = 'set') {
     if (!db) return Promise.resolve();
@@ -1787,23 +1876,15 @@ const DB = (() => {
     // Notify local data change listeners immediately
     triggerDataChange(table);
 
-    // Save to Firestore asynchronously with rollback on failure
+    // Save to Firestore asynchronously with persistent queue retry (never destructively delete local record)
     if (db) {
       const docData = sanitizeFirestoreDoc({ ...row });
       delete docData.id;
-      row._syncPromise = syncDocToCloud(table, id, docData, 'set').catch(err => {
-        console.error(`[DB] Cloud insert failed for ${table}/${id}. Rolling back local cache:`, err);
-        const idx = cache[table].findIndex(r => r.id === id);
-        if (idx !== -1) {
-          cache[table].splice(idx, 1);
-          rebuildIndexesForTable(table);
-          saveLocal(table);
-          triggerDataChange(table);
-        }
-        if (typeof showToast === 'function') {
-          showToast(`Cloud write failed. Reverted entry in ${table}.`, 'error');
-        }
-        throw err;
+      row._syncPromise = syncDocToCloud(table, id, docData, 'set').then(() => {
+        dequeuePendingSync(table, id);
+      }).catch(err => {
+        console.warn(`[DB] Cloud insert delayed for ${table}/${id} (${err.message}). Preserving local record and enqueuing for background retry.`);
+        enqueuePendingSync(table, id, 'set', docData);
       });
     }
 
@@ -1839,23 +1920,15 @@ const DB = (() => {
     // Notify local data change listeners immediately
     triggerDataChange(table);
 
-    // Save to Firestore asynchronously with rollback on failure
+    // Save to Firestore asynchronously with persistent queue retry
     if (db) {
       const docData = sanitizeFirestoreDoc({ ...updatedRow });
       delete docData.id;
-      updatedRow._syncPromise = syncDocToCloud(table, id, docData, 'set').catch(err => {
-        console.error(`[DB] Cloud update failed for ${table}/${id}. Rolling back local cache:`, err);
-        const curIdx = cache[table].findIndex(r => r.id === id);
-        if (curIdx !== -1) {
-          cache[table][curIdx] = previousRow;
-          rebuildIndexesForTable(table);
-          saveLocal(table);
-          triggerDataChange(table);
-        }
-        if (typeof showToast === 'function') {
-          showToast(`Cloud update failed. Reverted changes in ${table}.`, 'error');
-        }
-        throw err;
+      updatedRow._syncPromise = syncDocToCloud(table, id, docData, 'set').then(() => {
+        dequeuePendingSync(table, id);
+      }).catch(err => {
+        console.warn(`[DB] Cloud update delayed for ${table}/${id} (${err.message}). Preserving local changes and enqueuing for background retry.`);
+        enqueuePendingSync(table, id, 'set', docData);
       });
     }
 
@@ -1924,21 +1997,16 @@ const DB = (() => {
     saveLocal(table);
     triggerDataChange(table);
 
-    // Confirm Cloud write with rollback on failure
+    // Confirm Cloud write with persistent queue retry (never destructively delete local record)
     if (db) {
       const docData = sanitizeFirestoreDoc({ ...row });
       delete docData.id;
       try {
         await syncDocToCloud(table, id, docData, 'set');
+        dequeuePendingSync(table, id);
       } catch (err) {
-        const idx = cache[table].findIndex(r => r.id === id);
-        if (idx !== -1) {
-          cache[table].splice(idx, 1);
-          rebuildIndexesForTable(table);
-          saveLocal(table);
-          triggerDataChange(table);
-        }
-        throw err;
+        console.warn(`[DB] Cloud insertAsync delayed for ${table}/${id} (${err.message}). Preserving local record and enqueuing for background retry.`);
+        enqueuePendingSync(table, id, 'set', docData);
       }
     }
 
@@ -1975,21 +2043,16 @@ const DB = (() => {
     saveLocal(table);
     triggerDataChange(table);
 
-    // Confirm Cloud write with rollback on failure
+    // Confirm Cloud write with persistent queue retry
     if (db) {
       const docData = sanitizeFirestoreDoc({ ...updatedRow });
       delete docData.id;
       try {
         await syncDocToCloud(table, id, docData, 'set');
+        dequeuePendingSync(table, id);
       } catch (err) {
-        const curIdx = cache[table].findIndex(r => r.id === id);
-        if (curIdx !== -1) {
-          cache[table][curIdx] = previousRow;
-          rebuildIndexesForTable(table);
-          saveLocal(table);
-          triggerDataChange(table);
-        }
-        throw err;
+        console.warn(`[DB] Cloud updateAsync delayed for ${table}/${id} (${err.message}). Preserving local changes and enqueuing for background retry.`);
+        enqueuePendingSync(table, id, 'set', docData);
       }
     }
 
@@ -2500,7 +2563,7 @@ const DB = (() => {
       }
 
       let internalBatchNo = r.internalBatchNo;
-      if (internalBatchNo == null) {
+      if (internalBatchNo == null || internalBatchNo === '' || r.isReprocess || r.isLossReprocess) {
         internalBatchNo = Batches.nextInternalBatchNo();
       }
       const initialQty = Number(r.initialQty) || 0;
@@ -2585,7 +2648,7 @@ const DB = (() => {
       }
 
       let internalBatchNo = r.internalBatchNo;
-      if (internalBatchNo == null) {
+      if (internalBatchNo == null || internalBatchNo === '' || r.isReprocess || r.isLossReprocess) {
         internalBatchNo = Batches.nextInternalBatchNo();
       }
       const initialQty = Number(r.initialQty) || 0;
@@ -2715,7 +2778,9 @@ const DB = (() => {
       return { expectedStage, lastRecord: latestRec, recsCount: recs.length };
     },
     findStageMismatches: () => {
-      const batches = getAll('batches');
+      const batches = activeBatchesMap.size > 0 
+        ? Array.from(activeBatchesMap.values()) 
+        : getAll('batches').filter(b => b && b.status === 'active' && !b.isArchived);
       const mismatches = [];
 
       // Manufacturing stage progression order (higher rank = further along in lifecycle)
@@ -3013,15 +3078,9 @@ const DB = (() => {
     byStage: (stage) => {
       let recs = stageRecordsByStageIndex.get(stage);
       if (recs) {
-        recs = [...recs];
-      } else {
-        recs = getAll('stageRecords').filter(r => r.stage === stage);
+        return [...recs];
       }
-      const missingBatchIds = [...new Set(recs.map(r => r.batchId).filter(id => id && !cache.batches.some(b => b.id === id)))];
-      if (missingBatchIds.length > 0 && typeof Batches.fetchByIds === 'function') {
-        Batches.fetchByIds(missingBatchIds);
-      }
-      return recs;
+      return getAll('stageRecords').filter(r => r.stage === stage);
     },
     byBatchAndStage: (batchId, stage) => {
       const bList = StageRecords.byBatch(batchId);

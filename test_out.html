@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html data-test-results="{&quot;suite&quot;:&quot;Batch Genealogy Verification&quot;,&quot;tests&quot;:[{&quot;name&quot;:&quot;GenealogyModule global defined&quot;,&quot;passed&quot;:true,&quot;details&quot;:&quot;&quot;},{&quot;name&quot;:&quot;App.showBatchGenealogy defined&quot;,&quot;passed&quot;:true,&quot;details&quot;:&quot;&quot;},{&quot;name&quot;:&quot;NAV has report_batch_genealogy&quot;,&quot;passed&quot;:true,&quot;details&quot;:&quot;&quot;},{&quot;name&quot;:&quot;REPORTS has batch-genealogy&quot;,&quot;passed&quot;:true,&quot;details&quot;:&quot;&quot;},{&quot;name&quot;:&quot;report_batch_genealogy renders heading&quot;,&quot;passed&quot;:true,&quot;details&quot;:&quot;&quot;},{&quot;name&quot;:&quot;Report has Quick Trace input&quot;,&quot;passed&quot;:true,&quot;details&quot;:&quot;&quot;},{&quot;name&quot;:&quot;Report renders batch table rows&quot;,&quot;passed&quot;:false,&quot;details&quot;:&quot;&quot;},{&quot;name&quot;:&quot;Genealogy modal is visible&quot;,&quot;passed&quot;:true,&quot;details&quot;:&quot;&quot;},{&quot;name&quot;:&quot;Genealogy modal shows batch number&quot;,&quot;passed&quot;:true,&quot;details&quot;:&quot;&quot;},{&quot;name&quot;:&quot;Genealogy modal shows Parent Batch tree node&quot;,&quot;passed&quot;:false,&quot;details&quot;:&quot;&quot;},{&quot;name&quot;:&quot;Genealogy modal has no spinner stuck&quot;,&quot;passed&quot;:true,&quot;details&quot;:&quot;&quot;},{&quot;name&quot;:&quot;GenealogyModule.openBatchModal opens parent&quot;,&quot;passed&quot;:true,&quot;details&quot;:&quot;&quot;}],&quot;allPassed&quot;:false}"><head>
+  <meta charset="utf-8">
+  <title>Genealogy Test Runner</title>
+<script src="./xlsx.full.min.js" async="" data-loaded="true"></script></head>
+<body class="">
+    <div id="app">
+      <!-- Sidebar -->
+      <nav id="sidebar">
+        <div class="sidebar-header" style="padding:20px 16px 16px; display:flex; flex-direction:column; align-items:center; text-align:center;">
+          <div class="sidebar-brand" style="display:flex; flex-direction:column; align-items:center; justify-content:center; width:100%;">
+            <img src="./logo.png" alt="JMPL Logo" style="width:88px; height:88px; object-fit:contain; border-radius:12px; background:white; padding:6px; box-shadow:0 4px 12px rgba(0,0,0,0.08); flex-shrink:0;">
+            <div class="brand-text" style="display:flex; flex-direction:column; align-items:center; margin-top:10px;">
+              <h2 style="font-size:10.5px; font-weight:800; margin:0; line-height:1.2; white-space:nowrap; text-align:center; letter-spacing:-0.2px;">
+                <span style="color:var(--jmpl-green, #1b7a43);">Janani Mouldings</span> <span style="color:#f97316; font-weight:700;">Private Limited</span>
+              </h2>
+              <div style="display:flex; align-items:center; justify-content:center; gap:5px; margin-top:6px; cursor:pointer; padding:2px 8px; border-radius:12px; background:rgba(0,0,0,0.04);" onclick="if(typeof DB !== 'undefined' &amp;&amp; DB.reconnect) DB.reconnect();" title="Online DB Connected (Click to sync &amp; refresh master catalogue)">
+                <span id="sync-status-dot" style="width:8px; height:8px; border-radius:50%; background:#10b981; display:inline-block; transition:background 0.3s ease;" class="pulse-green"></span>
+                <span id="sync-status-text" style="font-size:10px; color:#10b981; font-weight:700; letter-spacing:0.3px; transition:color 0.3s ease;">ONLINE</span>
+              </div>
+            </div>
+          </div>
+          <button class="btn btn-teal" onclick="App.runQuickScan()" style="display:flex; align-items:center; justify-content:center; gap:6px; font-weight:700; font-size:12.5px; width:100%; margin-top:14px; border-radius:8px; padding:8px 0; letter-spacing:0.3px;">⚡ Quick Scan</button>
+        </div>
+        <div class="sidebar-nav"><div class="nav-section-label">OVERVIEW</div><button class="nav-item" data-module="dashboard" id="nav-dashboard" onclick="App.navigate('dashboard')">
+        <span class="nav-icon">🏠</span>Dashboard
+      </button><button class="nav-item" data-module="master" id="nav-master" onclick="App.navigate('master')">
+        <span class="nav-icon">📋</span>Inventory Master
+      </button><button class="nav-item" data-module="rm-master" id="nav-rm-master" onclick="App.navigate('rm-master')">
+        <span class="nav-icon">🧪</span>RM Master
+      </button><button class="nav-item" data-module="suppliers" id="nav-suppliers" onclick="App.navigate('suppliers')">
+        <span class="nav-icon">🏢</span>Suppliers &amp; Vendors
+      </button><button class="nav-item" data-module="mould-tracking" id="nav-mould-tracking" onclick="App.navigate('mould-tracking')">
+        <span class="nav-icon">🛠️</span>Mould Tracking
+      </button><div class="nav-section-label">DEPARTMENTS</div><button class="nav-item" data-module="raw-material" id="nav-raw-material" onclick="App.navigate('raw-material')">
+        <span class="nav-icon">🧪</span>Raw Material (GRN)
+      </button><button class="nav-item" data-module="production" id="nav-production" onclick="App.navigate('production')">
+        <span class="nav-icon">🏭</span>Production
+      </button><button class="nav-item" data-module="cryogenic" id="nav-cryogenic" onclick="App.navigate('cryogenic')">
+        <span class="nav-icon">❄️</span>Cryogenic
+      </button><button class="nav-item" data-module="deflashing" id="nav-deflashing" onclick="App.navigate('deflashing')">
+        <span class="nav-icon">🔧</span>Flash Removal
+      </button><button class="nav-item" data-module="waiting-trimming" id="nav-waiting-trimming" onclick="App.navigate('waiting-trimming')">
+        <span class="nav-icon">⏳</span>Waiting for Trimming
+      </button><button class="nav-item" data-module="trimming" id="nav-trimming" onclick="App.navigate('trimming')">
+        <span class="nav-icon">✂️</span>Trimming
+      </button><button class="nav-item" data-module="post-curing" id="nav-post-curing" onclick="App.navigate('post-curing')">
+        <span class="nav-icon">🔥</span>Post Curing
+      </button><button class="nav-item" data-module="waiting-visual" id="nav-waiting-visual" onclick="App.navigate('waiting-visual')">
+        <span class="nav-icon">⏳</span>Waiting for Visual inspection
+      </button><button class="nav-item" data-module="visual" id="nav-visual" onclick="App.navigate('visual')">
+        <span class="nav-icon">👁️</span>Visual Inspection
+      </button><button class="nav-item" data-module="visual-loss-reprocess" id="nav-visual-loss-reprocess" onclick="App.navigate('visual-loss-reprocess')">
+        <span class="nav-icon">♻️</span>Visual Loss Reprocess
+      </button><button class="nav-item" data-module="gauge" id="nav-gauge" onclick="App.navigate('gauge')">
+        <span class="nav-icon">📏</span>Gauge Inspection
+      </button><button class="nav-item" data-module="quality" id="nav-quality" onclick="App.navigate('quality')">
+        <span class="nav-icon">⭐</span>Quality Final
+      </button><button class="nav-item" data-module="store" id="nav-store" onclick="App.navigate('store')">
+        <span class="nav-icon">🏪</span>Store &amp; Sales
+      </button><div class="nav-section-label">TOOLS</div><button class="nav-item" data-module="stock" id="nav-stock" onclick="App.navigate('stock')">
+        <span class="nav-icon">📤</span>Stock Upload
+      </button><button class="nav-item" data-module="daily-analysis" id="nav-daily-analysis" onclick="App.navigate('daily-analysis')">
+        <span class="nav-icon">📈</span>Daily Feasibility
+      </button><button class="nav-item" data-module="monthly-plan" id="nav-monthly-plan" onclick="App.navigate('monthly-plan')">
+        <span class="nav-icon">📅</span>Monthly Plan
+      </button><button class="nav-item" data-module="prod-sched" id="nav-prod-sched" onclick="App.navigate('prod-sched')">
+        <span class="nav-icon">📝</span>Production Schedule
+      </button><button class="nav-item" data-module="replenishment" id="nav-replenishment" onclick="App.navigate('replenishment')">
+        <span class="nav-icon">🎯</span>Replenishment Planner
+      </button><button class="nav-item" data-module="task-tracking" id="nav-task-tracking" onclick="App.navigate('task-tracking')">
+        <span class="nav-icon">📋</span>Task Tracking
+      </button><button class="nav-item" data-module="stock-audit" id="nav-stock-audit" onclick="App.navigate('stock-audit')">
+        <span class="nav-icon">📋</span>Monthly Stock Taking
+      </button><button class="nav-item" data-module="delivery-challan" id="nav-delivery-challan" onclick="App.toggleDcMenu()">
+        <span class="nav-icon">🚚</span>Delivery Challan <span id="dc-menu-arrow" style="margin-left: auto; font-size: 10px; opacity: 0.7;">▼</span>
+      </button><button class="nav-item sub-nav-item sub-nav-dc" data-module="dc-jobwork" id="nav-dc-jobwork" onclick="App.navigate('dc-jobwork')" style="padding-left: 36px; font-size: 12.5px; display: flex;">
+        <span class="nav-icon">📦</span>Job Work (Batches)
+      </button><button class="nav-item sub-nav-item sub-nav-dc" data-module="dc-rm-processing" id="nav-dc-rm-processing" onclick="App.navigate('dc-rm-processing')" style="padding-left: 36px; font-size: 12.5px; display: flex;">
+        <span class="nav-icon">🧪</span>RM Processing / Reprocess
+      </button><button class="nav-item" data-module="reports" id="nav-reports" onclick="App.toggleReportsMenu()">
+        <span class="nav-icon">📊</span>Reports <span id="reports-menu-arrow" style="margin-left: auto; font-size: 10px; opacity: 0.7;">▼</span>
+      </button><button class="nav-item sub-nav-item sub-nav-reports" data-module="reports" id="nav-rpt-hub" onclick="App.navigate('reports')" style="padding-left: 26px; font-size: 12px; font-weight: 600; display: flex;">
+        <span class="nav-icon" style="font-size:12px; width:16px;">🧭</span>All Reports Hub <span class="report-group-count" style="margin-left:auto; font-size:9.5px;">41</span>
+      </button>
+          <div class="sub-nav-group-header sub-nav-reports " data-group="inv_stock" onclick="App.toggleReportGroup('inv_stock')" style="display: flex;">
+            <div style="display:flex; align-items:center; gap:6px; min-width:0; overflow:hidden;">
+              <span class="report-group-icon" style="font-size:12px;">📦</span>
+              <span class="report-group-title" style="white-space:nowrap; text-overflow:ellipsis; overflow:hidden;">Inventory &amp; Stock</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:4px; margin-left:auto; flex-shrink:0;">
+              <span class="report-group-count">8</span>
+              <span class="report-group-arrow" id="rpt-grp-arrow-inv_stock">▸</span>
+            </div>
+          </div>
+          <div class="report-group-items sub-nav-reports" id="rpt-grp-items-inv_stock" style="display: none;">
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="inv_stock" data-module="report_inventory" id="nav-rpt-inventory" onclick="App.navigate('report_inventory')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">📦</span><span class="nav-label-text">Inventory Report</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="inv_stock" data-module="report_store_stock" id="nav-rpt-store-stock" onclick="App.navigate('report_store_stock')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">🏪</span><span class="nav-label-text">Store Stock Report</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="inv_stock" data-module="report_store_aging" id="nav-rpt-store-aging" onclick="App.navigate('report_store_aging')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">⏳</span><span class="nav-label-text">Store FIFO Aging Report</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="inv_stock" data-module="report_wip_valuation" id="nav-rpt-wip-valuation" onclick="App.navigate('report_wip_valuation')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">💰</span><span class="nav-label-text">WIP Inventory Valuation</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="inv_stock" data-module="report_aging" id="nav-rpt-aging" onclick="App.navigate('report_aging')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">⏳</span><span class="nav-label-text">Aging WIP Report</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="inv_stock" data-module="report_pending_batches" id="nav-rpt-pending-batches" onclick="App.navigate('report_pending_batches')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">⏳</span><span class="nav-label-text">Pending Batches</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="inv_stock" data-module="report_waiting_visual" id="nav-rpt-waiting-visual" onclick="App.navigate('report_waiting_visual')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">⏳</span><span class="nav-label-text">Waiting for Visual Report</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="inv_stock" data-module="report_slob" id="nav-rpt-slob" onclick="App.navigate('report_slob')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">📉</span><span class="nav-label-text">SLOB Report</span>
+              </button>
+            
+          </div>
+        
+          <div class="sub-nav-group-header sub-nav-reports active-group" data-group="prod_ops" onclick="App.toggleReportGroup('prod_ops')" style="display: flex;">
+            <div style="display:flex; align-items:center; gap:6px; min-width:0; overflow:hidden;">
+              <span class="report-group-icon" style="font-size:12px;">🏭</span>
+              <span class="report-group-title" style="white-space:nowrap; text-overflow:ellipsis; overflow:hidden;">Production &amp; Operations</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:4px; margin-left:auto; flex-shrink:0;">
+              <span class="report-group-count">8</span>
+              <span class="report-group-arrow" id="rpt-grp-arrow-prod_ops">▾</span>
+            </div>
+          </div>
+          <div class="report-group-items sub-nav-reports" id="rpt-grp-items-prod_ops" style="display: block;">
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="prod_ops" data-module="report_production" id="nav-rpt-production" onclick="App.navigate('report_production')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">🏭</span><span class="nav-label-text">Production Report</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="prod_ops" data-module="report_daily_summary" id="nav-rpt-daily-summary" onclick="App.navigate('report_daily_summary')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">📊</span><span class="nav-label-text">Daily Production &amp; Scrap</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="prod_ops" data-module="report_cycle_time" id="nav-rpt-cycle-time" onclick="App.navigate('report_cycle_time')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">⏳</span><span class="nav-label-text">Production Cycle Time &amp; Bottlenecks</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="prod_ops" data-module="report_op_efficiency" id="nav-rpt-op-efficiency" onclick="App.navigate('report_op_efficiency')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">👷</span><span class="nav-label-text">Operator &amp; Inspector Efficiency</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="prod_ops" data-module="report_mould_lifecycle" id="nav-rpt-mould-lifecycle" onclick="App.navigate('report_mould_lifecycle')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">⚙️</span><span class="nav-label-text">Mould Lifecycle &amp; Performance</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="prod_ops" data-module="report_cryo_deflash_trim" id="nav-rpt-cryo-deflash-trim" onclick="App.navigate('report_cryo_deflash_trim')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">❄️</span><span class="nav-label-text">Cryo, De-Flash &amp; Trim JMREFs</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="prod_ops" data-module="report_process_leakage" id="nav-rpt-process-leakage" onclick="App.navigate('report_process_leakage')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">🔀</span><span class="nav-label-text">JMREF Process Leakage &amp; Route Deviation</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item active" data-group="prod_ops" data-module="report_batch_genealogy" id="nav-rpt-batch-genealogy" onclick="App.navigate('report_batch_genealogy')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">🧬</span><span class="nav-label-text">Batch Genealogy &amp; Traceability</span>
+              </button>
+            
+          </div>
+        
+          <div class="sub-nav-group-header sub-nav-reports " data-group="quality_loss" onclick="App.toggleReportGroup('quality_loss')" style="display: flex;">
+            <div style="display:flex; align-items:center; gap:6px; min-width:0; overflow:hidden;">
+              <span class="report-group-icon" style="font-size:12px;">⭐</span>
+              <span class="report-group-title" style="white-space:nowrap; text-overflow:ellipsis; overflow:hidden;">Quality &amp; Process Loss</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:4px; margin-left:auto; flex-shrink:0;">
+              <span class="report-group-count">12</span>
+              <span class="report-group-arrow" id="rpt-grp-arrow-quality_loss">▸</span>
+            </div>
+          </div>
+          <div class="report-group-items sub-nav-reports" id="rpt-grp-items-quality_loss" style="display: none;">
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="quality_loss" data-module="report_quality" id="nav-rpt-quality" onclick="App.navigate('report_quality')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">⭐</span><span class="nav-label-text">Quality Final Report</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="quality_loss" data-module="report_visual" id="nav-rpt-visual" onclick="App.navigate('report_visual')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">👁️</span><span class="nav-label-text">Visual Inspection</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="quality_loss" data-module="report_gauge" id="nav-rpt-gauge" onclick="App.navigate('report_gauge')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">📏</span><span class="nav-label-text">Gauge Inspection</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="quality_loss" data-module="report_rejected" id="nav-rpt-rejected" onclick="App.navigate('report_rejected')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">🚫</span><span class="nav-label-text">Rejected Batches</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="quality_loss" data-module="report_recheck" id="nav-rpt-recheck" onclick="App.navigate('report_recheck')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">🔄</span><span class="nav-label-text">QF Recheck Report</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="quality_loss" data-module="report_reprocess" id="nav-rpt-reprocess" onclick="App.navigate('report_reprocess')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">🔄</span><span class="nav-label-text">Reprocessed Items</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="quality_loss" data-module="report_qty_loss" id="nav-rpt-qty-loss" onclick="App.navigate('report_qty_loss')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">📉</span><span class="nav-label-text">Qty Loss Report</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="quality_loss" data-module="report_qty_gain" id="nav-rpt-qty-gain" onclick="App.navigate('report_qty_gain')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">📈</span><span class="nav-label-text">Qty Gain Report</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="quality_loss" data-module="report_cryogenic" id="nav-rpt-cryogenic" onclick="App.navigate('report_cryogenic')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">❄️</span><span class="nav-label-text">Cryogenic Loss</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="quality_loss" data-module="report_deflashing" id="nav-rpt-deflashing" onclick="App.navigate('report_deflashing')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">🔧</span><span class="nav-label-text">Flash Removal Loss</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="quality_loss" data-module="report_trimming" id="nav-rpt-trimming" onclick="App.navigate('report_trimming')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">✂️</span><span class="nav-label-text">Trimming Loss</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="quality_loss" data-module="report_post_curing" id="nav-rpt-post-curing" onclick="App.navigate('report_post_curing')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">🔥</span><span class="nav-label-text">Post Curing Loss</span>
+              </button>
+            
+          </div>
+        
+          <div class="sub-nav-group-header sub-nav-reports " data-group="subcontractor" onclick="App.toggleReportGroup('subcontractor')" style="display: flex;">
+            <div style="display:flex; align-items:center; gap:6px; min-width:0; overflow:hidden;">
+              <span class="report-group-icon" style="font-size:12px;">🏢</span>
+              <span class="report-group-title" style="white-space:nowrap; text-overflow:ellipsis; overflow:hidden;">Subcontractors &amp; Vendors</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:4px; margin-left:auto; flex-shrink:0;">
+              <span class="report-group-count">4</span>
+              <span class="report-group-arrow" id="rpt-grp-arrow-subcontractor">▸</span>
+            </div>
+          </div>
+          <div class="report-group-items sub-nav-reports" id="rpt-grp-items-subcontractor" style="display: none;">
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="subcontractor" data-module="report_sub_vs_inhouse" id="nav-rpt-sub-vs-inhouse" onclick="App.navigate('report_sub_vs_inhouse')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">🏢</span><span class="nav-label-text">Subcontractor vs. In-House Comparison</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="subcontractor" data-module="report_sub_pending" id="nav-rpt-sub-pending" onclick="App.navigate('report_sub_pending')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">🏢</span><span class="nav-label-text">Subcontractor Pending Batches</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="subcontractor" data-module="report_sub_batches" id="nav-rpt-sub-batches" onclick="App.navigate('report_sub_batches')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">🏢</span><span class="nav-label-text">Subcontractor Batches (by Prod. Date)</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="subcontractor" data-module="report_sub_performance" id="nav-rpt-sub-performance" onclick="App.navigate('report_sub_performance')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">🏢</span><span class="nav-label-text">Subcontractor &amp; Vendor Scorecard</span>
+              </button>
+            
+          </div>
+        
+          <div class="sub-nav-group-header sub-nav-reports " data-group="raw_material" onclick="App.toggleReportGroup('raw_material')" style="display: flex;">
+            <div style="display:flex; align-items:center; gap:6px; min-width:0; overflow:hidden;">
+              <span class="report-group-icon" style="font-size:12px;">🧪</span>
+              <span class="report-group-title" style="white-space:nowrap; text-overflow:ellipsis; overflow:hidden;">Raw Material (RM)</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:4px; margin-left:auto; flex-shrink:0;">
+              <span class="report-group-count">5</span>
+              <span class="report-group-arrow" id="rpt-grp-arrow-raw_material">▸</span>
+            </div>
+          </div>
+          <div class="report-group-items sub-nav-reports" id="rpt-grp-items-raw_material" style="display: none;">
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="raw_material" data-module="report_rm_inventory" id="nav-rpt-rm-inventory" onclick="App.navigate('report_rm_inventory')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">🧪</span><span class="nav-label-text">RM Inventory &amp; Stock Tracking</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="raw_material" data-module="report_rm_sub_balance" id="nav-rpt-rm-sub-balance" onclick="App.navigate('report_rm_sub_balance')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">🏢</span><span class="nav-label-text">Subcontractor RM Balance</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="raw_material" data-module="report_rm_consumption" id="nav-rpt-rm-consumption" onclick="App.navigate('report_rm_consumption')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">🔥</span><span class="nav-label-text">RM Consumption &amp; Traceability</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="raw_material" data-module="report_rm_inward_register" id="nav-rpt-rm-inward-register" onclick="App.navigate('report_rm_inward_register')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">📥</span><span class="nav-label-text">RM GRN Inward Register</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="raw_material" data-module="report_rm_stock_ledger" id="nav-rpt-rm-stock-ledger" onclick="App.navigate('report_rm_stock_ledger')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">🔄</span><span class="nav-label-text">RM Stock Movement Ledger</span>
+              </button>
+            
+          </div>
+        
+          <div class="sub-nav-group-header sub-nav-reports " data-group="stock_audit" onclick="App.toggleReportGroup('stock_audit')" style="display: flex;">
+            <div style="display:flex; align-items:center; gap:6px; min-width:0; overflow:hidden;">
+              <span class="report-group-icon" style="font-size:12px;">🛡️</span>
+              <span class="report-group-title" style="white-space:nowrap; text-overflow:ellipsis; overflow:hidden;">Physical Stock Audit</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:4px; margin-left:auto; flex-shrink:0;">
+              <span class="report-group-count">2</span>
+              <span class="report-group-arrow" id="rpt-grp-arrow-stock_audit">▸</span>
+            </div>
+          </div>
+          <div class="report-group-items sub-nav-reports" id="rpt-grp-items-stock_audit" style="display: none;">
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="stock_audit" data-module="report_stock_audit" id="nav-rpt-stock-audit" onclick="App.navigate('report_stock_audit')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">📊</span><span class="nav-label-text">Stock Audit Discrepancy &amp; Reconciliation</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="stock_audit" data-module="report_audit_missing" id="nav-rpt-audit-missing" onclick="App.navigate('report_audit_missing')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">🚨</span><span class="nav-label-text">Missing Batches Cross-Session Audit</span>
+              </button>
+            
+          </div>
+        
+          <div class="sub-nav-group-header sub-nav-reports " data-group="sales_analytics" onclick="App.toggleReportGroup('sales_analytics')" style="display: flex;">
+            <div style="display:flex; align-items:center; gap:6px; min-width:0; overflow:hidden;">
+              <span class="report-group-icon" style="font-size:12px;">📈</span>
+              <span class="report-group-title" style="white-space:nowrap; text-overflow:ellipsis; overflow:hidden;">Sales &amp; Analytics</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:4px; margin-left:auto; flex-shrink:0;">
+              <span class="report-group-count">2</span>
+              <span class="report-group-arrow" id="rpt-grp-arrow-sales_analytics">▸</span>
+            </div>
+          </div>
+          <div class="report-group-items sub-nav-reports" id="rpt-grp-items-sales_analytics" style="display: none;">
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="sales_analytics" data-module="report_sales" id="nav-rpt-sales" onclick="App.navigate('report_sales')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">💰</span><span class="nav-label-text">Sales Report</span>
+              </button>
+            
+              <button class="nav-item sub-nav-item sub-nav-reports sub-nav-report-item" data-group="sales_analytics" data-module="report_analytics" id="nav-rpt-analytics" onclick="App.navigate('report_analytics')" style="padding-left: 36px; font-size: 12px;">
+                <span class="nav-icon" style="font-size:12px; width:16px;">📈</span><span class="nav-label-text">Production &amp; Quality Analytics</span>
+              </button>
+            
+          </div>
+        <button class="nav-item" data-module="print-batch" id="nav-print-batch" onclick="App.navigate('print-batch')">
+        <span class="nav-icon">🖨️</span>Print Label
+      </button><button class="nav-item" data-module="ai-agent" id="nav-ai-agent" onclick="App.navigate('ai-agent')">
+        <span class="nav-icon">🤖</span>AI Assistant
+      </button><div class="nav-section-label">ADMINISTRATION</div><button class="nav-item" data-module="admin" id="nav-admin" onclick="App.navigate('admin')">
+        <span class="nav-icon">⚙️</span>Admin Panel
+      </button></div>
+        <div class="sidebar-footer">
+          <div class="user-info">
+            <div class="user-avatar">AU</div>
+            <div class="user-details">
+              <h4>Admin User</h4>
+              <p>🔑 Administrator</p>
+            </div>
+          </div>
+          <div class="flex flex-col gap-2 mt-3 w-full">
+            <button class="btn btn-ghost w-full btn-sm" style="text-align: left; padding: 6px 12px; font-size: 13px;" onclick="App.openChangePasswordModal()">🔑 Change Password</button>
+            <button class="btn btn-ghost w-full btn-sm" style="text-align: left; padding: 6px 12px; font-size: 13px; color: var(--accent-red);" onclick="Auth.logout()">🚪 Sign Out</button>
+          </div>
+        </div>
+      </nav>
+
+      <!-- Main Content -->
+      <main id="main">
+        <header id="top-bar">
+          <button id="sidebar-toggle" class="btn btn-ghost btn-sm no-print" style="margin-right:12px; display:none; align-items:center; justify-content:center; width:36px; height:36px; font-size:18px;">☰</button>
+          <h2 id="top-bar-title" style="flex-shrink:0;">Batch Genealogy &amp; Traceability Report</h2>
+
+          <!-- Global Quick Search Container -->
+          <div id="global-search-container" style="position:relative; flex:1; max-width:440px; margin:0 12px;">
+            <div style="position:relative; display:flex; align-items:center;">
+              <span style="position:absolute; left:12px; color:var(--text-muted); font-size:13px; pointer-events:none;">🔍</span>
+              <input type="text" id="global-search-input" class="form-control" placeholder="Search batch, part, JMREF, mould... (Ctrl+K)" style="padding-left:36px; padding-right:75px; height:36px; font-size:12.5px; border-radius:20px; background:var(--card-bg); border:1px solid var(--border);" onfocus="App.onGlobalSearchFocus()" oninput="App.onGlobalSearchInput(this.value)" autocomplete="off">
+              <div style="position:absolute; right:8px; display:flex; align-items:center; gap:4px;">
+                <kbd class="search-kbd" style="font-size:10px; font-family:inherit; padding:1px 5px; border-radius:4px; background:var(--bg-input); color:var(--text-muted); border:1px solid var(--border); line-height:1.2;">Ctrl K</kbd>
+                <button type="button" class="btn btn-ghost btn-xs" onclick="App.runQuickScan()" title="Scan QR Code" style="padding:2px 5px; height:24px; font-size:12px; color:var(--accent-teal);">📷</button>
+              </div>
+            </div>
+            <div id="global-search-dropdown" class="hidden" style="position:absolute; top:calc(100% + 6px); left:0; right:0; max-height:420px; overflow-y:auto; background:var(--card-bg); border:1px solid var(--border); border-radius:12px; box-shadow:0 12px 30px rgba(0,0,0,0.4); z-index:1000; padding:8px;">
+            </div>
+          </div>
+
+          <div id="top-cloud-status-badge" style="display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:50%; background:rgba(16,185,129,0.12); border:1px solid rgba(16,185,129,0.3); cursor:pointer; transition:all 0.3s ease; margin-right:8px;" onclick="if(typeof DB !== 'undefined' &amp;&amp; DB.reconnect) DB.reconnect();" title="Cloud Online (Click to test/refresh)">
+            <span id="top-cloud-dot" style="width:10px; height:10px; border-radius:50%; background:#10b981; display:inline-block; transition:all 0.3s ease;" class="pulse-green"></span>
+          </div>
+          <span class="top-badge" id="top-badge-date">Fri, 20 Nov, 2026</span>
+        </header>
+        <div id="content" style="padding:28px;">
+      <div class="animate-in">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <div class="flex items-center gap-2 mb-1">
+              <button class="btn btn-ghost btn-xs text-muted no-print" onclick="App.navigate('reports')" style="font-size:12px; padding:3px 8px; border:1px solid var(--border); border-radius:4px; display:inline-flex; align-items:center; gap:4px;">
+                ◀ All Reports Hub
+              </button>
+              <span class="badge" style="font-size:11px; background:rgba(0,0,0,0.05); color:var(--text-secondary);">🏭 Production &amp; Operations</span>
+            </div>
+            <h2 class="font-bold" style="font-size:20px;">🧬 Batch Genealogy &amp; Traceability Report</h2>
+            <p class="text-sm text-muted mt-1">Complete batch family lineage, split sub-batches, reprocess trails, and end-to-end stage movement history</p>
+          </div>
+        </div>
+
+        <div class="card animate-in">
+          <div class="card-header">
+            <h3>🧬 Batch Genealogy &amp; Traceability Report</h3>
+            <div class="flex gap-2">
+              <button class="btn btn-secondary btn-sm no-print" id="rpt-export-csv">⬇️ CSV</button>
+              <button class="btn btn-teal btn-sm no-print" id="rpt-export-excel">📊 Excel</button>
+              <button class="btn btn-sm no-print" id="rpt-export-pdf" style="background:#dc2626; color:white; border-color:#dc2626;">📄 PDF</button>
+              <button class="btn btn-ghost btn-sm no-print" onclick="window.print()">🖨️ Print</button>
+            </div>
+          </div>
+          <div class="card-body">
+            <!-- Filters -->
+            <div class="filter-bar" id="rpt-filters" style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:24px;align-items:flex-end;">
+              
+      <div class="form-group mb-0">
+        <label class="form-label">JMREF / Part No</label>
+        <input type="text" class="form-control" id="rpt-jmref" placeholder="Filter by JMREF or Part No">
+      </div>
+      <div class="form-group mb-0">
+        <label class="form-label">Batch Status</label>
+        <select class="form-control" id="rpt-status">
+          <option value="">All Statuses</option>
+          <option value="completed">Completed Batches (Store)</option>
+          <option value="active">Active WIP Batches</option>
+          <option value="rejected">Rejected Batches</option>
+        </select>
+      </div>
+      <div class="form-group mb-0">
+        <label class="form-label">Stage</label>
+        <select class="form-control" id="rpt-pending-stage">
+          <option value="">All Stages</option><option value="production">Production</option><option value="cryogenic">Cryogenic</option><option value="deflashing">Manual DE Flashing</option><option value="deflashing_mqz4se5hgymm8">&nbsp;&nbsp;&nbsp;&nbsp;Manual DE Flashing → Shanthi Flash</option><option value="waiting-trimming">Waiting for Trimming</option><option value="trimming">Trimming</option><option value="trimming_mqz4s4ah0g64p">&nbsp;&nbsp;&nbsp;&nbsp;Trimming → Chitra Trimming</option><option value="post-curing">Post Curing</option><option value="waiting-visual">Waiting for Visual</option><option value="visual">Visual</option><option value="gauge">Gauge</option><option value="quality">Quality Final</option><option value="store">Store</option>
+        </select>
+      </div>
+      <div class="form-group mb-0">
+        <label class="form-label">Add Reprocessed Batches?</label>
+        <select class="form-control" id="rpt-pl-reprocess">
+          <option value="no">No (Exclude Reprocessed)</option>
+          <option value="yes">Yes (Include Reprocessed)</option>
+          <option value="only">Only Reprocessed Batches</option>
+        </select>
+      </div>
+      
+      <div class="date-presets-bar flex items-center gap-1 mb-2 no-print" style="width: 100%; flex-wrap: wrap;">
+        <span class="text-xs text-muted font-semibold mr-1">⚡ Quick Dates:</span>
+        <button type="button" class="btn btn-ghost btn-xs rpt-preset-btn" data-preset="today" onclick="ReportsModule.applyDatePreset('today')" style="padding: 2px 7px; font-size: 11px;">Today</button>
+        <button type="button" class="btn btn-ghost btn-xs rpt-preset-btn" data-preset="yesterday" onclick="ReportsModule.applyDatePreset('yesterday')" style="padding: 2px 7px; font-size: 11px;">Yesterday</button>
+        <button type="button" class="btn btn-ghost btn-xs rpt-preset-btn" data-preset="this-week" onclick="ReportsModule.applyDatePreset('this-week')" style="padding: 2px 7px; font-size: 11px;">This Week</button>
+        <button type="button" class="btn btn-ghost btn-xs rpt-preset-btn" data-preset="this-month" onclick="ReportsModule.applyDatePreset('this-month')" style="padding: 2px 7px; font-size: 11px;">This Month</button>
+        <button type="button" class="btn btn-ghost btn-xs rpt-preset-btn" data-preset="last-month" onclick="ReportsModule.applyDatePreset('last-month')" style="padding: 2px 7px; font-size: 11px;">Last Month</button>
+        <button type="button" class="btn btn-ghost btn-xs rpt-preset-btn" data-preset="last-30d" onclick="ReportsModule.applyDatePreset('last-30d')" style="padding: 2px 7px; font-size: 11px;">Last 30 Days</button>
+      </div>
+      <div class="form-group mb-0">
+        <label class="form-label">From Date</label>
+        <input type="date" class="form-control" id="rpt-from">
+      </div>
+      <div class="form-group mb-0">
+        <label class="form-label">To Date</label>
+        <input type="date" class="form-control" id="rpt-to">
+      </div>
+              <div class="form-group mb-0">
+                <label class="form-label" style="visibility:hidden;display:block;">&nbsp;</label>
+                <button class="btn btn-primary" id="rpt-run-btn">🔍 Generate Report</button>
+              </div>
+            </div>
+            <div id="report-output" data-headers="[&quot;#&quot;,&quot;Batch No&quot;,&quot;Internal Batch No&quot;,&quot;JMREF No&quot;,&quot;Part No&quot;,&quot;Production Date&quot;,&quot;Current Stage&quot;,&quot;Status&quot;,&quot;Lineage / Origin&quot;,&quot;Initial Qty&quot;]" data-rows="[]" data-filters="{&quot;from&quot;:&quot;&quot;,&quot;to&quot;:&quot;&quot;,&quot;jmref&quot;:&quot;&quot;,&quot;partNo&quot;:&quot;&quot;,&quot;operatorId&quot;:&quot;&quot;,&quot;rejectionRate&quot;:&quot;&quot;,&quot;reprocessDestination&quot;:&quot;&quot;,&quot;childStatus&quot;:&quot;&quot;,&quot;pendingStage&quot;:&quot;&quot;,&quot;pendingTimeframe&quot;:&quot;&quot;,&quot;prodType&quot;:&quot;&quot;,&quot;subcontractorId&quot;:&quot;&quot;,&quot;vendorId&quot;:&quot;&quot;,&quot;auditSessionId&quot;:&quot;&quot;,&quot;auditStatus&quot;:&quot;&quot;,&quot;status&quot;:&quot;&quot;,&quot;excludeAdmin&quot;:&quot;&quot;,&quot;cftWip&quot;:&quot;&quot;,&quot;plDeviation&quot;:&quot;&quot;,&quot;plMould&quot;:&quot;&quot;,&quot;plReprocess&quot;:&quot;no&quot;,&quot;plStatus&quot;:&quot;&quot;,&quot;rmCode&quot;:&quot;&quot;,&quot;rmCategory&quot;:&quot;&quot;,&quot;rmStockStatus&quot;:&quot;&quot;,&quot;supplierName&quot;:&quot;&quot;,&quot;dcStatus&quot;:&quot;&quot;,&quot;txType&quot;:&quot;&quot;}" data-report-key="batch-genealogy">
+      
+      <div class="stats-grid mb-4" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px;">
+        <div class="stat-card blue">
+          <div class="stat-label">Total Batches</div>
+          <div class="stat-value blue">0</div>
+          <div class="stat-sub">matching filters</div>
+        </div>
+        <div class="stat-card green">
+          <div class="stat-label">Completed in Store</div>
+          <div class="stat-value green">0</div>
+          <div class="stat-sub">store received</div>
+        </div>
+        <div class="stat-card amber">
+          <div class="stat-label">Active WIP</div>
+          <div class="stat-value amber">0</div>
+          <div class="stat-sub">in production stages</div>
+        </div>
+        <div class="stat-card purple">
+          <div class="stat-label">Reprocess Batches</div>
+          <div class="stat-value purple">0</div>
+          <div class="stat-sub">lineage reprocessed</div>
+        </div>
+        <div class="stat-card red">
+          <div class="stat-label">Defect Rejections</div>
+          <div class="stat-value red">0</div>
+          <div class="stat-sub">scrapped / rejected</div>
+        </div>
+      </div>
+    
+      
+      <div class="card mb-4" style="background: linear-gradient(135deg, rgba(37,99,235,0.06), rgba(16,185,129,0.06)); border: 1px solid rgba(37,99,235,0.25); border-radius: 12px;">
+        <div class="card-body" style="padding: 16px 20px;">
+          <div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px;">
+            <div>
+              <div style="font-weight: 700; font-size: 15px; color: var(--primary); display: flex; align-items: center; gap: 8px;">
+                <span>🧬 Fast Batch Genealogy &amp; Traceability Lookup</span>
+                <span class="badge badge-teal" style="font-size: 10px;">Instant Modal</span>
+              </div>
+              <div class="text-xs text-muted" style="margin-top: 4px;">
+                Enter or scan any Batch Number or Internal Batch Number to instantly open its complete family lineage, stage route, and loss breakdown:
+              </div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px; flex: 1; max-width: 480px; min-width: 280px;">
+              <input type="text" id="rpt-genealogy-quick-input" class="form-control" placeholder="Enter Batch No (e.g. 7040-... or IB #)..." style="font-size: 13px;" onkeydown="if(event.key==='Enter'){const v=this.value.trim(); if(v) App.showBatchGenealogy(v);}">
+              <button class="btn btn-primary" onclick="const v=(document.getElementById('rpt-genealogy-quick-input')?.value||'').trim(); if(v){App.showBatchGenealogy(v);}else{showToast('Please enter a batch number', 'warning');}" style="white-space: nowrap; font-size: 13px;">
+                🔍 Trace Batch
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    
+      <div class="card">
+        <div class="card-header" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+          <h3 style="font-size: 15px; font-weight: 700; margin: 0;">📋 Traceable Batch Ledger (0)</h3>
+          <span class="text-xs text-muted">Click any Batch No or Trace button to inspect end-to-end lineage</span>
+        </div>
+        <div class="report-table-toolbar flex justify-between items-center mb-3 no-print" style="flex-wrap: wrap; gap: 10px; padding: 4px 2px;">
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-muted font-medium">
+            Records: <strong class="table-record-count text-blue">1</strong>
+          </span>
+          <span class="text-xs filter-tag" style="display:none; color: var(--accent-amber); font-weight: 600;">(filtered)</span>
+        </div>
+        <div class="flex items-center" style="position: relative; max-width: 320px; width: 100%;">
+          <span style="position: absolute; left: 10px; top: 50%; transform: translateY(-50%); font-size: 13px; color: var(--text-muted); pointer-events: none;">🔍</span>
+          <input type="text" class="form-control form-control-sm report-table-search" placeholder="Instant filter in table..." style="padding-left: 30px; padding-right: 26px; font-size: 12px; height: 32px; border-radius: 6px; width: 100%;">
+          <button type="button" class="btn btn-ghost btn-xs clear-search-btn" title="Clear filter" style="display:none; position: absolute; right: 4px; top: 50%; transform: translateY(-50%); padding: 2px 6px; font-size: 11px; color: var(--text-muted);">✕</button>
+        </div>
+      </div><div class="table-wrap">
+          <table class="data-table" style="font-size: 12.5px;">
+            <thead>
+              <tr>
+                <th title="Click to sort" style="cursor: pointer; user-select: none;">#<span class="sort-indicator" style="margin-left: 6px; font-size: 10px; opacity: 0.35; font-weight: normal;">⇅</span></th>
+                <th title="Click to sort" style="cursor: pointer; user-select: none;">Batch No<span class="sort-indicator" style="margin-left: 6px; font-size: 10px; opacity: 0.35; font-weight: normal;">⇅</span></th>
+                <th title="Click to sort" style="cursor: pointer; user-select: none;">Internal Batch No<span class="sort-indicator" style="margin-left: 6px; font-size: 10px; opacity: 0.35; font-weight: normal;">⇅</span></th>
+                <th title="Click to sort" style="cursor: pointer; user-select: none;">JMREF No<span class="sort-indicator" style="margin-left: 6px; font-size: 10px; opacity: 0.35; font-weight: normal;">⇅</span></th>
+                <th title="Click to sort" style="cursor: pointer; user-select: none;">Part No<span class="sort-indicator" style="margin-left: 6px; font-size: 10px; opacity: 0.35; font-weight: normal;">⇅</span></th>
+                <th title="Click to sort" style="cursor: pointer; user-select: none;">Production Date<span class="sort-indicator" style="margin-left: 6px; font-size: 10px; opacity: 0.35; font-weight: normal;">⇅</span></th>
+                <th title="Click to sort" style="cursor: pointer; user-select: none;">Current Stage<span class="sort-indicator" style="margin-left: 6px; font-size: 10px; opacity: 0.35; font-weight: normal;">⇅</span></th>
+                <th title="Click to sort" style="cursor: pointer; user-select: none;">Status<span class="sort-indicator" style="margin-left: 6px; font-size: 10px; opacity: 0.35; font-weight: normal;">⇅</span></th>
+                <th title="Click to sort" style="cursor: pointer; user-select: none;">Lineage / Origin<span class="sort-indicator" style="margin-left: 6px; font-size: 10px; opacity: 0.35; font-weight: normal;">⇅</span></th>
+                <th style="text-align: right; cursor: pointer; user-select: none;" title="Click to sort">Initial Qty<span class="sort-indicator" style="margin-left: 6px; font-size: 10px; opacity: 0.35; font-weight: normal;">⇅</span></th>
+                <th style="text-align: center; cursor: pointer; user-select: none;" title="Click to sort">Genealogy Action<span class="sort-indicator" style="margin-left: 6px; font-size: 10px; opacity: 0.35; font-weight: normal;">⇅</span></th>
+              </tr>
+            </thead>
+            <tbody><tr><td colspan="11" class="text-center text-muted py-6">No batches found matching the selected filter criteria.</td></tr></tbody>
+          </table>
+        </div><div class="report-pagination flex justify-between items-center p-4 no-print" style="border-top: 1px solid var(--border); flex-wrap: wrap; gap: 12px; background: var(--bg-glass-hover); border-radius: 0 0 var(--radius-md) var(--radius-md); margin-bottom: 16px; display: none;"></div>
+      </div>
+    </div>
+          </div>
+        </div>
+      </div></div>
+      </main>
+    </div>
+
+    <div class="modal-overlay hidden" id="change-pwd-modal">
+      <div class="modal modal-sm">
+        <div class="modal-header">
+          <h3>🔑 Change Password</h3>
+          <button class="modal-close" onclick="document.getElementById('change-pwd-modal').classList.add('hidden')">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label class="form-label">Current Password <span class="required">*</span></label>
+            <input type="password" id="change-pwd-current" class="form-control" placeholder="Current password">
+          </div>
+          <div class="form-group">
+            <label class="form-label">New Password <span class="required">*</span></label>
+            <input type="password" id="change-pwd-new" class="form-control" placeholder="New password">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Confirm New Password <span class="required">*</span></label>
+            <input type="password" id="change-pwd-confirm" class="form-control" placeholder="Confirm new password">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="document.getElementById('change-pwd-modal').classList.add('hidden')">Cancel</button>
+          <button class="btn btn-primary" onclick="App.changePassword()">Update Password</button>
+        </div>
+      </div>
+    </div>
+    
+    <div id="toast-container"></div></body></html>

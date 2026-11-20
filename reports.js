@@ -8,7 +8,7 @@ const ReportsModule = (() => {
 
   const MODULES = [
     'inventory','store-stock','sales','production','cryogenic','deflashing',
-    'trimming','waiting-visual','visual','gauge','quality','rejected','recheck','slob','aging','reprocess','store-aging','daily-summary','analytics'
+    'trimming','waiting-visual','visual','gauge','quality','rejected','recheck','slob','aging','reprocess','store-aging','daily-summary','analytics','batch-genealogy'
   ];
 
   const STAGE_LABELS = {
@@ -3830,7 +3830,8 @@ const ReportsModule = (() => {
       'rm-sub-balance': [subcontractorFilter, rmSearchFilter, rmDcStatusFilter, dateRange].join(''),
       'rm-consumption': [jmrefFilter, rmSearchFilter, prodTypeFilter, subcontractorFilter, dateRange].join(''),
       'rm-inward-register': [supplierFilter, rmSearchFilter, rmCategoryFilter, dateRange].join(''),
-      'rm-stock-ledger': [rmItemSelectFilter, rmTxTypeFilter, dateRange].join('')
+      'rm-stock-ledger': [rmItemSelectFilter, rmTxTypeFilter, dateRange].join(''),
+      'batch-genealogy': [jmrefFilter, batchLossStatusFilter, pendingStageFilter, plReprocessFilter, dateRange].join('')
     };
     return filterMap[report] || '';
   }
@@ -6731,6 +6732,264 @@ const ReportsModule = (() => {
     a.click();
     URL.revokeObjectURL(url);
     showToast('Deviated batches CSV exported successfully', 'success');
+  }
+
+  // ============================================================
+  // BATCH GENEALOGY & TRACEABILITY REPORT
+  // ============================================================
+  function renderBatchGenealogyReport(filters) {
+    const { from, to, jmref, status, pendingStage, plReprocess } = filters || {};
+    const q = (jmref || '').trim().toLowerCase();
+    const allBatches = (typeof DB !== 'undefined' && DB.Batches)
+      ? (DB.Batches.allIncludeArchived ? DB.Batches.allIncludeArchived() : DB.Batches.all())
+      : [];
+
+    function isTestBatchLocal(b) {
+      if (!b || !b.batchNo) return true;
+      const bNo = String(b.batchNo).trim().toUpperCase();
+      if (bNo.startsWith('01TEST') || bNo.startsWith('TEST') || bNo.includes('TESTBATCH') || bNo === 'TEST') return true;
+      return false;
+    }
+
+    function isReprocessBatchLocal(b) {
+      if (!b) return false;
+      if (b.isReprocess === true || b.isReprocess === 'true') return true;
+      if (b.batchType === 'reprocess') return true;
+      if (b.batchNo && (b.batchNo.includes('-REP') || b.batchNo.includes('-LREP') || b.batchNo.includes('-REC-') || /[-_](REP|LREP)\d*$/i.test(b.batchNo))) return true;
+      if (b.reprocessDestination) return true;
+      if (b.notes && /reprocess/i.test(b.notes)) return true;
+      return false;
+    }
+
+    // Filter out test entities
+    const validBatches = allBatches.filter(b => b && b.batchNo && !isTestBatchLocal(b));
+
+    // Date range filter based on productionDate or createdAt
+    let filtered = validBatches;
+    if (from || to) {
+      filtered = filterByDateRange(filtered, 'productionDate', from, to);
+    }
+
+    // Status filter
+    if (status) {
+      if (status === 'completed') {
+        filtered = filtered.filter(b => b.status === 'completed' || b.currentStage === 'store');
+      } else if (status === 'active') {
+        filtered = filtered.filter(b => b.status === 'active' && b.currentStage !== 'store');
+      } else if (status === 'rejected') {
+        filtered = filtered.filter(b => b.status === 'rejected' || b.currentStage === 'rejected');
+      } else if (status === 'missing') {
+        filtered = filtered.filter(b => b.status === 'missing');
+      }
+    }
+
+    // Stage filter
+    if (pendingStage) {
+      filtered = filtered.filter(b => b.currentStage === pendingStage);
+    }
+
+    // Reprocess filter
+    if (plReprocess === 'yes' || plReprocess === 'only') {
+      filtered = filtered.filter(b => isReprocessBatchLocal(b));
+    } else if (plReprocess === 'no' || plReprocess === 'exclude') {
+      filtered = filtered.filter(b => !isReprocessBatchLocal(b));
+    }
+
+    // Search query filter (batchNo, internalBatchNo, jmrefNo, partNo, parentBatchNo, notes)
+    if (q) {
+      filtered = filtered.filter(b => {
+        const bNo = (b.batchNo || '').toLowerCase();
+        const ibNo = String(b.internalBatchNo != null ? b.internalBatchNo : '').toLowerCase();
+        const jNo = (b.jmrefNo || '').toLowerCase();
+        const pNo = (b.partNo || '').toLowerCase();
+        const pbNo = (b.parentBatchNo || '').toLowerCase();
+        const n = (b.notes || '').toLowerCase();
+        return bNo.includes(q) || ibNo.includes(q) || jNo.includes(q) || pNo.includes(q) || pbNo.includes(q) || n.includes(q);
+      });
+    }
+
+    // Sort descending by createdAt / productionDate
+    filtered.sort((a, b) => {
+      const tA = a.createdAt || a.productionDate || '';
+      const tB = b.createdAt || b.productionDate || '';
+      return tB.localeCompare(tA);
+    });
+
+    // KPI Summary Metrics
+    const totalCount = filtered.length;
+    const completedCount = filtered.filter(b => b.status === 'completed' || b.currentStage === 'store').length;
+    const activeWipCount = filtered.filter(b => b.status === 'active' && b.currentStage !== 'store').length;
+    const reprocessCount = filtered.filter(b => isReprocessBatchLocal(b)).length;
+    const rejectedCount = filtered.filter(b => b.status === 'rejected' || b.currentStage === 'rejected').length;
+
+    // Build KPI Cards HTML
+    const summaryCards = `
+      <div class="stats-grid mb-4" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px;">
+        <div class="stat-card blue">
+          <div class="stat-label">Total Batches</div>
+          <div class="stat-value blue">${formatNum(totalCount)}</div>
+          <div class="stat-sub">matching filters</div>
+        </div>
+        <div class="stat-card green">
+          <div class="stat-label">Completed in Store</div>
+          <div class="stat-value green">${formatNum(completedCount)}</div>
+          <div class="stat-sub">store received</div>
+        </div>
+        <div class="stat-card amber">
+          <div class="stat-label">Active WIP</div>
+          <div class="stat-value amber">${formatNum(activeWipCount)}</div>
+          <div class="stat-sub">in production stages</div>
+        </div>
+        <div class="stat-card purple">
+          <div class="stat-label">Reprocess Batches</div>
+          <div class="stat-value purple">${formatNum(reprocessCount)}</div>
+          <div class="stat-sub">lineage reprocessed</div>
+        </div>
+        <div class="stat-card red">
+          <div class="stat-label">Defect Rejections</div>
+          <div class="stat-value red">${formatNum(rejectedCount)}</div>
+          <div class="stat-sub">scrapped / rejected</div>
+        </div>
+      </div>
+    `;
+
+    // Quick Trace Box HTML
+    const quickTraceBox = `
+      <div class="card mb-4" style="background: linear-gradient(135deg, rgba(37,99,235,0.06), rgba(16,185,129,0.06)); border: 1px solid rgba(37,99,235,0.25); border-radius: 12px;">
+        <div class="card-body" style="padding: 16px 20px;">
+          <div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px;">
+            <div>
+              <div style="font-weight: 700; font-size: 15px; color: var(--primary); display: flex; align-items: center; gap: 8px;">
+                <span>🧬 Fast Batch Genealogy &amp; Traceability Lookup</span>
+                <span class="badge badge-teal" style="font-size: 10px;">Instant Modal</span>
+              </div>
+              <div class="text-xs text-muted" style="margin-top: 4px;">
+                Enter or scan any Batch Number or Internal Batch Number to instantly open its complete family lineage, stage route, and loss breakdown:
+              </div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px; flex: 1; max-width: 480px; min-width: 280px;">
+              <input type="text" id="rpt-genealogy-quick-input" class="form-control" placeholder="Enter Batch No (e.g. 7040-... or IB #)..." style="font-size: 13px;" onkeydown="if(event.key==='Enter'){const v=this.value.trim(); if(v) App.showBatchGenealogy(v);}">
+              <button class="btn btn-primary" onclick="const v=(document.getElementById('rpt-genealogy-quick-input')?.value||'').trim(); if(v){App.showBatchGenealogy(v);}else{showToast('Please enter a batch number', 'warning');}" style="white-space: nowrap; font-size: 13px;">
+                🔍 Trace Batch
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Table rows
+    const headers = [
+      '#', 'Batch No', 'Internal Batch No', 'JMREF No', 'Part No', 'Production Date',
+      'Current Stage', 'Status', 'Lineage / Origin', 'Initial Qty'
+    ];
+    const dataRows = [];
+
+    const rowsHtml = filtered.map((b, idx) => {
+      const isRep = isReprocessBatchLocal(b);
+      const isCompl = b.status === 'completed' || b.currentStage === 'store';
+      const isRej = b.status === 'rejected' || b.currentStage === 'rejected';
+      const isMiss = b.status === 'missing';
+      const stageName = STAGE_LABELS[b.currentStage] || b.currentStage || '—';
+      
+      let statusBadge = '';
+      if (isRej) {
+        statusBadge = '<span class="badge badge-red font-bold">❌ Rejected</span>';
+      } else if (isMiss) {
+        statusBadge = '<span class="badge badge-red font-bold">⚠️ Missing</span>';
+      } else if (isCompl) {
+        statusBadge = '<span class="badge badge-green font-bold">✅ Completed</span>';
+      } else {
+        statusBadge = '<span class="badge badge-amber font-bold">⚡ Active WIP</span>';
+      }
+
+      // Lineage information
+      let lineageDisplay = '<span class="text-muted text-xs">— Original</span>';
+      let lineageExport = 'Original';
+      if (b.parentBatchNo || b.parentBatchId || isRep) {
+        const pLabel = b.parentBatchNo || (b.notes && b.notes.includes('reprocessed') ? 'Parent Batch' : 'Reprocessed');
+        lineageDisplay = `<span class="badge badge-purple" style="font-size:11px;" title="Reprocessed / Split lineage">🌳 ${escapeHtmlText(pLabel)}</span>`;
+        lineageExport = `Reprocessed from ${pLabel}`;
+      }
+
+      const safeBatchNo = escapeHtmlText(b.batchNo);
+      const safeId = escapeHtmlText(b.id || b.batchNo);
+
+      dataRows.push([
+        idx + 1,
+        b.batchNo,
+        b.internalBatchNo != null ? b.internalBatchNo : '',
+        b.jmrefNo || '',
+        b.partNo || '',
+        b.productionDate || (b.createdAt ? b.createdAt.slice(0, 10) : ''),
+        stageName,
+        b.status,
+        lineageExport,
+        Number(b.initialQty) || 0
+      ]);
+
+      return `
+        <tr>
+          <td class="text-muted text-xs">${idx + 1}</td>
+          <td>
+            <a href="javascript:void(0)" onclick="App.showBatchGenealogy('${safeId}')" class="font-bold text-blue hover:underline" title="Click to view Batch Genealogy & Details">
+              ${safeBatchNo}
+            </a>
+            ${isRep ? '<span class="badge badge-purple ml-1" style="font-size:9.5px;">REPROCESS</span>' : ''}
+          </td>
+          <td>
+            ${b.internalBatchNo != null ? `<span class="badge badge-teal font-mono font-bold" style="font-size:11px;">IB: ${b.internalBatchNo}</span>` : '<span class="text-muted">—</span>'}
+          </td>
+          <td><span class="badge badge-teal">${escapeHtmlText(b.jmrefNo || '—')}</span></td>
+          <td class="font-semibold text-xs">${escapeHtmlText(b.partNo || '—')}</td>
+          <td class="text-xs font-mono" style="white-space: nowrap;">${b.productionDate ? formatDate(b.productionDate) : (b.createdAt ? b.createdAt.slice(0, 10) : '—')}</td>
+          <td><span class="stage-chip ${b.currentStage}">${stageName}</span></td>
+          <td>${statusBadge}</td>
+          <td>${lineageDisplay}</td>
+          <td class="font-bold font-mono text-right" style="white-space: nowrap;">${formatNum(b.initialQty)}</td>
+          <td class="text-center" style="white-space: nowrap;">
+            <button type="button" class="btn btn-secondary btn-xs" onclick="App.showBatchGenealogy('${safeId}')" title="View Full Batch Genealogy & Lineage Tree" style="display: inline-flex; align-items: center; gap: 4px; font-weight: 600;">
+              <span>🧬 Trace</span>
+            </button>
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    const html = `
+      ${summaryCards}
+      ${quickTraceBox}
+      <div class="card">
+        <div class="card-header" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+          <h3 style="font-size: 15px; font-weight: 700; margin: 0;">📋 Traceable Batch Ledger (${formatNum(filtered.length)})</h3>
+          <span class="text-xs text-muted">Click any Batch No or Trace button to inspect end-to-end lineage</span>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table" style="font-size: 12.5px;">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Batch No</th>
+                <th>Internal Batch No</th>
+                <th>JMREF No</th>
+                <th>Part No</th>
+                <th>Production Date</th>
+                <th>Current Stage</th>
+                <th>Status</th>
+                <th>Lineage / Origin</th>
+                <th style="text-align: right;">Initial Qty</th>
+                <th style="text-align: center;">Genealogy Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rowsHtml || '<tr><td colspan="11" class="text-center text-muted py-6">No batches found matching the selected filter criteria.</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+
+    return { html, headers, dataRows };
   }
 
 
@@ -9912,6 +10171,7 @@ const ReportsModule = (() => {
       case 'rm-consumption':      result = renderRmConsumption(filters); break;
       case 'rm-inward-register':  result = renderRmInwardRegister(filters); break;
       case 'rm-stock-ledger':     result = renderRmStockLedger(filters); break;
+      case 'batch-genealogy':     result = renderBatchGenealogyReport(filters); break;
       default: result = emptyState('Unknown report');
     }
 
@@ -9975,6 +10235,7 @@ const ReportsModule = (() => {
     { key:'mould-lifecycle', module:'report_mould_lifecycle', group:'prod_ops', label:'⚙️ Mould Lifecycle & Performance', desc:'Accumulative lift count, output yield, and maintenance alert status per mould' },
     { key:'cryo-deflash-trim', module:'report_cryo_deflash_trim', group:'prod_ops', label:'❄️🔧✂️ 3-Stage Process (Cryo, De-Flash & Trim)', desc:'JMREFs that undergo all three processes with live WIP & scrap tracking' },
     { key:'process-leakage', module:'report_process_leakage', group:'prod_ops', label:'🔀 JMREF & Mould Process Leakage Report', desc:'Identify JMREFs and Moulds where batches follow inconsistent finishing processes to detect SOP bypass' },
+    { key:'batch-genealogy', module:'report_batch_genealogy', group:'prod_ops', label:'🧬 Batch Genealogy & Traceability Report', desc:'Complete batch family lineage, split sub-batches, reprocess trails, and end-to-end stage movement history' },
 
     // ── Quality, Inspection & Process Loss (12) ──
     { key:'quality', module:'report_quality', group:'quality_loss', label:'⭐ Quality Final (QC) Report', desc:'Detailed evaluation outcomes, pass rate, rework history, and scrap loss at Quality Final inspection stage' },
@@ -10270,7 +10531,7 @@ const ReportsModule = (() => {
 
     // Restore previously generated report output if available
     const restored = restoreSavedResult(reportKey);
-    if (!restored && ['inventory', 'store-stock', 'rm-inventory', 'rm-sub-balance', 'rm-consumption', 'rm-inward-register', 'rm-stock-ledger'].includes(reportKey)) {
+    if (!restored && ['inventory', 'store-stock', 'batch-genealogy', 'rm-inventory', 'rm-sub-balance', 'rm-consumption', 'rm-inward-register', 'rm-stock-ledger'].includes(reportKey)) {
       setTimeout(() => {
         document.getElementById('rpt-run-btn')?.click();
       }, 50);
@@ -11867,3 +12128,10 @@ const ReportsModule = (() => {
 
   return { render, filterReportsHub, selectHubCategory, renderReportsHub, REPORT_GROUPS, REPORTS, filterAging, showPartBatches, closePartBatches, openDefectiveBatchesModal, filterDeviatedModalBatches, openDailySummaryBatchesModal, filterDailySummaryModalBatches, openDeviatedBatchesModal, filterDeviatedModalBatches, exportDeviatedBatchesCSV, exportCSV, exportExcel, applyDatePreset, openRmBatchesModal, filterRmBatchesModal, setRmBatchesStageTab, exportRmBatchesModalCSV, closeRmBatchesModal, openSubconRmBalanceModal, closeSubconRmBalanceModal, filterSubconRmBalanceModal, setSubconRmBalanceStatusFilter, exportSubconRmBalanceCSV };
 })();
+
+if (typeof window !== 'undefined') {
+  window.GenealogyModule = window.GenealogyModule || {
+    openBatchModal: (batchIdOrNo) => (window.App && window.App.showBatchGenealogy) ? window.App.showBatchGenealogy(batchIdOrNo) : null,
+    showBatchGenealogy: (batchIdOrNo) => (window.App && window.App.showBatchGenealogy) ? window.App.showBatchGenealogy(batchIdOrNo) : null
+  };
+}

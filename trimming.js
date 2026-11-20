@@ -654,9 +654,6 @@ const TrimmingModule = (() => {
       document.getElementById('trim-process-modal').classList.add('hidden');
       showToast('Sub-batch created and moved to ' + (STAGE_LABELS[destination] || destination), 'success');
       render();
-      if (window.App && typeof App.navigate === 'function' && App.current) {
-        App.navigate(App.current);
-      }
       return;
     }
 
@@ -666,9 +663,6 @@ const TrimmingModule = (() => {
     document.getElementById('trim-process-modal').classList.add('hidden');
     showToast('Batch moved to ' + (STAGE_LABELS[destination] || destination), 'success');
     render();
-    if (window.App && typeof App.navigate === 'function' && App.current) {
-      App.navigate(App.current);
-    }
   } catch (err) {
     console.error("Trimming process error:", err);
     showToast("Could not process batch: " + (err.message || err), "error");

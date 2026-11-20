@@ -1241,7 +1241,7 @@ const VisualLossReprocessModule = (() => {
         currentQty: reprocessQty,
         remainingQty: reprocessQty,
         mouldNo: parentBatch.mouldNo ?? null,
-        internalBatchNo: parentBatch.internalBatchNo || '',
+        internalBatchNo: (typeof DB !== 'undefined' && DB.Batches?.nextInternalBatchNo) ? DB.Batches.nextInternalBatchNo() : undefined,
         productionDate: parentBatch.productionDate || '',
         compoundCode: parentBatch.compoundCode || '',
         rawMaterialBatchNo: parentBatch.rawMaterialBatchNo || '',

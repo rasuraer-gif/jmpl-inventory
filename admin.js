@@ -1486,11 +1486,32 @@ const AdminModule = (() => {
     }
   }
 
+  let _cachedSortedBatches = null;
+  function getSortedBatches() {
+    const batches = DB.Batches.all();
+    if (_cachedSortedBatches && _cachedSortedBatches.length === batches.length) {
+      return _cachedSortedBatches;
+    }
+    _cachedSortedBatches = [...batches].sort((a, b) => {
+      const dateA = a.createdAt || '';
+      const dateB = b.createdAt || '';
+      return dateB > dateA ? 1 : (dateB < dateA ? -1 : 0);
+    });
+    return _cachedSortedBatches;
+  }
+
   function batchesTab() {
-    _cachedMismatches = DB.Batches.findStageMismatches ? DB.Batches.findStageMismatches() : [];
+    setTimeout(() => {
+      const container = document.getElementById('admin-stage-mismatch-container');
+      if (container && DB.Batches && DB.Batches.findStageMismatches) {
+        _cachedMismatches = DB.Batches.findStageMismatches();
+        container.innerHTML = renderStageMismatchCard(_cachedMismatches);
+      }
+    }, 50);
+
     return `
       <div id="admin-stage-mismatch-container">
-        ${renderStageMismatchCard(_cachedMismatches)}
+        ${_cachedMismatches ? renderStageMismatchCard(_cachedMismatches) : '<div class="card card-body" style="padding:12px; font-size:12px; color:var(--text-muted);"><span class="spinner-sm"></span> Checking batch stage consistency...</div>'}
       </div>
       <div class="card animate-in">
         <div class="card-header">
@@ -1553,26 +1574,22 @@ const AdminModule = (() => {
   const ADMIN_STAGE_ENTRIES = Object.entries(ADMIN_STAGES);
 
   function renderAdminBatchRows(query) {
-    const batches = DB.Batches.all();
+    const sortedBatches = getSortedBatches();
     const statusFilter = document.getElementById('admin-batch-status-filter')?.value || '';
     const qLower = (query || '').toLowerCase().trim();
-    let filtered = qLower
-      ? batches.filter(b => 
-          (b.batchNo && b.batchNo.toLowerCase().includes(qLower)) ||
-          (b.jmrefNo && b.jmrefNo.toLowerCase().includes(qLower)) ||
-          (b.partNo && b.partNo.toLowerCase().includes(qLower))
-        )
-      : batches;
+    let filtered = sortedBatches;
+    
+    if (qLower) {
+      filtered = filtered.filter(b => 
+        (b.batchNo && b.batchNo.toLowerCase().includes(qLower)) ||
+        (b.jmrefNo && b.jmrefNo.toLowerCase().includes(qLower)) ||
+        (b.partNo && b.partNo.toLowerCase().includes(qLower))
+      );
+    }
 
     if (statusFilter) {
       filtered = filtered.filter(b => b.status === statusFilter);
     }
-      
-    filtered.sort((a, b) => {
-      const dateA = a.createdAt || '';
-      const dateB = b.createdAt || '';
-      return dateB > dateA ? 1 : (dateB < dateA ? -1 : 0);
-    });
 
     const totalItems = filtered.length;
     const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
@@ -1644,6 +1661,7 @@ const AdminModule = (() => {
   }
 
   let _batchFilterTimer = null;
+  let _cloudSearchTimer = null;
   function filterAdminBatches(query, resetPage = true) {
     if (resetPage) {
       batchCurrentPage = 1;
@@ -1654,6 +1672,23 @@ const AdminModule = (() => {
           tbody.innerHTML = renderAdminBatchRows(query);
         }
       }, 150);
+
+      const qTrim = (query || '').trim();
+      if (qTrim.length >= 3 && typeof DB !== 'undefined' && DB.Batches && DB.Batches.searchCloud) {
+        if (_cloudSearchTimer) clearTimeout(_cloudSearchTimer);
+        _cloudSearchTimer = setTimeout(async () => {
+          const results = await DB.Batches.searchCloud(qTrim);
+          if (results && results.length) {
+            const currentInp = document.getElementById('admin-batch-search');
+            if (currentInp && currentInp.value.trim().toLowerCase() === qTrim.toLowerCase()) {
+              const tbody = document.getElementById('admin-batch-table-body');
+              if (tbody) {
+                tbody.innerHTML = renderAdminBatchRows(qTrim);
+              }
+            }
+          }
+        }, 350);
+      }
     } else {
       const tbody = document.getElementById('admin-batch-table-body');
       if (tbody) {
